@@ -1,6 +1,6 @@
 ---
 name: "ida-pro-mcp"
-description: "Use IDA Pro through the action-specific ida_* MCP operations."
+description: "Reverse engineer binaries, decompile functions, inspect assembly, explore cross-references, and automate Hex-Rays IDA Pro via action-specific ida_* MCP operations."
 ---
 
 # IDA Pro MCP

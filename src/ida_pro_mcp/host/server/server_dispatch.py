@@ -1312,7 +1312,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return make_error(
                     MCPError.POLICY_DENIED,
                     "Policy requires acknowledgement for this continuation",
-                    hint="Retry with _risk_ack=true.",
+                    hint="Retry with risk_ack=true.",
                     details=policy_result.to_dict(),
                 )
         except Exception as e:
@@ -1934,7 +1934,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     return make_error(
                         MCPError.POLICY_DENIED,
                         "Policy requires explicit acknowledgement for this tool action",
-                        hint="Retry with _risk_ack=true after verifying the action is authorized.",
+                        hint="Retry with risk_ack=true after verifying the action is authorized.",
                         details=policy_details,
                     )
             except Exception as e:

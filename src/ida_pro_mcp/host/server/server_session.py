@@ -821,8 +821,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 return (None, None, None, False, None, make_error(MCPError.INVALID_ARGS, str(e)))
 
         if binary_path:
-            if not os.path.isabs(binary_path):
-                binary_path = os.path.abspath(binary_path)
+            binary_path = os.path.abspath(
+                os.path.expanduser(os.path.expandvars(binary_path))
+            )
             args["binary_path"] = binary_path
             if not os.path.exists(binary_path):
                 return (

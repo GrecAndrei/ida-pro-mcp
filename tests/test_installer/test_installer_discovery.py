@@ -184,6 +184,26 @@ def test_find_idat_and_make_install(tmp_path: Path) -> None:
     assert install.full_version_str == "9.3.260421.be7de18d"
 
 
+def test_find_idat_idabin_and_nested_app(tmp_path: Path) -> None:
+    bin_name = "idat64.exe" if sys.platform == "win32" else "idat64"
+
+    # 1. idabin layout
+    dir_idabin = tmp_path / "ida_idabin"
+    (dir_idabin / "idabin").mkdir(parents=True)
+    idat_idabin = dir_idabin / "idabin" / bin_name
+    idat_idabin.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+    idat_idabin.chmod(0o755)
+    assert _find_idat(dir_idabin) == idat_idabin
+
+    # 2. nested macOS .app layout
+    dir_app = tmp_path / "ida_app"
+    (dir_app / "ida64.app" / "Contents" / "MacOS").mkdir(parents=True)
+    idat_app = dir_app / "ida64.app" / "Contents" / "MacOS" / bin_name
+    idat_app.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+    idat_app.chmod(0o755)
+    assert _find_idat(dir_app) == idat_app
+
+
 def test_ida_install_serialization(tmp_path: Path) -> None:
     inst = IdaInstall(
         path=tmp_path / "ida",

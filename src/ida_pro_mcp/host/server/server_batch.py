@@ -652,7 +652,7 @@ class BackgroundMixin(ServerClientStateMixin):
                 return make_error(
                     getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
                     "Background tool call requires explicit acknowledgement before queueing",
-                    hint="Add _risk_ack=true to tool_call.args after verifying the action is authorized.",
+                    hint="Add risk_ack=true to tool_call.args after verifying the action is authorized.",
                     details=decision.to_dict(),
                 )
         return None

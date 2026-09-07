@@ -784,3 +784,22 @@ def test_declare_type_routes_to_types_backend():
     _, args = op.to_backend_call({"declaration": "struct foo { int x; };", "risk_ack": True})
     assert args["action"] == "declare"
     assert args["declaration"] == "struct foo { int x; };"
+
+
+def test_mutating_operation_accepts_risk_ack_and_underscore_alias():
+    op = get_agent_operation("ida_rename")
+    assert op is not None
+    # Valid canonical
+    err = op.validate({"address": "0x401000", "name": "foo", "risk_ack": True})
+    assert err is None
+
+    # Valid underscore alias (forgiving retry)
+    call_args = {"address": "0x401000", "name": "foo", "_risk_ack": True}
+    err = op.validate(call_args)
+    assert err is None
+    assert call_args["risk_ack"] is True
+
+    # Missing risk_ack
+    err = op.validate({"address": "0x401000", "name": "foo"})
+    assert err is not None
+    assert "risk_ack" in str(err)

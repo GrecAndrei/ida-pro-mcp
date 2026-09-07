@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-07 — Merge origin/master conflict resolution
+
+- Merge origin/master into codex/coverage-99-percent, resolving conflicts in tests/test_ida_mcp/test_tools_wiki_misc_edges.py and CHANGELOG.md.
+- Preserve all comprehensive 99% coverage test suites alongside upstream Python execution error reporting and IDAPython segment/func shims.
+
 ## 2026-09-07 — Expand offline coverage for CLI, server client state, multi-session, R2 engine, compat, bootstrap monitoring, plugin loader, and installer edges
 
 - Eliminate module shadow and custom run_name in plugin loader tests so ida_mcp.py achieves 100% offline coverage.
@@ -521,6 +526,12 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-04 — Python execution resilience, IDA segment/func shims, and search fallbacks
+
+ - Added defensive shims `get_start`, `get_end`, `get_segm_start`, and `get_segm_end` to `ida_segment`, and `get_func_end` to `ida_funcs` to support common alias patterns across IDAPython surfaces.
+ - Enhanced `execute_python` exception handling to return structured `SCRIPT_ERROR` envelopes with tracebacks, preventing user script `AttributeError`s from being misattributed to IDA SDK version divergence.
+ - Added defensive fallbacks in `search_nl` and `search_behavior` to gracefully handle damaged or missing insight/side tables without crashing recall.
+
 ## 2026-09-02 — PR-work coverage continuation
 
  - Added offline boundary coverage for host response helpers, policy and audit
@@ -644,6 +655,13 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    updated release checklist in `docs/guide/versioning.md`.
  - Updated `AGENTS.md` instructions with current codebase layout, 22+ agent client
    formats, auto-installers, routine checks, and release template safeguards.
+ - Fixed 5 major UX issues across the MCP server, installer, and agent workflows:
+   1. Enabled automatic `~` tilde and environment variable expansion in `ida_open_binary`.
+   2. Resolved contradictory `_risk_ack` vs `risk_ack` error hints and accepted `_risk_ack`
+      as a forgiving alias in public operation schemas.
+   3. Prevented fatal installer crashes and rollbacks on pre-existing symlinked skill targets.
+   4. Added natural reverse-engineering trigger keywords to `.agents/skills/ida-pro-mcp/SKILL.md`.
+   5. Expanded IDA Pro discovery to detect modern macOS and nested `idabin/` directory layouts.
 
 ## 2026-09-02 — PR-work coverage checkpoint
 

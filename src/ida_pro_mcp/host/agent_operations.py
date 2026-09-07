@@ -43,6 +43,12 @@ class AgentOperation:
         if not isinstance(arguments, dict):
             return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
 
+        # Forgive agent retries using _risk_ack instead of risk_ack
+        if "_risk_ack" in arguments:
+            if "risk_ack" not in arguments and arguments.get("_risk_ack") is True:
+                arguments["risk_ack"] = True
+            arguments.pop("_risk_ack", None)
+
         properties = self.input_schema.get("properties", {})
         if not isinstance(properties, dict):
             properties = {}
@@ -2807,7 +2813,7 @@ def render_agent_skill_markdown() -> str:
     """Render the portable skill playbook installed for coding agents."""
     return '''---
 name: "ida-pro-mcp"
-description: "Use IDA Pro through the action-specific ida_* MCP operations."
+description: "Reverse engineer binaries, decompile functions, inspect assembly, explore cross-references, and automate Hex-Rays IDA Pro via action-specific ida_* MCP operations."
 ---
 
 # IDA Pro MCP
