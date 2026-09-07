@@ -208,3 +208,19 @@ def test_main_cli_dispatch(monkeypatch, tmp_path):
     # Test missing binary error in CLI main flow
     monkeypatch.setattr(sys, "argv", ["mcp_client.py", "--test", "session", "--binary", "/non/existent/path"])
     # Run the main block logic safely
+
+
+def test_read_response_poll_fallback(monkeypatch):
+    import select
+
+    client = mcp_client.MCPClient()
+    mock_proc = mock.MagicMock()
+    mock_proc.stdout.fileno.return_value = 100
+    client.proc = mock_proc
+
+    def fake_select(*args, **kwargs):
+        raise OSError("bad fd")
+
+    monkeypatch.setattr(select, "select", fake_select)
+    monkeypatch.delattr(select, "poll", raising=False)
+    assert client._send_recv({"jsonrpc": "2.0", "id": 1, "method": "test"}, timeout=0.1) is None

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-07 — Permit pytest cache machinery in filesystem guard and harden client poll fallback
+
+- Permit atomic pytest cache temporary directories (pytest-cache-files-*) and .pytest_cache directories under the repository root in the offline test filesystem guard.
+- Return None when neither select nor poll is available in scripts/mcp_client.py to prevent busy-spinning on file descriptor errors.
+
 ## 2026-09-07 — Merge origin/master conflict resolution
 
 - Merge origin/master into codex/coverage-99-percent, resolving conflicts in tests/test_ida_mcp/test_tools_wiki_misc_edges.py and CHANGELOG.md.

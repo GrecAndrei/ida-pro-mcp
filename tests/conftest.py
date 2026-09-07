@@ -64,15 +64,25 @@ def _assert_test_path_safe(value) -> None:
         return
     if any(_path_is_under(path, root) for root in _TEST_ALLOWED_WRITE_ROOTS):
         return
-    # Python bytecode and pytest's coverage database are test machinery. They
-    # may be created in the checkout, but source/config/test data must not be.
+    # Python bytecode, pytest cache/temp directories, and coverage databases are
+    # test machinery. They may be created in the checkout, but source/config/test
+    # data must not be.
     repo_root = _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT))
     if path == repo_root:
         return
     if _path_is_under(path, repo_root):
-        if "__pycache__" in path.split(_REAL_OS_SEP):
+        parts = path.split(_REAL_OS_SEP)
+        if (
+            "__pycache__" in parts
+            or ".pytest_cache" in parts
+            or ".pytest_tmp" in parts
+            or any(p.startswith("pytest-cache-files-") for p in parts)
+        ):
             return
-        if _REAL_OS_PATH.basename(path).startswith(".coverage"):
+        basename = _REAL_OS_PATH.basename(path)
+        if basename.startswith(
+            (".coverage", ".pytest_cache", "pytest-cache-files-", ".pytest_tmp")
+        ):
             return
     raise RuntimeError(
         "offline pytest filesystem guard blocked a write outside temporary "

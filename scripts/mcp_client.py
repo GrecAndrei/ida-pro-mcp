@@ -177,6 +177,8 @@ class MCPClient:
                     p = select.poll()
                     p.register(fd, select.POLLIN)
                     is_ready = bool(p.poll(100))
+                else:
+                    return None
             if is_ready:
                 try:
                     chunk = os.read(fd, 4096)
