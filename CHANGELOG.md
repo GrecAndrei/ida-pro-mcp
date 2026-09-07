@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-07 — Expand server session validation, error handling, and background task coverage to 100%
+
+- Cover coercion guards (_sess_coerce_untag, empty strips, note/query/rename) and _substitute_params primitive fallbacks.
+- Cover _trigger_session_diff exception handling, zero-size index exits, and session diff deduplication locks.
+- Cover session action health, SSO activate/login/logout error and ok branches, and bootstrap dispatch edge cases.
+- Cover session action create auto-backgrounding for large binaries, preload mismatch notes, and architecture merging.
+- Cover analysis watcher loop early exits, dead consecutive error recording, and missing background load error dict handling.
+- Cover on-analysis-complete guards, checkpoint staleness warnings, and wait_for_idb database update exception handling.
+- Cover session action switch ownership validation, reopening with wait for IDB, and close ownership and teardown.
+- Cover build state payload error handlers, knowledge graph gaps and systems extraction, and blackboard store module restoration.
+- Cover session action status, kill current session fallbacks, update sid_err rejection, and cleanup_stale alive runtime skipping.
+- Cover idle_purge recent session skipping, unowned orphan rejection, and orphan deletion error handling.
+- Cover bulk delete, snapshot, restore snapshot, skill rating, listing, triage, strategy, phase, dashboard, analogy, activity, and hypothesis error envelopes.
+
+
+
 ## 2026-09-06 — Expand blackboard store CRUD, migrations, lifecycle, and search coverage to 100%
 
 - Cover database path resolution error handling, embedder resolution fallbacks, and compatibility view creation.
