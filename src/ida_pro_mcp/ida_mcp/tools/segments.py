@@ -33,6 +33,12 @@ from ._common import (
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
 from .. import compat as _compat
 
+# Iteration guard for find_data — large enough for real IDBs but bounded to
+# prevent runaway loops on hostile inputs. Exposed for test monkeypatching so
+# the 500k-break branch can be covered without actually iterating 500k times
+# under coverage instrumentation (which is ~20× slower and times out in CI).
+_FIND_DATA_ITER_LIMIT = 500000
+
 # _common does not re-export parse_address_safe (not in its __all__); import it
 # here so add/delete/move can accept unmapped destination addresses. Tried in
 # the three layouts this module is loaded under: IDA plugin package mode,
@@ -968,7 +974,7 @@ def segments(
                 if head == idaapi.BADADDR:
                     break
                 iterations += 1
-                if iterations >= 500000:
+                if iterations >= _FIND_DATA_ITER_LIMIT:
                     break
 
             return {

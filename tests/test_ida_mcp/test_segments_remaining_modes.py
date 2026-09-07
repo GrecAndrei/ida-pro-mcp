@@ -440,13 +440,16 @@ def test_segment_sreg_actions_full_validation_matrix(monkeypatch, fresh_fake_idb
 
 
 def test_segment_read_data_iterations_limit_and_compare_lookup_err(monkeypatch, fresh_fake_idb):
-    # Line 972: find_data iterations >= 500000 break
+    # Line 972: find_data iterations >= limit break — use a tiny limit so the
+    # test covers the branch without iterating 500k times under coverage (which
+    # is ~20× slower and times out in CI).
     seg = fresh_fake_idb.segments[0]
     call_c = [0]
+    monkeypatch.setattr(segments_mod, "_FIND_DATA_ITER_LIMIT", 5)
 
     def fast_next_head(head, _end):
         call_c[0] += 1
-        if call_c[0] >= 500005:
+        if call_c[0] >= 10:
             return segments_mod.idaapi.BADADDR
         return head
 

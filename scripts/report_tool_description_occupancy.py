@@ -35,15 +35,15 @@ def load_tool_descriptions() -> dict[str, str]:
 def _get_encoding():
     try:
         return tiktoken.get_encoding("cl100k_base")
-    except Exception:
+    except Exception:  # pragma: no cover - offline/no cache
         # Offline fallback: see report_tools_list_occupancy.py
         class _Fallback:  # pragma: no cover - offline/no cache
-            def encode(self, text: str):
-                if not text:
-                    return []
-                return [0] * max(1, (len(text) + 3) // 4)
+            def encode(self, text: str):  # pragma: no cover
+                if not text:  # pragma: no cover
+                    return []  # pragma: no cover
+                return [0] * max(1, (len(text) + 3) // 4)  # pragma: no cover
 
-        return _Fallback()
+        return _Fallback()  # pragma: no cover
 
 
 def main() -> int:

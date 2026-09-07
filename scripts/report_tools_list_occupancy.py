@@ -35,18 +35,18 @@ def _get_enc():
         return _ENC
     try:
         _ENC = tiktoken.get_encoding("cl100k_base")
-    except Exception:
+    except Exception:  # pragma: no cover - offline/no cache
         # Offline fallback: tiktoken's encoding files are fetched over the network
         # on first use; the offline pytest guard blocks that fetch. Fall back to
         # a trivial ~4-chars-per-token estimator so collection and offline tests
         # still pass with plausible token counts.
         class _Fallback:  # pragma: no cover - exercised only when offline / no cache
-            def encode(self, text: str):
-                if not text:
-                    return []
-                return [0] * max(1, (len(text) + 3) // 4)
+            def encode(self, text: str):  # pragma: no cover
+                if not text:  # pragma: no cover
+                    return []  # pragma: no cover
+                return [0] * max(1, (len(text) + 3) // 4)  # pragma: no cover
 
-        _ENC = _Fallback()
+        _ENC = _Fallback()  # pragma: no cover
     return _ENC
 
 

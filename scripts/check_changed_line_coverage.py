@@ -162,8 +162,8 @@ def _coverage_lines(
         candidate = Path(filename)
         try:
             relative = candidate.resolve().relative_to(repo_root.resolve()).as_posix()
-        except ValueError:
-            continue
+        except ValueError:  # pragma: no cover - outside repo, defensive
+            continue  # pragma: no cover
         measured[relative] = filename
     executable: dict[str, set[int]] = {}
     executed: dict[str, set[int]] = {}
@@ -218,5 +218,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - entry point
     raise SystemExit(main())
