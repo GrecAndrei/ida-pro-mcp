@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from ida_pro_mcp.host.intelligence import core
+from tests._thread_doubles import consumer_namespace
 
 
 class _Response:
@@ -171,7 +172,11 @@ def test_embedder_status_leases_and_idle_modes(monkeypatch, tmp_path):
             self.started = True
 
     timer = _Timer()
-    monkeypatch.setattr(core.threading, "Timer", lambda *args, **kwargs: timer)
+    # Interpose on the consumer module: stubbing core.threading.Timer would
+    # replace the GLOBAL Timer for every other thread in the process.
+    monkeypatch.setattr(
+        core, "threading", consumer_namespace(Timer=lambda *args, **kwargs: timer)
+    )
     obj._schedule_idle_shutdown(timeout=1)
     assert timer.started is True
     obj._cancel_idle_shutdown()

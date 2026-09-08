@@ -17,6 +17,7 @@ import time
 import pytest
 
 from ida_pro_mcp.host.intelligence import core as core_mod, rerank as rerank_mod, rerank_profiles
+from tests._thread_doubles import consumer_namespace
 
 
 def _reset_singleton():
@@ -528,7 +529,11 @@ class TestIdleShutdown:
             def cancel(self):
                 self.cancelled = True
 
-        monkeypatch.setattr(rerank_mod.threading, "Timer", _InlineTimer)
+        # Interpose on the consumer module: stubbing rerank_mod.threading.Timer
+        # would replace the GLOBAL Timer for every other thread in the process.
+        monkeypatch.setattr(
+            rerank_mod, "threading", consumer_namespace(Timer=_InlineTimer)
+        )
         obj._schedule_idle_shutdown(0.05)
         assert stopped == [1]
         assert obj._idle_timer is None

@@ -10,6 +10,7 @@ import pytest
 
 from ida_pro_mcp.host.intelligence import core
 from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder
+from tests._thread_doubles import consumer_namespace
 from tests.host.intelligence.test_core_runtime_modes import _embedder, _Response
 
 
@@ -238,7 +239,9 @@ def test_embedder_idle_timer_and_active_slot_branches(monkeypatch, tmp_path):
         def cancel(self):
             self.cancelled = True
 
-    monkeypatch.setattr(core.threading, "Timer", Timer)
+    # Interpose on the consumer module: stubbing core.threading.Timer would
+    # replace the GLOBAL Timer for every other thread in the process.
+    monkeypatch.setattr(core, "threading", consumer_namespace(Timer=Timer))
     obj._schedule_idle_shutdown(timeout=1)
     obj._schedule_idle_shutdown(timeout=2)
     assert timers[0].cancelled is True

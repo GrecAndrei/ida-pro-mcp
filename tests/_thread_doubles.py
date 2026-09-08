@@ -22,6 +22,7 @@ Rules for every double in this module:
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 
 class CaptureThread(threading.Thread):
@@ -61,3 +62,31 @@ class SyncThread(threading.Thread):
 
     def is_alive(self) -> bool:
         return False
+
+
+_MIRRORED_THREADING_ATTRS = (
+    "Thread",
+    "Timer",
+    "Event",
+    "Lock",
+    "RLock",
+    "Semaphore",
+    "Condition",
+    "get_ident",
+    "current_thread",
+)
+
+
+def consumer_namespace(**overrides):
+    """Build a consumer-module ``threading`` stand-in with selective stubs.
+
+    Prefer ``monkeypatch.setattr(producer, "threading", consumer_namespace(...))``
+    over ``monkeypatch.setattr(producer.threading, "Timer", ...)``: the latter
+    mutates the GLOBAL threading module, so every other consumer in the process
+    sees the stub (background ``threading.Timer`` instances lose their real
+    ``Thread.__init__``/``finished`` event). Interposing on the consumer module
+    confines the stub to that module; everything else keeps working.
+    """
+    namespace = {name: getattr(threading, name) for name in _MIRRORED_THREADING_ATTRS}
+    namespace.update(overrides)
+    return SimpleNamespace(**namespace)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-08 — Interpose Timer stubs on consumer modules instead of global threading
+
+ - Added `tests._thread_doubles.consumer_namespace()`: stubbing `Timer` on the global
+   `threading` module leaks the stub to every other thread in the process (background
+   timers lose their real `Thread.__init__`/`finished` event). Interposing a mirrored
+   namespace on the consumer module confines the stub to that module.
+ - Converted the embedder and reranker idle-timer tests to consumer interposition,
+   with regression coverage proving stubs never leak onto global `threading`.
+
 ## 2026-09-08 — Convert remaining Thread stubs to shared Timer-safe doubles
 
  - Replaced the session-diff, dedup, daemon-loop, and server-script `threading.Thread`

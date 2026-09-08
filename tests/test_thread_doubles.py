@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import threading
+import types
 from unittest.mock import patch
 
-from tests._thread_doubles import CaptureThread, SyncThread
+from tests._thread_doubles import CaptureThread, SyncThread, consumer_namespace
 
 
 def test_thread_doubles_keep_timer_functional() -> None:
@@ -55,3 +56,14 @@ def test_doubles_join_and_is_alive_without_real_start() -> None:
         thread = double(target=lambda: None, daemon=True)
         assert thread.is_alive() is False
         assert thread.join(timeout=1) is None
+
+
+def test_consumer_namespace_confines_stubs_to_one_module() -> None:
+    """Interposed stubs must not leak onto the global threading module."""
+    consumer = types.SimpleNamespace(threading=threading)
+    namespace = consumer_namespace(Timer=lambda *args, **kwargs: "stub-timer")
+    consumer.threading = namespace
+    assert consumer.threading.Timer() == "stub-timer"
+    assert consumer.threading.Thread is threading.Thread
+    assert consumer.threading.Event is threading.Event
+    assert threading.Timer is not namespace.Timer
