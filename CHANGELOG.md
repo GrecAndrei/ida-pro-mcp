@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-08 — Cover embedding-index search, hybrid, and structured paths
+
+ - Added 19 offline tests for `host/intelligence/embeddings.py` (95%→99%,
+   zero missed statements): `similar` embed fallbacks, blank/punct queries,
+   exclude and threshold filters, DB-failure soft paths, the Python-side
+   exclude/ea-int/range guards (via a stamp-consistent fake connection),
+   empty-blob and empty-ea skips, hybrid signature backfill, iterator-input
+   resume handling, stale-row async reindex, and structured queries with
+   and without API filters (including fetch-failure and empty-index paths).
+ - One partial arc remains, `1390->1393` (empty-recall guard): provably
+   unreachable — an empty recall set implies empty query tokens, which
+   either early-returns or takes the phrase fallback — and is retained as
+   defense-in-depth for future recall-construction edits.
+
 ## 2026-09-08 — Cover embedding-index helpers, constructor, and metadata paths
 
  - Added 17 offline tests for `host/intelligence/embeddings.py` (91%→95%):
