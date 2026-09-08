@@ -158,7 +158,7 @@ ruff check .
 python scripts/check_schema_integrity.py
 python scripts/generate_tool_skills.py
 python scripts/check_workflow_pins.py
-python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
+rm -rf .pytest_tmp && python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
 git diff --check
 ```
 
@@ -300,7 +300,7 @@ Before merge or release, `[major]` work must have:
    python scripts/check_schema_integrity.py
    python scripts/generate_tool_skills.py
    python scripts/check_workflow_pins.py
-   python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
+   rm -rf .pytest_tmp && python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
    git diff --check
    ```
 

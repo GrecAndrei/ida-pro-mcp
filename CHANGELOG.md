@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-08 — Clear pytest basetemp before large re-runs
+
+ - Numbered per-test directories accumulate in `.pytest_tmp` across runs and slow
+   down `tmp_path` fixture setup until tests start timing out (observed as a
+   cascading suite timeout with 11k stale entries). The routine checks in
+   `AGENTS.md` now remove the gitignored directory first, and `CONTRIBUTING.md`
+   documents why.
+ - Triaged the remaining 57 suite warnings to a single benign class:
+   `DeprecationWarning: __package__ != __spec__.parent` from the deliberate
+   path-based loading of IDA-side modules with relative imports. Renaming specs
+   to silence it would share module singletons across tests, so it stays.
+
 ## 2026-09-08 — Confine thread-routing factories and refresh stale skip comment
 
  - Routed the `ida-bg-*` thread factories in the large-binary and analysis-gate

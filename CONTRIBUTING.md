@@ -27,7 +27,10 @@ The suite is pytest-based. Most tests run without live IDA (host fakes,
 `FakeIDB`-style stubs); only `tests/integration/` requires a real IDA
 installation. The runner writes scratch files under the pytest basetemp, and
 the repo's temporary directory can fill — use a project-local scratch path
-with `--basetemp=.pytest_tmp` when running large suites.
+with `--basetemp=.pytest_tmp` when running large suites, and remove the
+(gitignored) `.pytest_tmp` directory before re-running them: numbered
+per-test directories accumulate across runs and slow down `tmp_path`
+fixture setup until tests start timing out.
 
 Targeted tests:
 
