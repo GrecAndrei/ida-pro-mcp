@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-08 — Bring the Gemini backend to 100% branch coverage
+
+ - Added 14 offline tests for `host/intelligence/gemini.py` (91%→100%):
+   garbage/non-finite env parsing, Vertex project/token/ADC configuration
+   paths, missing-`google-auth` and refresh-failure errors, auth-header
+   omission arcs, task-shape normalization, vector validation, the embed*
+   convenience wrappers, task-disabled Vertex payloads, and probe outcomes.
+   All tests run without Google credentials or network access.
+
 ## 2026-09-08 — Close coverage gaps in events, registry, rpc, and __main__
 
  - Added fallback-arc tests for `support/events.py` (unresolvable/empty/

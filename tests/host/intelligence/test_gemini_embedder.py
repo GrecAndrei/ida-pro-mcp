@@ -561,3 +561,259 @@ def test_gemini_batch_lifecycle_and_probe_failure_modes(monkeypatch):
     backend._mode = "aistudio"
     assert backend.status(probe=False)["auth"] == "aistudio"
     assert GeminiEmbedBackend.cosine([1.0], [1.0]) == pytest.approx(1.0)
+
+
+# ── fallback-arc gap closure (offline; no Google network) ─────────────────
+
+_GEMINI_ENV_VARS = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "VERTEX_AI_ACCESS_TOKEN",
+    "GOOGLE_ACCESS_TOKEN",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_PROJECT_ID",
+    "VERTEX_AI_PROJECT",
+    "VERTEX_AI_LOCATION",
+    "GOOGLE_CLOUD_REGION",
+    "IDA_MCP_GEMINI_VERTEX",
+    "IDA_MCP_GEMINI_MODEL",
+    "IDA_MCP_GEMINI_DIM",
+    "IDA_MCP_GEMINI_TASK_TYPE",
+    "IDA_MCP_GEMINI_RETRIES",
+    "IDA_MCP_GEMINI_TIMEOUT",
+    "IDA_MCP_GEMINI_BATCH_TIMEOUT",
+    "IDA_MCP_GEMINI_MAX_BATCH",
+    "IDA_MCP_GEMINI_BATCH",
+)
+
+
+def _clear_gemini_env(monkeypatch):
+    for name in _GEMINI_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_env_helpers_reject_garbage(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_GEMINI_RETRIES", "junk")
+    assert gemini_mod._int_env("IDA_MCP_GEMINI_RETRIES", 2) == 2
+    monkeypatch.setenv("IDA_MCP_GEMINI_TIMEOUT", "junk")
+    assert gemini_mod._float_env("IDA_MCP_GEMINI_TIMEOUT", 30.0) == 30.0
+
+
+def test_constructor_rejects_garbage_dimension(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("IDA_MCP_GEMINI_DIM", "junk")
+    backend = GeminiEmbedBackend()
+    assert backend._dim == gemini_mod.GEMINI_DEFAULT_DIM
+
+
+def test_vertex_without_project_reports_not_ready(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("IDA_MCP_GEMINI_VERTEX", "1")
+    backend = GeminiEmbedBackend()
+    assert backend._mode == "vertex"
+    assert backend._ready is False
+    assert "needs a project" in backend._error
+
+
+def test_vertex_adc_token_marks_ready(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("IDA_MCP_GEMINI_VERTEX", "1")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj-1")
+    with mock.patch.object(
+        GeminiEmbedBackend, "_adc_token", return_value=("adc-tok", "")
+    ):
+        backend = GeminiEmbedBackend()
+    assert backend._ready is True
+    assert backend._error == ""
+
+
+def test_adc_token_without_google_auth(monkeypatch):
+    import builtins
+
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    real_import = builtins.__import__
+
+    def no_google(name, *args, **kwargs):
+        if name == "google.auth" or name.startswith("google.auth."):
+            raise ImportError("no google.auth")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_google)
+    token, error = backend._adc_token()
+    assert token == ""
+    assert "google-auth is not installed" in error
+
+
+def _google_auth_stub(monkeypatch, creds):
+    import sys
+    import types
+
+    gauth = types.ModuleType("google.auth")
+    gtransport = types.ModuleType("google.auth.transport")
+    grequests = types.ModuleType("google.auth.transport.requests")
+    google = types.ModuleType("google")
+
+    class _Request:
+        pass
+
+    gauth.default = lambda **_kwargs: (creds, "project")
+    grequests.Request = _Request
+    google.auth = gauth
+    gauth.transport = gtransport
+    gtransport.requests = grequests
+    for name, module in {
+        "google": google,
+        "google.auth": gauth,
+        "google.auth.transport": gtransport,
+        "google.auth.transport.requests": grequests,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_adc_token_refresh_failure(monkeypatch):
+    import types
+
+    def _expired(_request):
+        raise RuntimeError("expired")
+
+    _clear_gemini_env(monkeypatch)
+    _google_auth_stub(
+        monkeypatch, types.SimpleNamespace(token="", expiry=None, refresh=_expired)
+    )
+    backend = GeminiEmbedBackend()
+    token, error = backend._adc_token()
+    assert token == ""
+    assert "ADC token refresh failed" in error
+
+
+def test_auth_headers_omits_missing_credentials(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    assert backend._auth_headers() == {"Content-Type": "application/json"}
+    backend._mode = "aistudio"
+    backend._api_key = ""
+    assert "x-goog-api-key" not in backend._auth_headers()
+    backend._mode = "vertex"
+    backend._env_token = ""
+    monkeypatch.setattr(backend, "_adc_token_cached", lambda: "")
+    assert "Authorization" not in backend._auth_headers()
+
+
+def test_adc_cached_refresh_failure_clears_cache(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    backend._adc_token_cache = "stale"
+    backend._adc_expiry = 0.0
+    monkeypatch.setattr(backend, "_adc_token", lambda: ("", "gone"))
+    assert backend._adc_token_cached() == ""
+    assert backend._adc_token_cache == ""
+    assert backend._adc_expiry == 0.0
+    assert backend._error == "gone"
+
+
+def test_drop_task_handles_missing_shapes(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    out = GeminiEmbedBackend._drop_task(
+        {"requests": [{"other": 1}, "bare", {"embedContentConfig": {"taskType": "T"}}]},
+        "requests",
+    )
+    assert out["requests"][0] == {"other": 1}
+    assert out["requests"][1] == "bare"
+    assert "taskType" not in out["requests"][2]["embedContentConfig"]
+    out = GeminiEmbedBackend._drop_task({"embedContentConfig": [1, 2]}, None)
+    assert out == {"embedContentConfig": [1, 2]}
+
+
+def test_normalize_vec_rejects_garbage(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    assert backend._normalize_vec(["not", "numbers"]) is None
+    assert backend._normalize_vec([0.5] * (backend._dim - 1) + [float("inf")]) is None
+
+
+def test_embed_convenience_wrappers(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    backend = GeminiEmbedBackend()
+    vec = [0.5] * backend._dim
+    monkeypatch.setattr(
+        backend, "_embed_request", lambda texts, *args, **kwargs: [vec for _ in texts]
+    )
+    assert backend.embed_vector("x") == vec
+    assert backend.embed_query("x").ok is True
+    assert backend.embed_query_vector("x") == vec
+    assert backend.embed_document("x").ok is True
+    results = backend.embed_documents(["a", "b"])
+    assert len(results) == 2 and all(result.ok for result in results)
+
+
+def test_vertex_task_disabled_omits_task_type(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("VERTEX_AI_ACCESS_TOKEN", "tok")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj-1")
+    monkeypatch.setenv("IDA_MCP_GEMINI_TASK_TYPE", "off")
+    backend = GeminiEmbedBackend()
+    captured = {}
+
+    def _predict(url, headers, body, timeout, task_in=None):
+        captured.update(body=body)
+        dim = backend._dim
+        return {
+            "predictions": [
+                {"embeddings": {"values": [0.1] * dim}} for _ in body["instances"]
+            ]
+        }
+
+    monkeypatch.setattr(backend, "_post_retry", _predict)
+    vecs = backend._embed_request(["a", "b"], purpose="document")
+    assert vecs is not None and len(vecs) == 2
+    assert all("task_type" not in inst for inst in captured["body"]["instances"])
+
+
+def test_ensure_ready_skips_configure_when_ready(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    backend = GeminiEmbedBackend()
+    assert backend._ready is True
+
+    def _boom():
+        raise AssertionError("must not reconfigure a ready backend")
+
+    monkeypatch.setattr(backend, "_configure", _boom)
+    assert backend.ensure_ready() is True
+
+
+def test_probe_reports_request_exception(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    monkeypatch.setattr(
+        backend,
+        "_embed_request",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    ok, message = backend._probe()
+    assert ok is False
+    assert message == "boom"
+
+
+def test_extract_list_rejects_malformed_payloads(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    assert backend._extract_list("not-a-list", 1) is None
+    assert backend._extract_list([{"values": [0.1]}], 2) is None
+    assert backend._extract_list(["bare"], 1, vertex=True) is None
+
+
+def test_probe_success_and_empty_paths(monkeypatch):
+    _clear_gemini_env(monkeypatch)
+    backend = GeminiEmbedBackend()
+    monkeypatch.setattr(
+        backend, "_embed_request", lambda *_a, **_k: [[[0.5] * backend._dim]]
+    )
+    assert backend._probe() == (True, "")
+    monkeypatch.setattr(backend, "_embed_request", lambda *_a, **_k: None)
+    backend._error = ""
+    ok, message = backend._probe()
+    assert ok is False
+    assert message == "embedding probe returned no vector"
