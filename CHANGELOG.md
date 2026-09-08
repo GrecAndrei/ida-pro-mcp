@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-08 — Bump dependency floors (idna, pyyaml, ruff, tiktoken)
+
+ - Raised floors to `idna>=3.19`, `pyyaml>=6.0.3`, `ruff>=0.16.6`, and
+   `tiktoken>=0.14.0` per pending Dependabot bumps (superseding the older
+   `ruff>=0.16.4` proposal). Verified with the new floors installed: `ruff check`
+   clean under 0.16.6 and the full offline suite green on tiktoken 0.14.0,
+   including the occupancy-report offline fallbacks.
+ - Deferred the major-version GitHub Actions bumps (attest v2→v4,
+   dependency-review v4→v5, download-artifact v4→v8, upload-artifact v4→v7):
+   those change release-workflow behavior and need real CI validation, not a
+   blind merge.
+
 ## 2026-09-08 — Interpose Timer stubs on consumer modules instead of global threading
 
  - Added `tests._thread_doubles.consumer_namespace()`: stubbing `Timer` on the global

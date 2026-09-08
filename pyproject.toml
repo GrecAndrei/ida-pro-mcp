@@ -26,7 +26,7 @@ dependencies = [
     "yara-python>=4.5.4",
     "requests>=2.34.2",
     "urllib3>=2.7.0",
-    "idna>=3.15",
+    "idna>=3.19",
     "numpy>=2.4.6",
 ]
 
@@ -35,9 +35,9 @@ dev = [
     "coverage>=7.6",
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
-    "ruff>=0.15.0",
-    "tiktoken>=0.8.0",
-    "pyyaml>=6.0",  # tests/test_ci_workflows.py guards parse .github/workflows YAML
+    "ruff>=0.16.6",
+    "tiktoken>=0.14.0",
+    "pyyaml>=6.0.3",  # tests/test_ci_workflows.py guards parse .github/workflows YAML
 ]
 
 [project.urls]
