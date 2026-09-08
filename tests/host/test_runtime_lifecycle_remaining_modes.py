@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
-from tests._thread_doubles import SyncThread
+from tests._thread_doubles import SyncThread, consumer_namespace
 
 
 class _Process:
@@ -73,15 +73,8 @@ def test_watchdog_and_checkpoint_threads_cover_transitions(monkeypatch, tmp_path
             self.was_set = True
 
     # Interpose on the consumer module (not the global threading module) so
-    # background timers elsewhere keep working; the stub namespace must
-    # provide every threading attribute server_runtime uses.
-    consumer_threading = SimpleNamespace(
-        Thread=SyncThread,
-        Event=ScriptedEvent,
-        Lock=threading.Lock,
-        RLock=threading.RLock,
-        current_thread=threading.current_thread,
-    )
+    # background timers elsewhere keep working.
+    consumer_threading = consumer_namespace(Thread=SyncThread, Event=ScriptedEvent)
     monkeypatch.setattr("ida_pro_mcp.host.server.server_runtime.threading", consumer_threading)
     host._start_analysis_watchdog("AB12CDEF", 7777)
     watchdog = host._analysis_watchdog_threads["AB12CDEF"]
@@ -107,13 +100,7 @@ def test_watchdog_and_checkpoint_threads_cover_transitions(monkeypatch, tmp_path
 
     monkeypatch.setattr(
         "ida_pro_mcp.host.server.server_runtime.threading",
-        SimpleNamespace(
-            Thread=SyncThread,
-            Event=CheckpointEvent,
-            Lock=threading.Lock,
-            RLock=threading.RLock,
-            current_thread=threading.current_thread,
-        ),
+        consumer_namespace(Thread=SyncThread, Event=CheckpointEvent),
     )
     host._start_analysis_checkpoint_timer("AB12CDEF", 7777)
     checkpoint = host._analysis_checkpoint_threads["AB12CDEF"]

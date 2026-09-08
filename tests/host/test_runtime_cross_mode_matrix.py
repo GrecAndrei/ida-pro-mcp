@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server import server_runtime as runtime_mod
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
-from tests._thread_doubles import SyncThread
+from tests._thread_doubles import SyncThread, consumer_namespace
 from tests.host.test_swarm_f04_runtime import _Host as F04Host
 
 
@@ -219,15 +219,8 @@ def test_watchdog_marks_stalled_and_active_analysis_differently(monkeypatch, tmp
             return None
 
     # Interpose on the consumer module (not the global threading module) so
-    # background timers elsewhere keep working; the stub namespace must
-    # provide every threading attribute server_runtime uses.
-    consumer_threading = SimpleNamespace(
-        Thread=SyncThread,
-        Event=Event,
-        Lock=threading.Lock,
-        RLock=threading.RLock,
-        current_thread=threading.current_thread,
-    )
+    # background timers elsewhere keep working.
+    consumer_threading = consumer_namespace(Thread=SyncThread, Event=Event)
     monkeypatch.setattr(runtime_mod, "threading", consumer_threading)
     host._start_analysis_watchdog("AB12CDEF", 45690)
     verdicts = [row[1].get("analysis_state") for row in updates]

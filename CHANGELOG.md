@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-08 — Unify thread interposition on the shared helper
+
+ - Replaced the last hand-built `threading` stand-in namespaces in the runtime
+   watchdog tests with `tests._thread_doubles.consumer_namespace()`, leaving a
+   single idiom for consumer-module interposition across the suite.
+
 ## 2026-09-08 — Clear pytest basetemp before large re-runs
 
  - Numbered per-test directories accumulate in `.pytest_tmp` across runs and slow
