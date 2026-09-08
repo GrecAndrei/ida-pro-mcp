@@ -82,7 +82,7 @@ ignored `benchmark-results/` directory.
 
 ## Code Style and Structure
 
-- Keep host orchestration in `src/ida_pro_mcp/host/server_*.py` mixins.
+- Keep host orchestration in `src/ida_pro_mcp/host/server/server_*.py` mixins.
 - Keep IDA runtime tool logic in `src/ida_pro_mcp/ida_mcp/tools/*.py`.
 - Keep durable investigation-memory changes in
   `src/ida_pro_mcp/host/stores/blackboard_store.py` with an idempotent schema

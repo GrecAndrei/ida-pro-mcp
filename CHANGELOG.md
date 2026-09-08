@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-08 — Fix stale live-suite counts and dead doc links
+
+ - Corrected the live-testing guide's suite counts (`test_agent_surface_live.py`
+   8→9, `test_legacy_surface_live.py` 176→186) and qualified the "every
+   operation" catalog prose with the three `EXCLUDED` lifecycle/background
+   entry points.
+ - Repointed dead `docs/LIVE_IDA_TESTING.md` links (moved to
+   `docs/operations/live-ida-testing.md`) in two wiki pages, and fixed the
+   host-mixin path in `CONTRIBUTING.md` (`host/server/server_*.py`).
+
 ## 2026-09-08 — Unify thread interposition on the shared helper
 
  - Replaced the last hand-built `threading` stand-in namespaces in the runtime

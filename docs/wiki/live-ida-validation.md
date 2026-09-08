@@ -23,7 +23,7 @@ reporting results. Do not present fake-test results as live IDA behavior.
 
 The live tests live under `tests/integration/` and are intentionally not part
 of the fast default suite. Follow the repository's
-[Live IDA testing](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/LIVE_IDA_TESTING.md)
+[Live IDA testing](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/operations/live-ida-testing.md)
 instructions for the required environment and runner options.
 
 The basic invocation is:
@@ -69,6 +69,6 @@ idalib runtime path is experimental and requires an IDA 9.3-or-newer install
 with its idalib Python environment. The normal offline test suite and fake-IDB
 tests do not validate behavior inside a live IDA process.
 
-References: [live-testing guide](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/LIVE_IDA_TESTING.md),
+References: [live-testing guide](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/operations/live-ida-testing.md),
 [plugin metadata](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/ida-plugin.json),
 [version source](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/_version.py).

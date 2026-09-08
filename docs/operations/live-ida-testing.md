@@ -29,11 +29,11 @@ in a few minutes. If it is still going after ~10 minutes, an RPC is hung.
 
 | Suite | Tests | What it proves |
 | --- | --- | --- |
-| `test_agent_surface_live.py` | 8 | Session lifecycle, indexing (incl. the full background decompile index), semantic search, and continuation tokens. The original live suite. |
-| `test_agent_surface_catalog_live.py` | 104 | One test per operation in `AGENT_OPERATIONS`: every `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
+| `test_agent_surface_live.py` | 9 | Session lifecycle, indexing (incl. the full background decompile index), semantic search, and continuation tokens. The original live suite. |
+| `test_agent_surface_catalog_live.py` | 104 | One test per operation in `AGENT_OPERATIONS` (except the three lifecycle/background entry points in `EXCLUDED`, covered by the fixture, teardown, and the other live suites): every covered `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
 | `test_agent_surface_behavior_live.py` | 66 | Deep behavior: exact decompile/disassembly shapes, calc semantics, type round-trips (declare/get/struct/enum/TIL export-import), findings lifecycle, mutation→verify→restore round-trips, undo transactions, snapshots, batch bindings/chaining, the r2 sidecar, firmware heuristics, and the python tool. |
 | `test_agent_surface_extended_live.py` | 170 | Extra live coverage on a shared session: discovery filters/pagination, public-contract edges (legacy names rejected, `address` not `addr`, missing `risk_ack`), query language, calc, findings, layout edits behind snapshots, batch public names, python/idc, firmware carve, session/type/search edges, and a dedicated emulate start/step/stop session. |
-| `test_legacy_surface_live.py` | 176 | Legacy `tool(action=...)` compatibility surface: action dispatch, response contracts, search/code/data tools, annotations, types, memory, sessions, and the broader legacy action catalog, including expanded annotation, analysis, intelligence, exploit, emulation, and type/data sweeps. |
+| `test_legacy_surface_live.py` | 186 | Legacy `tool(action=...)` compatibility surface: action dispatch, response contracts, search/code/data tools, annotations, types, memory, sessions, and the broader legacy action catalog, including expanded annotation, analysis, intelligence, exploit, emulation, and type/data sweeps. |
 | `test_ida_live_integration.py` | 20 | Additional legacy integration: custom detectors, search analyze scopes, and emulate lifecycle. |
 | `test_real_usage_live.py` | 11 | Analyst-style workflows that carry returned addresses across discovery, code, graph, memory, sessions, findings, snapshots, types, calculation, and next-target operations; also verifies recovery after a bad request and coded optional-backend failures. |
 
@@ -44,8 +44,9 @@ IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
   pytest -q tests/integration/test_agent_surface_behavior_live.py
 ```
 
-The catalog smoke proves *every* operation answers correctly with its
-documented example; the behavior suite proves the operations do the *right
+The catalog smoke proves every covered operation answers correctly with its
+documented example (three lifecycle/background entry points are excluded and
+covered elsewhere); the behavior suite proves the operations do the *right
 thing*. The two suites share one module-scoped session per module and use a
 deterministic fixture, so runs are repeatable — a failing suite usually means
 a real product bug (this is how the 9.3/9.4 API drift bugs in undo

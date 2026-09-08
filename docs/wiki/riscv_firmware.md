@@ -364,4 +364,4 @@ hex_table:                                  # 0x40
 
 - [Segments](tools/segments.md) — segment-register (sreg) seam, GP round-trip
 - [Workflow](tools/workflow.md) — `batch`, `reanalyze`
-- [LIVE_IDA_TESTING](../LIVE_IDA_TESTING.md) — when you need a live IDA runtime
+- [LIVE_IDA_TESTING](../operations/live-ida-testing.md) — when you need a live IDA runtime
