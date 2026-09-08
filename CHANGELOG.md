@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-08 — Convert remaining Thread stubs to shared Timer-safe doubles
+
+ - Replaced the session-diff, dedup, daemon-loop, and server-script `threading.Thread`
+   stubs with the shared `tests/_thread_doubles.py` doubles (or semantics-preserving
+   subclasses), eliminating the last `RuntimeError: Thread.__init__() not called`
+   hazards for background timers firing mid-test.
+ - Scoped the expected runpy `sys.modules` `RuntimeWarning` in the CLI `__main__`
+   entrypoint test to that warning only.
+
 ## 2026-09-08 — Fix flaky unhandled-thread warning from global threading.Thread test patches
 
  - Added shared Timer-safe `threading.Thread` test doubles (`tests/_thread_doubles.py`):

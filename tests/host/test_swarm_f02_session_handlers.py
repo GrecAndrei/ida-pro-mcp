@@ -27,6 +27,7 @@ from datetime import datetime
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
+from tests._thread_doubles import SyncThread
 
 
 class _FakeIdaProcess:
@@ -424,16 +425,7 @@ def test_session_diff_inflight_discarded_on_import_error(tmp_path, monkeypatch):
         return real_import(name, *a, **k)
 
     monkeypatch.setattr("builtins.__import__", _broken_import)
-    class _InlineThread:
-        def __init__(self, target, args=(), kwargs=None, **_options):
-            self._target = target
-            self._args = args
-            self._kwargs = kwargs or {}
-
-        def start(self):
-            self._target(*self._args, **self._kwargs)
-
-    monkeypatch.setattr(ss.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(ss.threading, "Thread", SyncThread)
     pair = ("/old/x.i64", "/new/x.i64")
     ss._SESSION_DIFF_INFLIGHT.discard(pair)
     try:

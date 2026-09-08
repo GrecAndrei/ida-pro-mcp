@@ -39,6 +39,7 @@ from ida_pro_mcp.host.server.server_multi_session import ServerMultiSessionMixin
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
 from ida_pro_mcp.host.server.server_workflow_batch import ServerWorkflowBatchMixin
 from ida_pro_mcp.host.server.session import BookmarkManager, Session, SessionManager
+from tests._thread_doubles import CaptureThread
 
 
 class _FakeIdaProcess:
@@ -688,21 +689,13 @@ def test_trigger_session_diff_dedups_identical_switches(monkeypatch):
 
     spawned = []
 
-    class FakeThread:
-        def __init__(self, target=None, args=(), kwargs=None, name=None, daemon=None):
-            self.target = target
-            self.args = args
-            self.kwargs = kwargs or {}
-            self.name = name
-            self.daemon = daemon
-            spawned.append(self)
-
+    class _RecordingThread(CaptureThread):
         def start(self):
             # Do NOT run _diff: keep the inflight marker set so dedup is
             # observable without touching the BGE embedder.
-            pass
+            spawned.append(self)
 
-    monkeypatch.setattr(ss.threading, "Thread", FakeThread)
+    monkeypatch.setattr(ss.threading, "Thread", _RecordingThread)
     with ss._SESSION_DIFF_LOCK:
         ss._SESSION_DIFF_INFLIGHT.clear()
     try:

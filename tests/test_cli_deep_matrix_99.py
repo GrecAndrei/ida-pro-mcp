@@ -8,6 +8,7 @@ import os
 import runpy
 import sys
 import types
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -249,7 +250,14 @@ def test_cli_main_unsupported_mode(monkeypatch):
 def test_cli_module_main_entrypoint(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["ida-pro-mcp-cli", "background", "list"])
     monkeypatch.setattr(cli, "_handle_background_mode", lambda args: 0)
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(SystemExit) as exc, warnings.catch_warnings():
+        # runpy warns when the module is already in sys.modules (it always
+        # is here: this file imports cli above). Ignore only that warning.
+        warnings.filterwarnings(
+            "ignore",
+            message=".*found in sys.modules.*",
+            category=RuntimeWarning,
+        )
         runpy.run_module("ida_pro_mcp.cli", run_name="__main__")
     assert exc.value.code == 0
 

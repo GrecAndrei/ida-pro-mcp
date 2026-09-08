@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests._thread_doubles import CaptureThread
+
 _SERVER_SCRIPT = Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "server_script.py"
 
 
@@ -480,21 +482,13 @@ def test_main_execution_and_critical_module_error(tmp_path, monkeypatch):
     mod.__name__ = "__main__"
     monkeypatch.setitem(sys.modules, "ida_pro_mcp.server_script", mod)
 
-    class InertThread:
-        def __init__(self, *args, **kwargs):
-            self._count = 1
-
-        def start(self):
-            pass
-
+    class InertThread(CaptureThread):
         def is_alive(self):
-            if self._count > 0:
-                self._count -= 1
-                return True
-            return False
-
-        def join(self, **_kwargs):
-            pass
+            # The main block drains the tool queue once while the listener
+            # is "alive", then exits: replicate the polled-once aliveness
+            # without spawning anything.
+            first, self._inert_polled = not getattr(self, "_inert_polled", False), True
+            return first
 
     monkeypatch.setattr(threading, "Thread", InertThread)
     monkeypatch.setenv("IDA_MCP_USE_EXISTING_IDB", "1")

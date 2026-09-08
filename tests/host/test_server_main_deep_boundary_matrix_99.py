@@ -13,6 +13,7 @@ import pytest
 
 from ida_pro_mcp.host.server import server as server_module
 from ida_pro_mcp.host.server.server import IDAMCPServer
+from tests._thread_doubles import SyncThread
 
 
 def test_constructor_normalizes_invalid_environment_modes(monkeypatch):
@@ -244,14 +245,9 @@ def test_daemon_loop_starts_connection_thread(monkeypatch, tmp_path):
         def accept(self):
             return object(), object()
 
-    class Thread:
-        def __init__(self, target, args, daemon):
-            self.target = target
-            self.args = args
-            self.daemon = daemon
-
+    class Thread(SyncThread):
         def start(self):
-            self.target(*self.args)
+            self.run()
             server._shutdown_requested = True
 
     monkeypatch.setattr(server_module._socket_mod, "socket", lambda *_args: Socket())
