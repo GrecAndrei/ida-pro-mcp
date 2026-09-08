@@ -645,12 +645,12 @@ def test_services_still_exports_the_store(tmp_path):
     try:
         import ida_pro_mcp.services as services
     except ModuleNotFoundError as exc:
-        # services.py pulls in host/server -> server_r2 -> host/r2_engine,
-        # which is being concurrently migrated by another order and can be
-        # transiently unimportable on this branch. The contract below is real;
-        # it simply cannot be exercised while services cannot import.
+        # services.py pulls in host/server -> server_r2 -> host/r2_engine.
+        # Keep the skip as a safety net: if that import graph ever breaks
+        # again, this contract test skips instead of failing for an
+        # unrelated reason.
         if "ida_pro_mcp.config" in str(exc):
-            pytest.skip(f"ida_pro_mcp.services unimportable during concurrent r2 migration: {exc}")
+            pytest.skip(f"ida_pro_mcp.services unimportable: {exc}")
         raise
     assert services.BlackboardStore is BlackboardStore
     assert services._resolve_db_path is _resolve_db_path

@@ -19,6 +19,7 @@ import pytest
 from ida_pro_mcp.host.config import LARGE_BINARY_THRESHOLD_BYTES
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
+from tests._thread_doubles import SyncThread, consumer_namespace
 
 
 @pytest.fixture
@@ -249,23 +250,19 @@ def test_background_load_error_surfaces_in_status(tmp_path, server, monkeypatch)
 
     server._ensure_runtime_and_idb = _ensure
 
-    class _InlineThread:
-        def __init__(self, target, args=(), kwargs=None, **_options):
-            self._target = target
-            self._args = args
-            self._kwargs = kwargs or {}
-
-        def start(self):
-            self._target(*self._args, **self._kwargs)
-
     real_thread = server_session.threading.Thread
 
     def _thread_factory(*args, **kwargs):
         if str(kwargs.get("name", "")).startswith("ida-bg-"):
-            return _InlineThread(*args, **kwargs)
+            return SyncThread(*args, **kwargs)
         return real_thread(*args, **kwargs)
 
-    monkeypatch.setattr(server_session.threading, "Thread", _thread_factory)
+    # Confine the routing factory to server_session: patching
+    # server_session.threading.Thread would swap the GLOBAL Thread for every
+    # other consumer mid-test.
+    monkeypatch.setattr(
+        server_session, "threading", consumer_namespace(Thread=_thread_factory)
+    )
 
     result = _open(server, "ida_open_background", {"binary_path": str(binary)})
     sid = result["session_id"]

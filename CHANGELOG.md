@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-08 — Confine thread-routing factories and refresh stale skip comment
+
+ - Routed the `ida-bg-*` thread factories in the large-binary and analysis-gate
+   tests through shared `SyncThread` plus `consumer_namespace` interposition, so
+   no test swaps the global `threading.Thread` anymore.
+ - Updated the stale "concurrent r2 migration" comment on the services-import
+   skip guard (the migration is long merged; the guard stays as a safety net).
+
 ## 2026-09-08 — Bump dependency floors (idna, pyyaml, ruff, tiktoken)
 
  - Raised floors to `idna>=3.19`, `pyyaml>=6.0.3`, `ruff>=0.16.6`, and

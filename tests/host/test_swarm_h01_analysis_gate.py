@@ -31,6 +31,7 @@ import threading
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
+from tests._thread_doubles import SyncThread, consumer_namespace
 
 
 class _FakeIdaProcess:
@@ -519,23 +520,19 @@ def test_spawn_runtime_background_records_error_and_skips_deleted(tmp_path, monk
         "message": "boom",
     }
 
-    class _InlineThread:
-        def __init__(self, target, args=(), kwargs=None, **_options):
-            self._target = target
-            self._args = args
-            self._kwargs = kwargs or {}
-
-        def start(self):
-            self._target(*self._args, **self._kwargs)
-
     real_thread = server_session.threading.Thread
 
     def _thread_factory(*args, **kwargs):
         if str(kwargs.get("name", "")).startswith("ida-bg-"):
-            return _InlineThread(*args, **kwargs)
+            return SyncThread(*args, **kwargs)
         return real_thread(*args, **kwargs)
 
-    monkeypatch.setattr(server_session.threading, "Thread", _thread_factory)
+    # Confine the routing factory to server_session: patching
+    # server_session.threading.Thread would swap the GLOBAL Thread for every
+    # other consumer mid-test.
+    monkeypatch.setattr(
+        server_session, "threading", consumer_namespace(Thread=_thread_factory)
+    )
     try:
         s1 = server.session_mgr.create_session("/tmp/bg1.bin")
         server._spawn_runtime_background(s1)
