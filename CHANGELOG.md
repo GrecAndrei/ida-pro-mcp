@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-08 — Harden native-backend loader test against local dev builds
+
+ - Made `test_native_preference_and_loader_fallback_boundaries` hermetic by hiding
+   on-disk candidates before asserting the "nothing found" path, so it passes on
+   machines with a locally built `src/ida_pro_mcp/native/build/libmcp_llama.so`.
+
 ## 2026-09-08 — Installer reliability: skills, client map, snapshots, and uninstall
 
  - Fixed the generated-skills phase warning `Refusing symlinked skill installation path`

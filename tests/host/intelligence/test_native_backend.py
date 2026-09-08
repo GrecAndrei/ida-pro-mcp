@@ -701,6 +701,10 @@ def test_native_preference_and_loader_fallback_boundaries(monkeypatch, tmp_path)
     monkeypatch.setenv("IDA_MCP_NATIVE_LIB", str(tmp_path / "missing.so"))
     monkeypatch.setattr(native, "_install_root", lambda: str(tmp_path / "install"))
     monkeypatch.setattr(native.ctypes.util, "find_library", lambda _name: None)
+    # Dev builds under src/ida_pro_mcp/native/build/ are derived from
+    # __file__ and invisible to the stubs above; hide every on-disk candidate
+    # so this asserts the "nothing found" path on machines with a local build.
+    monkeypatch.setattr(native.os.path, "isfile", lambda _path: False)
     assert _REAL_FIND_NATIVE_LIB() == ""
 
     _REAL_NATIVE_LIB._instance = None
