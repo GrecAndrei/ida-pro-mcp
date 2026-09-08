@@ -68,10 +68,9 @@ def test_embedding_persistence_handles_missing_gate_quality_rows_and_thread_fail
             "SELECT name FROM func_embeddings WHERE ea=?", ("0x1000",)
         ).fetchone()[0] == "target"
 
-    class BrokenThread:
-        def __init__(self, *args, **kwargs):
-            pass
+    import threading
 
+    class BrokenThread(threading.Thread):
         def start(self):
             raise RuntimeError("thread unavailable")
 

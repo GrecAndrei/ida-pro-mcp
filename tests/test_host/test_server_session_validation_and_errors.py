@@ -23,6 +23,7 @@ from ida_pro_mcp.host.server.server_session import (
     _sess_coerce_untag,
     _substitute_params,
 )
+from tests._thread_doubles import CaptureThread as _CaptureThread, SyncThread as _SyncThread
 
 
 class DummySessionServer(ServerSessionMixin):
@@ -148,20 +149,15 @@ def test_substitute_params() -> None:
 
 
 def test_trigger_session_diff_branches() -> None:
-    def sync_thread(target, **kwargs):
-        m = MagicMock()
-        m.start = target
-        return m
-
     # 1. Exception branch in _diff (lines 168-169)
-    with patch("threading.Thread", side_effect=sync_thread), patch("ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", side_effect=RuntimeError("diff boom")):
+    with patch("threading.Thread", _SyncThread), patch("ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", side_effect=RuntimeError("diff boom")):
         ServerSessionMixin._trigger_session_diff("old_err", "new_err")
 
     # 2. Empty index branch (line 160)
     mock_idx = MagicMock()
     mock_idx.size = 0
     with (
-        patch("threading.Thread", side_effect=sync_thread),
+        patch("threading.Thread", _SyncThread),
         patch("ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder"),
         patch("ida_pro_mcp.host.intelligence.core.FunctionEmbeddingIndex", return_value=mock_idx),
     ):
@@ -291,25 +287,17 @@ def test_analysis_watcher_error_and_dead_consecutive() -> None:
     server._send_rpc_raw = MagicMock(side_effect=RuntimeError("rpc failed"))
     server._record_background_error = MagicMock()
 
-    captured_target = None
-    captured_args = ()
-
-    def fake_thread(target, args=(), **kwargs):
-        nonlocal captured_target, captured_args
-        captured_target = target
-        captured_args = args
-        return MagicMock()
-
-    with patch("threading.Thread", side_effect=fake_thread), patch("time.sleep", return_value=None):
+    with patch("threading.Thread", _CaptureThread), patch("time.sleep", return_value=None):
         server._spawn_analysis_watcher("A1B2C3D4")
-        assert captured_target is not None
-        captured_target(*captured_args)
+        thread = server._analysis_watcher_threads["A1B2C3D4"]
+        assert isinstance(thread, _CaptureThread)
+        thread.run_captured()
 
     assert server._record_background_error.called
 
     # Line 1196: safe mode lifted / inactive -> returns early
     server._safe_mode_active = MagicMock(return_value=False)
-    captured_target(*captured_args)
+    thread.run_captured()
 
 
 def test_record_background_error_missing_dict() -> None:
@@ -351,12 +339,7 @@ def test_spawn_background_load_error_recording() -> None:
     server._ensure_runtime_and_idb = MagicMock(return_value={"error": True, "message": "Failed spawn"})
     server._record_background_load_error = MagicMock()
 
-    def sync_thread(target, **kwargs):
-        m = MagicMock()
-        m.start = target
-        return m
-
-    with patch("threading.Thread", side_effect=sync_thread):
+    with patch("threading.Thread", _SyncThread):
         server._spawn_runtime_background(session)
 
     server._record_background_load_error.assert_called_once_with(

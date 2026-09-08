@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import types
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -555,7 +556,14 @@ def test_main_dunder_entrypoint(tmp_path, monkeypatch):
         "--install-root",
         str(tmp_path),
     ])
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(SystemExit) as exc_info, warnings.catch_warnings():
+        # runpy always warns here: installer_main is already in
+        # sys.modules via the import above. Ignore only that warning.
+        warnings.filterwarnings(
+            "ignore",
+            message=".*found in sys.modules.*",
+            category=RuntimeWarning,
+        )
         runpy.run_module("ida_pro_mcp.installer.main", run_name="__main__")
     assert exc_info.value.code in (0, 1)
 

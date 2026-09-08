@@ -20,6 +20,7 @@ from ida_pro_mcp.host.server.server_runtime import (
     _lease_pid,
     _process_start_token,
 )
+from tests._thread_doubles import CaptureThread
 
 
 class DummyRuntimeServer(ServerRuntimeMixin):
@@ -272,21 +273,13 @@ def test_watchdog_worker_runtime_dead() -> None:
     server._update_session_indexing_metadata = MagicMock()
     server._analysis_watchdog_interval = 0.001
 
-    captured_target = None
-
-    def fake_thread_init(*args, **kwargs):
-        nonlocal captured_target
-        captured_target = kwargs.get("target")
-        mock_t = MagicMock()
-        mock_t.is_alive.return_value = True
-        return mock_t
-
-    with patch("threading.Thread", side_effect=fake_thread_init):
+    with patch("threading.Thread", CaptureThread):
         server._start_analysis_watchdog("A1B2C3D4", 1234)
+        thread = server._analysis_watchdog_threads["A1B2C3D4"]
 
-    assert captured_target is not None
+    assert isinstance(thread, CaptureThread)
     # Calling worker when runtime is dead returns immediately (line 1329)
-    captured_target()
+    thread.run_captured()
 
 
 def test_session_teardown_flags_and_retire_dead_runtime() -> None:
@@ -327,17 +320,20 @@ def test_analysis_checkpoint_timer_lazy_init_and_join() -> None:
     server._analysis_checkpoint_stop_events = None  # Lines 1598-1599
     server._analysis_checkpoint_threads = None  # Lines 1602-1603
 
-    fake_thread = MagicMock()
-    fake_thread.is_alive.return_value = True
-
-    with patch("threading.Thread", return_value=fake_thread):
+    with patch("threading.Thread", CaptureThread):
         server._start_analysis_checkpoint_timer("A1B2C3D4", 1234)
         assert isinstance(server._analysis_checkpoint_stop_events, dict)
         assert isinstance(server._analysis_checkpoint_threads, dict)
+        thread = server._analysis_checkpoint_threads["A1B2C3D4"]
+    assert isinstance(thread, CaptureThread)
 
-    # Lines 1625-1626: stop joins thread
+    # Lines 1625-1626: stop joins a live thread. The captured worker is never
+    # started, so swap in a live probe to exercise the join path.
+    probe = MagicMock()
+    probe.is_alive.return_value = True
+    server._analysis_checkpoint_threads["A1B2C3D4"] = probe
     server._stop_analysis_checkpoint_timer("A1B2C3D4", join_timeout=0.1)
-    assert fake_thread.join.called
+    assert probe.join.called
 
 
 def test_analysis_options_native_magic_exception_and_int_entry_point(tmp_path) -> None:
@@ -809,25 +805,24 @@ def test_start_session_background_services_and_cleanup_runtime_branches() -> Non
     server._start_analysis_checkpoint_timer = MagicMock()
     server._seed_index_from_matching_binary = MagicMock(return_value={"reused": True})
 
-    captured_reuse = None
-    def fake_reuse_thread(*args, **kwargs):
-        nonlocal captured_reuse
-        if "semantic-reuse" in kwargs.get("name", ""):
-            captured_reuse = kwargs.get("target")
-        mock_t = MagicMock()
-        return mock_t
+    spawned = []
 
-    with patch("threading.Thread", side_effect=fake_reuse_thread):
+    class _RecordingThread(CaptureThread):
+        def start(self):
+            spawned.append(self)
+
+    with patch("threading.Thread", _RecordingThread):
         server._start_session_background_services(SimpleNamespace(session_id="A1B2C3D4"), 1234)
         assert server._start_analysis_watchdog.called
         assert server._start_analysis_checkpoint_timer.called
 
-    assert captured_reuse is not None
+    reuse = [t for t in spawned if "semantic-reuse" in t.name]
+    assert len(reuse) == 1
     # Lines 3211-3216: normal reuse
-    captured_reuse()
+    reuse[0].run_captured()
     # Lines 3217-3218: reuse scan raises
     server._seed_index_from_matching_binary.side_effect = RuntimeError("scan fail")
-    captured_reuse()
+    reuse[0].run_captured()
 
     # Lines 3235-3236: lazy init of _session_startup_locks in _cleanup_runtime
     # and line 3252: callable stop_watcher

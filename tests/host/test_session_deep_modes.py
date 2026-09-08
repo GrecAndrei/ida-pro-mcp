@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server import server_session as session_mod
+from tests._thread_doubles import CaptureThread
 from tests.host.test_session_action_modes_full import _error, _host
 
 
@@ -36,10 +37,7 @@ def test_session_diff_deduplicates_and_cleans_up_background_work(monkeypatch):
 
     threads = []
 
-    class _HeldThread:
-        def __init__(self, target, **_kwargs):
-            self.target = target
-
+    class _HeldThread(CaptureThread):
         def start(self):
             threads.append(self)
 
@@ -49,7 +47,7 @@ def test_session_diff_deduplicates_and_cleans_up_background_work(monkeypatch):
     session_mod.ServerSessionMixin._trigger_session_diff("old", "new")
     session_mod.ServerSessionMixin._trigger_session_diff("old", "new")
     assert len(threads) == 1
-    threads[0].target()
+    threads[0].run_captured()
     assert any("new functions" in message for message in messages)
     with session_mod._SESSION_DIFF_LOCK:
         assert ("old", "new") not in session_mod._SESSION_DIFF_INFLIGHT

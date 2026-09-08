@@ -15,6 +15,7 @@ import pytest
 
 from ida_pro_mcp.host.intelligence import context as context_mod, core as core_mod
 from ida_pro_mcp.host.intelligence.context import ContextAssembler
+from tests._thread_doubles import SyncThread
 
 
 def _make_assembler(**attrs) -> ContextAssembler:
@@ -88,16 +89,8 @@ class _FakeClassifier:
         return self.hits
 
 
-class _InlineThread:
+class _InlineThread(SyncThread):
     """Run a background callback synchronously for deterministic unit tests."""
-
-    def __init__(self, target, args=(), kwargs=None, **_options):
-        self._target = target
-        self._args = args
-        self._kwargs = kwargs or {}
-
-    def start(self):
-        self._target(*self._args, **self._kwargs)
 
 
 class _FakeBBStore:
@@ -203,8 +196,8 @@ class TestAssemble:
         )
         idx = obj._get_index(str(tmp_path / "fake.idb"))
 
-        class _UnexpectedThread:
-            def __init__(self, *args, **kwargs):
+        class _UnexpectedThread(threading.Thread):
+            def start(self):
                 raise AssertionError("saturated persistence must not spawn a thread")
 
         monkeypatch.setattr(context_mod.threading, "Thread", _UnexpectedThread)

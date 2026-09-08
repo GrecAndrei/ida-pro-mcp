@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-08 — Fix flaky unhandled-thread warning from global threading.Thread test patches
+
+ - Added shared Timer-safe `threading.Thread` test doubles (`tests/_thread_doubles.py`):
+   a mocked-out `Thread` breaks `threading.Timer` construction, so any idle-shutdown
+   timer firing mid-test died with `RuntimeError: Thread.__init__() not called`
+   (flaky `PytestUnhandledThreadExceptionWarning` from the embedder idle-shutdown
+   path). The doubles subclass the real `Thread`, never override `__init__`, and
+   keep `join()`/`is_alive()` usable without a real spawn, keeping `Timer` fully
+   functional under the patch.
+ - Converted the session watcher/spawn/diff tests, the session-diff dedup test, the
+   context enrichment/persistence tests, and the runtime watchdog/checkpoint/reuse
+   tests to the shared doubles, with `tests/test_thread_doubles.py` regression
+   coverage proving the doubles keep `Timer` construction and `daemon =` assignment
+   working. Tests that also stub `threading.Event` now interpose a stub namespace
+   on the consumer module instead of mutating the global `threading` module.
+ - Scoped the expected runpy `sys.modules` `RuntimeWarning` in the installer
+   `__main__` entrypoint test to that warning only instead of emitting noise.
+
 ## 2026-09-08 — Harden native-backend loader test against local dev builds
 
  - Made `test_native_preference_and_loader_fallback_boundaries` hermetic by hiding
