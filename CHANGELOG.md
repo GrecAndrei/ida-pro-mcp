@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-08 — Cover vendored MCP transport to 100% branch coverage
+
+ - Added 24 offline tests for `ida_mcp/zeromcp/mcp.py` (91%→100% branch,
+   zero missed lines or arcs): handler construction over in-memory streams,
+   CORS allowlist variants, connection-error suppression, GET/POST routing,
+   SSE ping timing (due/skipped/dead-connection), live-session dispatch and
+   notification short-circuit, broadcast isolation, serve thread-error and
+   foreground paths, stop without server pieces, stdio notification and
+   broken-pipe paths, codeless tool-error shaping, `McpToolError` mapping,
+   defaulted-param and object-return schemas, the `NotRequired` import
+   fallback chain (via scoped `__import__` interception), and
+   string-result prompt passthrough.
+ - Process note: concurrent pytest runs must not share `--basetemp`; a
+   shared basetemp produced tmpdir-creation errors that masqueraded as a
+   test failure. Foreground verification now uses a separate basetemp
+   whenever a background suite is running.
+
 ## 2026-09-08 — Cover embedding-index search, hybrid, and structured paths
 
  - Added 19 offline tests for `host/intelligence/embeddings.py` (95%→99%,
