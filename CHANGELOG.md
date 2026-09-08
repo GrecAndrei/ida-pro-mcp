@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-08 — Cover intelligence core to 99% (zero missed statements)
+
+ - Added 59 offline tests for `host/intelligence/core.py` (93%→99%,
+   zero missed lines) across three parallel tracks sharing one gap map:
+   discovery/state head, model/server resolution, leases, server lifecycle,
+   status probes, batch embedding, classifier binding, and the config
+   import fallback chain.
+ - Two partial arcs remain, both provably unreachable and retained as
+   defense-in-depth: `221->216` (a post-strip empty Vulkan device name
+   cannot occur — the stripped line still carries the matched prefix) and
+   `1924->1926` (a non-owner always observes a non-None wait event — only
+   `Event()` is ever stored under the same lock).
+ - Test-harness notes: `tests/conftest.py` pins `IDA_PRO_MCP_HOME` (and
+   `HOME`) into a sandbox for every test, so the install-root platform
+   branch needs an explicit `delenv` to execute genuinely; and the offline
+   filesystem guard only permits writes under a `.pytest_tmp` path
+   component, so parallel pytest runs must use subdirectories
+   (`--basetemp=.pytest_tmp/<track>`) rather than sibling directories —
+   correcting the previous entry's imprecise "do not share" wording.
+
 ## 2026-09-08 — Cover vendored MCP transport to 100% branch coverage
 
  - Added 24 offline tests for `ida_mcp/zeromcp/mcp.py` (91%→100% branch,
