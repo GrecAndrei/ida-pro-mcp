@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from ida_pro_mcp.host.intelligence import embeddings as embeddings_mod
 from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex
 from ida_pro_mcp.host.intelligence.helpers import _EmbedResult
 
@@ -539,3 +540,238 @@ def test_embedding_state_metadata_and_cache_views_are_consistent(tmp_path):
     assert index.cache_snapshot()[0][0] == "0x401000"
     index.cache_store("0x402000", [0.0, 1.0])
     assert index.size == 2
+
+
+# ── fallback-arc gap closure (offline; tmp_path only) ─────────────────────
+
+
+def test_sample_single_line_skips_spread():
+    assert "only one line" in embeddings_mod._sample_pseudocode_lines("only one line", 96)
+
+
+def test_build_document_short_identifier_list():
+    doc = embeddings_mod.build_decomp_document("f", "y" * 2000, max_chars=1024)
+    assert doc.startswith("function: f")
+
+
+def test_safe_file_head_sha256_reads_file(tmp_path):
+    import hashlib
+
+    target = tmp_path / "head.bin"
+    target.write_bytes(b"0123456789abcdef")
+    assert embeddings_mod._safe_file_head_sha256(str(target)) == hashlib.sha256(
+        b"0123456789abcdef"
+    ).hexdigest()
+    assert embeddings_mod._safe_file_head_sha256(str(tmp_path / "missing")) == ""
+    empty = tmp_path / "empty.bin"
+    empty.write_bytes(b"")
+    assert embeddings_mod._safe_file_head_sha256(str(empty)) == hashlib.sha256(
+        b""
+    ).hexdigest()
+    assert embeddings_mod._safe_file_head_sha256(str(target), max_bytes=0) == (
+        hashlib.sha256(b"").hexdigest()
+    )
+
+
+def test_safe_stat_reads_file(tmp_path):
+    import os
+
+    target = tmp_path / "sized.bin"
+    target.write_bytes(b"12345")
+    size, mtime_ns = embeddings_mod._safe_stat(str(target))
+    st = os.stat(target)
+    assert (size, mtime_ns) == (st.st_size, st.st_mtime_ns)
+    assert embeddings_mod._safe_stat(str(tmp_path / "missing")) == (0, 0)
+
+
+def test_split_identifier_token_skips_empty_chunks():
+    assert embeddings_mod._split_identifier_token("_abc") == ["abc"]
+
+
+def test_tokenize_search_text_second_loop_cap():
+    assert embeddings_mod._tokenize_search_text("readBytes writeBytes", max_tokens=6) == [
+        "read",
+        "bytes",
+        "byte",
+        "write",
+        "readbytes",
+        "readbyte",
+    ]
+
+
+def _config_import_interceptor(monkeypatch, handler):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _intercept(name, *args, **kwargs):
+        fromlist = args[2] if len(args) > 2 else kwargs.get("fromlist", ())
+        handled = handler(str(name), tuple(fromlist or ()))
+        if handled is not None:
+            if isinstance(handled, Exception):
+                raise handled
+            return handled
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _intercept)
+
+
+def test_init_without_config_modules(monkeypatch, tmp_path):
+    def _handler(name, fromlist):
+        if fromlist == ("CACHE_DIR",) and name in ("config", "host.config"):
+            return ImportError("no config module")
+        return None
+
+    _config_import_interceptor(monkeypatch, _handler)
+    db_path = str(tmp_path / "plain.db")
+    index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    assert index._db_path == db_path
+
+
+def test_init_falls_back_when_db_unwritable(monkeypatch, tmp_path):
+    import hashlib
+    import os
+    import types
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+
+    def _handler(name, fromlist):
+        if fromlist == ("CACHE_DIR",) and name in ("config", "host.config"):
+            return types.SimpleNamespace(CACHE_DIR=str(tmp_path))
+        return None
+
+    _config_import_interceptor(monkeypatch, _handler)
+    db_path = str(tmp_path / "blocker" / "idx.db")
+    index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    digest = hashlib.sha256(os.path.abspath(db_path).encode("utf-8")).hexdigest()[:16]
+    expected = os.path.join(str(tmp_path), "fallback_indexes", f"{digest}.embeddings.db")
+    assert index._db_path == expected
+    assert os.path.isfile(expected)
+
+
+def test_init_rebuild_failure_reraises(monkeypatch, tmp_path):
+    armed = {"rebuild": False}
+    original_meta_set = FunctionEmbeddingIndex._meta_set
+
+    def _maybe_boom(self, conn, key, value):
+        if armed["rebuild"]:
+            raise RuntimeError("txn boom")
+        return original_meta_set(self, conn, key, value)
+
+    def _force_rebuild(self, *args, **kwargs):
+        armed["rebuild"] = True
+        return True
+
+    monkeypatch.setattr(FunctionEmbeddingIndex, "_meta_set", _maybe_boom)
+    monkeypatch.setattr(FunctionEmbeddingIndex, "needs_rebuild", _force_rebuild)
+    with pytest.raises(RuntimeError, match="txn boom"):
+        FunctionEmbeddingIndex(str(tmp_path / "rebuild.db"), _FixedEmbedder())
+
+
+def test_source_idb_path_without_suffix(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "plain.db"), _FixedEmbedder())
+    assert index._source_idb_path() == str(tmp_path / "plain.db")
+
+
+def test_source_fingerprint_stats_real_file(tmp_path):
+    import hashlib
+    import os
+
+    src = tmp_path / "firmware"
+    src.write_bytes(b"fake-idb-bytes")
+    index = FunctionEmbeddingIndex(
+        str(tmp_path / "firmware.embeddings.db"), _FixedEmbedder()
+    )
+    st = os.stat(src)
+    expected = hashlib.sha256(
+        f"{src}:{st.st_size}:{st.st_mtime_ns}".encode()
+    ).hexdigest()
+    assert index._source_fingerprint() == expected
+
+
+def test_embedder_meta_snapshot_ignores_status_errors(tmp_path):
+    class _StatusBoom:
+        backend = "test"
+        dim = 3
+
+        def embed_vector(self, text):
+            return [0.0, 0.6, 0.8]
+
+        def status(self, probe=False):
+            raise RuntimeError("status exploded")
+
+    index = FunctionEmbeddingIndex(str(tmp_path / "snap.db"), _StatusBoom())
+    snapshot = index._embedder_meta_snapshot()
+    assert snapshot["embedding_backend"] == "test"
+    assert snapshot["embedding_dim"] == "3"
+
+
+def test_verify_metadata_garbage_schema(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "meta.db")
+    index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    with sqlite3.connect(db_path) as conn:
+        index._meta_set(conn, "index_schema_version", "junk")
+        conn.commit()
+    check = index.verify_metadata(_FixedEmbedder())
+    assert check["ok"] is False
+    assert check["mismatches"]["index_schema_version"]["stored"] == 0
+
+
+def test_verify_metadata_garbage_dimension(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "metadim.db")
+    index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    with sqlite3.connect(db_path) as conn:
+        index._meta_set(conn, "embedding_dim", "junk")
+        conn.commit()
+    check = index.verify_metadata(_FixedEmbedder())
+    assert check["ok"] is False
+    assert check["mismatches"]["embedding_dim"]["stored"] == 0
+
+
+def test_init_relative_db_path_skips_makedirs(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    index = FunctionEmbeddingIndex("relative.db", _FixedEmbedder())
+    assert index._db_path == "relative.db"
+    assert os.path.isfile(tmp_path / "relative.db")
+
+
+def test_embedder_meta_snapshot_prefers_status_paths(tmp_path):
+    class _StatusPaths:
+        backend = "test"
+        dim = 3
+
+        def embed_vector(self, text):
+            return [0.0, 0.6, 0.8]
+
+        def status(self, probe=False):
+            return {"model_path": "/models/m.gguf", "server_bin": "/bin/srv"}
+
+    index = FunctionEmbeddingIndex(str(tmp_path / "statuspaths.db"), _StatusPaths())
+    snapshot = index._embedder_meta_snapshot()
+    assert snapshot["model_path"] == "/models/m.gguf"
+    assert snapshot["server_bin"] == "/bin/srv"
+
+
+def test_metadata_coerces_numeric_fields(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "coerce.db")
+    index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    metadata = index.metadata()
+    assert metadata["index_schema_version"] == 4
+    assert isinstance(metadata["embedding_dim"], int)
+    assert isinstance(metadata["model_size"], int)
+    assert isinstance(metadata["server_size"], int)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM embedding_meta WHERE key IN ('model_size', 'server_size')")
+        conn.commit()
+    sparse = index.metadata()
+    assert "model_size" not in sparse
+    assert "server_size" not in sparse

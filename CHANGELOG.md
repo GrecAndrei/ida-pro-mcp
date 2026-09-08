@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-08 — Cover embedding-index helpers, constructor, and metadata paths
+
+ - Added 17 offline tests for `host/intelligence/embeddings.py` (91%→95%):
+   pseudocode sampling, decomp-document shaping, file hashing/stat helpers,
+   identifier/search tokenization, config-less construction, unwritable-DB
+   fallback indexes, rebuild-transaction failure, source
+   path/fingerprint/snapshot fallbacks, and metadata verification coercion.
+   Constructor fallback tests redirect `CACHE_DIR` into `tmp_path` and
+   intercept only the config imports, leaving all other imports untouched.
+
 ## 2026-09-08 — Bring the Gemini backend to 100% branch coverage
 
  - Added 14 offline tests for `host/intelligence/gemini.py` (91%→100%):
