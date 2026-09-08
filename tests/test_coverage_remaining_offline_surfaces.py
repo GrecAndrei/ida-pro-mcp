@@ -636,7 +636,7 @@ def test_installer_uninstall_removes_skills_plugins_and_reports(tmp_path, monkey
     (skill_dir / "ida-pro-mcp").mkdir(parents=True)
     monkeypatch.setattr(client_module, "get_config_paths", lambda _root: {})
     discovery = types.ModuleType("ida_pro_mcp.installer.discovery")
-    discovery.detect_ida_installs = lambda: [types.SimpleNamespace(ida_dir=ida_root)]
+    discovery.detect_ida_installs = lambda: [types.SimpleNamespace(path=ida_root)]
     monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.discovery", discovery)
     skills = types.ModuleType("ida_pro_mcp.installer.skills")
     skills.SKILL_NAME = "ida-pro-mcp"

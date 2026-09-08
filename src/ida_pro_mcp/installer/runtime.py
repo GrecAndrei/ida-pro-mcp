@@ -446,6 +446,27 @@ def _expand_configured_path(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
 
 
+_MANAGED_INSTALL_SUBDIRS = frozenset({".venv", ".pytest_tmp", ".pytest_cache"})
+
+
+def _is_managed_install_subpath(install_root: Path, candidate: Path) -> bool:
+    """Return whether a recursive-scan hit lives under installer-managed dirs.
+
+    Snapshots (``runtime-src-*``), the runtime venv, and test caches under the
+    install root must never supply model paths: a GGUF inside a stale snapshot
+    or a pytest temp dir is not a user-installed model, and persisting it into
+    client configuration breaks the install as soon as snapshots are pruned.
+    """
+    try:
+        rel_parts = candidate.relative_to(install_root).parts
+    except ValueError:
+        return True
+    return any(
+        part.startswith("runtime-src-") or part in _MANAGED_INSTALL_SUBDIRS
+        for part in rel_parts[:-1]
+    )
+
+
 def find_embed_model(install_root: Path, profile: str = "") -> str:
     """Locate a supported GGUF embedding model on disk.
 
@@ -559,9 +580,11 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
                     return str(f)
 
     # 5. Last-ditch recursive scan under the install root only.
+    # Managed subdirectories (snapshots, venv, test caches) cannot supply
+    # model paths — see _is_managed_install_subpath.
     for pattern in patterns:
         for f in install_root.rglob(pattern):
-            if f.is_file():
+            if f.is_file() and not _is_managed_install_subpath(install_root, f):
                 return str(f)
 
     _log.debug(
@@ -856,7 +879,7 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
 
     for pattern in selected.filename_patterns:
         for candidate in install_root.rglob(pattern):
-            if candidate.is_file():
+            if candidate.is_file() and not _is_managed_install_subpath(install_root, candidate):
                 return str(candidate)
     return ""
 
@@ -1460,7 +1483,7 @@ def _snapshot_source(
     staged = staging_root / target.name
     pattern_ignore = shutil.ignore_patterns(
         ".git", "__pycache__", "*.pyc", ".venv", "venv", "env", "dist", "build",
-        "node_modules", "*.egg-info", ".pytest_cache", ".ruff_cache",
+        "node_modules", "*.egg-info", ".pytest_cache", ".pytest_tmp", ".ruff_cache",
         ".mypy_cache", ".coverage", "htmlcov", ".tmp*", "*.sock", "ida_mcp_cache",
     )
 

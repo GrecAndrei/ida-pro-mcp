@@ -168,3 +168,73 @@ def test_install_codex_skills_reuses_checkout_symlinks_in_packaged_mode(tmp_path
     # The checkout link should be kept intact and acknowledged
     assert skill_link.is_symlink()
     assert any("checkout-backed" in step.get("detail", "") for step in report.steps)
+
+
+def test_checkout_client_map_matches_bundled_client_map() -> None:
+    """The checkout client map must not drift behind the bundled installer map.
+
+    ``load_client_map`` prefers ``<source_root>/client_configs.json`` for
+    checkout installs and falls back to the bundled installer map for packaged
+    installs; a drift (as happened with the 7 newer agent clients) silently
+    configures fewer clients from a checkout than from a wheel.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    checkout_map = json.loads((repo_root / "client_configs.json").read_text(encoding="utf-8"))[
+        "clients"
+    ]
+    bundled_map = json.loads(
+        (
+            repo_root / "src" / "ida_pro_mcp" / "installer" / "client_configs.json"
+        ).read_text(encoding="utf-8")
+    )["clients"]
+    assert set(checkout_map) == set(bundled_map)
+
+
+def test_main_uninstall_removes_plugin_and_symlinked_skill(tmp_path: Path) -> None:
+    install_root = tmp_path / "install"
+    ida_dir = tmp_path / "ida-pro-9.4"
+    plugins = ida_dir / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "server_script.py").write_text("plugin")
+    install = IdaInstall(
+        path=ida_dir,
+        version=(9, 4),
+        build="",
+        idat_binary=None,
+        arch="x64",
+        flavor="pro",
+        source="explicit",
+    )
+
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    checkout = tmp_path / "checkout"
+    checkout_skill = checkout / ".agents" / "skills" / "ida-pro-mcp"
+    checkout_skill.mkdir(parents=True)
+    (checkout / ".git").mkdir()
+    (checkout_skill / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (checkout_skill / "references").mkdir()
+    (checkout_skill / "references" / "operations.md").write_text("# ops\n", encoding="utf-8")
+    link = skills_root / "ida-pro-mcp"
+    link.symlink_to(checkout_skill, target_is_directory=True)
+
+    with (
+        patch(
+            "ida_pro_mcp.installer.clients.remove_server_entry_from_clients",
+            return_value=[],
+        ),
+        patch(
+            "ida_pro_mcp.installer.discovery.detect_ida_installs",
+            return_value=[install],
+        ),
+        patch(
+            "ida_pro_mcp.installer.skills.default_skill_dirs",
+            return_value=[skills_root],
+        ),
+    ):
+        rc = main(["--uninstall", "--install-root", str(install_root)])
+        assert rc == 0
+        assert not (plugins / "server_script.py").exists()
+        assert not link.is_symlink() and not link.exists()
+        # The checkout source itself is untouched.
+        assert (checkout_skill / "SKILL.md").is_file()

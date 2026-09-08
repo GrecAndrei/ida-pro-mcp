@@ -18,6 +18,35 @@ from ida_pro_mcp.installer.common import atomic_write_text, reject_symlink_path
 SKILL_NAME = "ida-pro-mcp"
 
 
+def _is_checkout_skill_link(path: Path) -> bool:
+    """Return whether a skill path is a symlink into a Git checkout's skill.
+
+    A checkout-backed skill (e.g. ``~/.codex/skills/ida-pro-mcp`` pointing at
+    ``<checkout>/.agents/skills/ida-pro-mcp``) is a supported development
+    layout owned by the Codex skill phase. The generated-skills publisher must
+    retain it instead of rejecting it as an adversarial redirect; any other
+    symlink is still refused so an install cannot write through a redirect.
+    """
+    try:
+        if not path.is_symlink():
+            return False
+        target = path.resolve(strict=True)
+        if (
+            not target.is_dir()
+            or target.name != SKILL_NAME
+            or not (target / "SKILL.md").is_file()
+            or not (target / "references" / "operations.md").is_file()
+        ):
+            return False
+        for parent in target.parents:
+            marker = parent / ".git"
+            if marker.is_dir() or marker.is_file():
+                return True
+        return False
+    except OSError:
+        return False
+
+
 def _publish_skill(skill_dir: Path, skill_text: str, reference_text: str) -> None:
     """Publish both generated skill files as one directory replacement.
 
@@ -84,6 +113,10 @@ def install_skills(
     targets: list[tuple[Path, Path, Path]] = []
     for target_dir in target_dirs:
         skill_dir = target_dir / SKILL_NAME
+        if _is_checkout_skill_link(skill_dir):
+            # Owned by the Codex skill phase; publishing here would replace
+            # the developer's live checkout link with a frozen copy.
+            continue
         skill_file = skill_dir / "SKILL.md"
         reference_file = skill_dir / "references" / "operations.md"
         reject_symlink_path(skill_file, "skill installation path")

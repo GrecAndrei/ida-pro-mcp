@@ -1520,3 +1520,23 @@ def test_snapshot_source_does_not_follow_checkout_symlinks(tmp_path):
     )
 
     assert not (target / "linked-secrets").exists()
+
+
+def test_snapshot_source_ignores_pytest_tmp(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source_root = tmp_path / "src_root"
+    source_root.mkdir()
+    (source_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    junk = source_root / ".pytest_tmp" / "test_something0"
+    junk.mkdir(parents=True)
+    (junk / "fake-model.gguf").write_text("junk", encoding="utf-8")
+
+    target = _snapshot_source(
+        source_root, tmp_path / "install_root", dry_run=False, report=InstallReport()
+    )
+
+    assert target.exists()
+    assert (target / "pyproject.toml").exists()
+    assert not (target / ".pytest_tmp").exists()

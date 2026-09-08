@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-08 — Installer reliability: skills, client map, snapshots, and uninstall
+
+ - Fixed the generated-skills phase warning `Refusing symlinked skill installation path`
+   on checkouts that link `~/.codex/skills/ida-pro-mcp` back to the working tree: the
+   publisher now retains checkout-backed skill links (owned by the Codex skill phase)
+   while still rejecting unrelated symlinked destinations.
+ - Synced the checkout `client_configs.json` with the bundled installer map so
+   checkout installs configure all 21 clients (OpenClaw, Pi, Hermes, Prime, ZCode,
+   Kimi Code, MiniMax Code were previously only configured from packaged installs).
+ - Excluded `.pytest_tmp` from runtime snapshots and taught model discovery to skip
+   installer-managed directories (`runtime-src-*`, `.venv`, test caches), so test
+   GGUF fixtures can no longer leak into snapshots or generated client configs.
+ - Fixed uninstall removing IDA plugins (`IdaInstall.path` was misread as `ida_dir`,
+   silently skipping plugin removal) and made skill removal unlink symlinked skill
+   entries instead of leaving them behind.
+
 ## 2026-09-07 — Fix CI timeouts, changed-line coverage, and pip-audit for coverage PR
 
 - Fix `segments.find_data` 500k-iteration guard timeout under coverage by exposing `_FIND_DATA_ITER_LIMIT` and reducing the test to 5 iterations.
@@ -539,8 +555,6 @@
    structured/path validation boundaries.
  - Added function-family edge coverage for empty/malformed vectors, name
    filters, row caps, empty addresses, and redundant union operations.
-
-All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
 ## 2026-09-04 — Python execution resilience, IDA segment/func shims, and search fallbacks
 

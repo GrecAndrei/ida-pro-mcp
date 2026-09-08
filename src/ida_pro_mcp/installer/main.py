@@ -802,7 +802,7 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
 def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> bool:
     """Auto-generate and install skills for Claude Code and OpenCode."""
     try:
-        from .skills import default_skill_dirs, install_skills
+        from .skills import SKILL_NAME, default_skill_dirs, install_skills
     except ImportError as exc:
         message = f"claude-skills import failed: {exc}"
         report.add_warning(message)
@@ -811,6 +811,11 @@ def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI
         return False
     try:
         target_dirs = default_skill_dirs()
+        skipped_links = [
+            str(target_dir / SKILL_NAME)
+            for target_dir in target_dirs
+            if _is_checkout_skill_link(target_dir / SKILL_NAME)
+        ]
         written = install_skills(target_dirs, dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
         if not dry_run:
@@ -818,9 +823,12 @@ def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI
                 for p in paths:
                     report.add_modified(p)
         action = "would install" if dry_run else "installed"
+        detail = f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs"
+        if skipped_links:
+            detail += f"; retained {len(skipped_links)} checkout-backed skill link(s)"
         report.add_step(
             "claude-skills", "ok" if not dry_run else "dry-run",
-            f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs",
+            detail,
         )
         ui.ok(f"Claude/OpenCode skills: {action} {len(written)} skills")
         return True
@@ -1356,7 +1364,15 @@ def _run_uninstall(opts: InstallerOptions, ui: UI, report: InstallReport) -> int
     from .skills import SKILL_NAME, default_skill_dirs
     for sdir in default_skill_dirs():
         target_skill = sdir / SKILL_NAME
-        if target_skill.exists():
+        if target_skill.is_symlink() or target_skill.is_file():
+            # A checkout-backed skill link (or stray file) is removed as a
+            # link: rmtree refuses symlinks, so unlink the entry itself and
+            # leave the checkout source untouched.
+            if not opts.dry_run:
+                target_skill.unlink(missing_ok=True)
+                report.add_modified(target_skill)
+            ui.ok(f"Removed skill directory: {target_skill}")
+        elif target_skill.is_dir():
             if not opts.dry_run:
                 shutil.rmtree(target_skill, ignore_errors=True)
                 report.add_modified(target_skill)
@@ -1367,7 +1383,7 @@ def _run_uninstall(opts: InstallerOptions, ui: UI, report: InstallReport) -> int
     try:
         installs = detect_ida_installs()
         for inst in installs:
-            plugin_dir = Path(inst.ida_dir) / "plugins"
+            plugin_dir = Path(inst.path) / "plugins"
             for plugin_file in [plugin_dir / "server_script.py", plugin_dir / "ida_pro_mcp_plugin.py"]:
                 if plugin_file.is_file():
                     if not opts.dry_run:

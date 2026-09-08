@@ -364,3 +364,36 @@ def test_install_skills_cleanup_non_dir_backup(tmp_path, monkeypatch):
     monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", replace_backup_with_file)
     skills.install_skills([root])
     assert not list(root.glob(".*transaction-backup-*"))
+
+
+def test_portable_installer_retains_checkout_backed_skill_link(tmp_path):
+    checkout = tmp_path / "checkout"
+    checkout_skill = checkout / ".agents" / "skills" / "ida-pro-mcp"
+    checkout_skill.mkdir(parents=True)
+    (checkout / ".git").mkdir()
+    (checkout_skill / "SKILL.md").write_text("# Checkout skill\n", encoding="utf-8")
+    (checkout_skill / "references").mkdir()
+    (checkout_skill / "references" / "operations.md").write_text(
+        "# Checkout operations\n", encoding="utf-8"
+    )
+
+    codex_root = tmp_path / "codex-skills"
+    codex_root.mkdir()
+    linked = codex_root / "ida-pro-mcp"
+    linked.symlink_to(checkout_skill, target_is_directory=True)
+
+    plain_root = tmp_path / "plain-skills"
+    plain_root.mkdir()
+
+    written = install_skills([codex_root, plain_root])
+
+    # The checkout-backed link is retained, not replaced or rejected...
+    assert linked.is_symlink()
+    assert linked.resolve() == checkout_skill.resolve()
+    # ...while ordinary targets are still published and reported.
+    assert (plain_root / "ida-pro-mcp" / "SKILL.md").is_file()
+    assert (plain_root / "ida-pro-mcp" / "references" / "operations.md").is_file()
+    assert written["ida-pro-mcp"] == [
+        plain_root / "ida-pro-mcp" / "SKILL.md",
+        plain_root / "ida-pro-mcp" / "references" / "operations.md",
+    ]

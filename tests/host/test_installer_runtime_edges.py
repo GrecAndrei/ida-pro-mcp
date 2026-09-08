@@ -655,3 +655,43 @@ def test_discovery_version_parser_and_binary_architecture_edges(tmp_path):
     unknown = tmp_path / "unknown"
     unknown.write_bytes(b"not-a-binary")
     assert _binary_arch(unknown) == "unknown"
+
+
+def test_find_models_ignore_snapshots_venvs_and_test_caches(tmp_path, monkeypatch):
+    """Recursive model discovery must not use installer-managed directories."""
+    from ida_pro_mcp.installer.runtime import find_embed_model, find_rerank_model
+
+    for name in (
+        "IDA_MCP_EMBED_MODEL",
+        "IDA_MCP_EMBED_PROFILE",
+        "IDA_MCP_EMBED_SEARCH_PATHS",
+        "IDA_MCP_RERANK_MODEL",
+        "IDA_MCP_RERANK_PROFILE",
+        "IDA_MCP_RERANK_SEARCH_PATHS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "cwd").mkdir()
+    monkeypatch.chdir(tmp_path / "cwd")
+
+    install = tmp_path / "install"
+    install.mkdir()
+    for sub in ("runtime-src-20250908-1200", ".venv/lib", ".pytest_tmp/test_x0"):
+        junk_embed = install / sub / "qwen3-embedding-0.6b-q4_k_m.gguf"
+        junk_embed.parent.mkdir(parents=True)
+        junk_embed.write_bytes(b"junk")
+        junk_rerank = install / sub / "qwen3-reranker-0.6b-q4_k_m.gguf"
+        junk_rerank.write_bytes(b"junk")
+
+    assert find_embed_model(install, "qwen3-embedding-0.6b") == ""
+    assert find_rerank_model(install, "qwen3-reranker-0.6b") == ""
+
+    models = install / "models"
+    models.mkdir()
+    real_embed = models / "qwen3-embedding-0.6b-q4_k_m.gguf"
+    real_embed.write_bytes(b"real")
+    real_rerank = models / "qwen3-reranker-0.6b-q4_k_m.gguf"
+    real_rerank.write_bytes(b"real")
+
+    assert find_embed_model(install, "qwen3-embedding-0.6b") == str(real_embed)
+    assert find_rerank_model(install, "qwen3-reranker-0.6b") == str(real_rerank)
