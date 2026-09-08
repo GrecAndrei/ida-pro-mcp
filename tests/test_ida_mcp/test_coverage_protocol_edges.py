@@ -39,6 +39,24 @@ def test_rpc_flat_plugin_import_uses_compatibility_fallback(monkeypatch):
     assert namespace["MCP_SERVER"].__class__ is _Server
 
 
+def test_rpc_flat_plugin_without_version_reports_unknown(monkeypatch):
+    """Flat IDA layout with no _version module either: version is 'unknown'."""
+    fake_zeromcp = types.ModuleType("zeromcp")
+    fake_zeromcp.McpHttpRequestHandler = type("McpHttpRequestHandler", (), {})
+    fake_zeromcp.McpRpcRegistry = type("McpRpcRegistry", (), {})
+    fake_zeromcp.McpServer = type(
+        "McpServer", (), {"__init__": lambda self, *_a, **_k: None}
+    )
+    fake_zeromcp.McpToolError = type("McpToolError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "zeromcp", fake_zeromcp)
+    monkeypatch.delitem(sys.modules, "_version", raising=False)
+
+    namespace = runpy.run_path(
+        str(Path(rpc.__file__)), run_name="flat_rpc_no_version_test"
+    )
+    assert namespace["__version__"] == "unknown"
+
+
 def test_utils_final_bitness_and_frame_version_fallbacks(monkeypatch):
     original_import = builtins.__import__
 

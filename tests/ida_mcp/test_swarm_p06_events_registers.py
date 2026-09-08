@@ -22,6 +22,8 @@ import os
 import sys
 import types
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from tests._isolated_repo_loader import (
@@ -502,3 +504,143 @@ def test_idb_advertises_events_and_registers_actions():
     anno = str(inspect.signature(mod.idb).parameters["action"].annotation)
     assert "events" in anno
     assert "registers" in anno
+
+
+# ---------------------------------------------------------------------------
+# support/events.py: remaining fallback arcs (best-effort paths)
+# ---------------------------------------------------------------------------
+
+_STANDALONE_STUB_KEYS = ("ida_pro_mcp.ida_mcp.sync", "ida_pro_mcp.ida_mcp.rpc")
+
+
+@pytest.fixture
+def preserved_module_stubs():
+    """Restore the sync/rpc registrations after standalone-loader tests.
+
+    ``_load_events_standalone`` overwrites these ``sys.modules`` entries with
+    blanks, and the restore must reflect the pre-test state: other test
+    modules may hold references to the previously registered instances, and
+    leaving a different object behind breaks them in focused runs.
+    """
+    saved = {key: sys.modules.get(key) for key in _STANDALONE_STUB_KEYS}
+    yield
+    for key, module in saved.items():
+        if module is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = module
+
+
+def test_invalidate_cache_survives_unresolvable_sync(preserved_module_stubs, monkeypatch):
+    """No sync module importable at all: give up quietly, no crash."""
+    events = _load_events_standalone()
+    real_import = builtins.__import__
+
+    def no_sync(name, *args, **kwargs):
+        if name in {"ida_pro_mcp.ida_mcp.sync", "ida_mcp.sync", "sync"}:
+            raise ImportError("sync unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_sync)
+    assert events._invalidate_tool_cache() is None
+
+
+def test_invalidate_cache_tolerates_empty_and_uncallable_caches(
+    preserved_module_stubs, monkeypatch
+):
+    """Resolver with no cache, or a cache without invalidate_all: no-ops."""
+    events = _load_events_standalone()
+    real_import = builtins.__import__
+
+    def fake_sync(name, *args, **kwargs):
+        if name == "ida_pro_mcp.ida_mcp.sync":
+            return fake_sync.module
+        return real_import(name, *args, **kwargs)
+
+    fake_sync.module = types.ModuleType("ida_pro_mcp.ida_mcp.sync")
+    fake_sync.module._tool_cache = lambda: None
+    monkeypatch.setattr(builtins, "__import__", fake_sync)
+    assert events._invalidate_tool_cache() is None
+
+    fake_sync.module = types.ModuleType("ida_pro_mcp.ida_mcp.sync")
+    fake_sync.module._tool_cache = object
+    assert events._invalidate_tool_cache() is None
+
+
+def test_sse_emit_isolates_dead_connection_and_continues(
+    preserved_module_stubs, monkeypatch
+):
+    """One live conn plus one dead conn: the live one still gets the event."""
+    events = _load_events_standalone()
+    delivered = []
+
+    class _LiveConnection:
+        def send_event(self, kind, event):
+            delivered.append((kind, event))
+
+    class _DeadConnection:
+        def send_event(self, *_args):
+            raise RuntimeError("socket closed")
+
+    rpc_stub = types.ModuleType("ida_pro_mcp.ida_mcp.rpc")
+    rpc_stub.MCP_SERVER = types.SimpleNamespace(
+        _sse_connections={"live": _LiveConnection(), "dead": _DeadConnection()}
+    )
+    real_import = builtins.__import__
+
+    def fake_rpc(name, *args, **kwargs):
+        if name in {"ida_pro_mcp.ida_mcp.rpc", "ida_mcp.rpc", "rpc"}:
+            return rpc_stub
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_rpc)
+    events._sse_emit({"type": "function_created"})
+    assert [kind for kind, _event in delivered] == ["analysis"]
+
+
+def test_func_name_empty_when_providers_know_nothing(
+    preserved_module_stubs, monkeypatch
+):
+    """idc raises and idaapi returns '': the name is '' (not an exception)."""
+    events = _load_events_standalone()
+    idaapi = types.ModuleType("idaapi")
+    idaapi.get_func_name = lambda _ea: ""
+    real_import = builtins.__import__
+
+    def fake_sdk(name, *args, **kwargs):
+        if name == "idc":
+            raise ImportError("idc unavailable")
+        if name == "idaapi":
+            return idaapi
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_sdk)
+    assert events._func_name(0x401000) == ""
+
+
+def test_ida_hook_body_failure_never_breaks_analysis(preserved_module_stubs):
+    """Same guarantee as the standalone hooks, on the IDA-wired subclass."""
+    install_common_stub()
+    ida_idp = types.ModuleType("ida_idp")
+    ida_idp.IDB_Hooks = _FakeIdbHooksBase
+    sys.modules["ida_idp"] = ida_idp
+    events = load_support_module("events")
+    hooks = events.EventHooks()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("recording exploded")
+
+    original = events.record_event
+    events.record_event = boom
+    try:
+        hooks.auto_empty_finally()   # must swallow, not raise
+        hooks.func_created(0x401000)
+    finally:
+        events.record_event = original
+
+
+def test_unhook_without_install_is_idempotent(preserved_module_stubs):
+    events = _load_events_standalone()
+    events._INSTALLED_HOOKS = None
+    assert events.unhook_hooks() is None
+    assert events._INSTALLED_HOOKS is None

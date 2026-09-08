@@ -12,3 +12,9 @@ def test_package_main_invokes_server_main():
         runpy.run_module("ida_pro_mcp", run_name="__main__")
         assert mock_main.called
         assert sys.argv[0] == "ida_pro_mcp"
+
+
+def test_package_main_module_imports_cleanly():
+    import ida_pro_mcp.__main__ as package_main
+
+    assert package_main.__name__ == "ida_pro_mcp.__main__"

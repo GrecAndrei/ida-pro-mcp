@@ -214,3 +214,18 @@ class TestIdaSideLiteralContract:
                 f"advertises: {orphans}"
             )
         assert checked >= 20, f"expected to check most tools, checked {checked}"
+
+
+class TestToolActionsFallback:
+    def test_agent_import_failure_falls_back_to_tool_actions(
+        self, tool_registry, monkeypatch
+    ):
+        """tool_actions() survives an unimportable agent catalog (best effort)."""
+        monkeypatch.setitem(
+            sys.modules, "ida_pro_mcp.host.agent_operations", None
+        )
+        actions = tool_registry.tool_actions()
+        assert actions == {
+            tool: list(acts)
+            for tool, acts in tool_registry._TOOL_ACTIONS.items()
+        }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-08 — Close coverage gaps in events, registry, rpc, and __main__
+
+ - Added fallback-arc tests for `support/events.py` (unresolvable/empty/
+   uncallable tool cache, SSE broadcast isolation past a dead connection,
+   empty provider names, IDA-wired hook failure swallowing, idempotent
+   unhook), the `tool_actions()` agent-import fallback, the flat-layout
+   `rpc.py` unknown-version path, and plain `__main__` import.
+ - New tests intercept `builtins.__import__` instead of swapping
+   `sys.modules` entries: `monkeypatch` teardown runs after the conftest
+   module-table restore, so a swapped entry would re-clobber the restored
+   module and break collection-bound references in focused runs. A
+   `preserved_module_stubs` fixture additionally restores the sync/rpc
+   registrations around standalone-loader tests.
+
 ## 2026-09-08 — Fix stale live-suite counts and dead doc links
 
  - Corrected the live-testing guide's suite counts (`test_agent_surface_live.py`
