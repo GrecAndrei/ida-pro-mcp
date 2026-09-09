@@ -148,6 +148,7 @@ def test_provably_read_only_pairs_are_read_tier():
         ("multi_session", "cross_resolve"),
         ("multi_session", "cross_decompile"),
         ("multi_session", "cross_diff"),
+        ("multi_session", "session_diff"),
         ("multi_session", "cross_xrefs"),
         ("multi_session", "status"),
         # p01 registration additions: provably read-only pairs on WRITE_IDB /

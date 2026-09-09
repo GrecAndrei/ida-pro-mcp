@@ -646,6 +646,58 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="cross_diff",
     ),
     AgentOperation(
+        name="ida_diff_sessions",
+        description=(
+            "Triage function-level changes across two open IDA sessions. Automatically match "
+            "functions by stable name, normalized content, address, and bounded fuzzy content; "
+            "rank modified pairs and surface added or removed calls, constants, and unmatched functions."
+        ),
+        category="code",
+        input_schema=_schema(
+            {
+                "left_session": {"type": "string", "description": "Session ID for the baseline binary."},
+                "right_session": {"type": "string", "description": "Session ID for the candidate binary."},
+                "query": {"type": "string", "description": "Optional function-name filter applied to both inventories."},
+                "match_strategy": {
+                    "type": "string",
+                    "enum": ["auto", "name", "address", "content"],
+                    "description": "Matching evidence to use; auto combines every deterministic strategy.",
+                },
+                "fuzzy_threshold": {
+                    "type": "number",
+                    "minimum": 0.4,
+                    "maximum": 1.0,
+                    "description": "Minimum normalized-content similarity for fuzzy matches; defaults to 0.62.",
+                },
+                "max_functions": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum functions scanned from each session; defaults to 200.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Maximum changed, unmatched, and failure rows returned; defaults to 30.",
+                },
+                "include_unchanged": {
+                    "type": "boolean",
+                    "description": "Include matched functions whose normalized pseudocode is identical.",
+                },
+            },
+            ["left_session", "right_session"],
+        ),
+        example={
+            "left_session": "SID_BASE",
+            "right_session": "SID_PATCHED",
+            "match_strategy": "auto",
+            "limit": 30,
+        },
+        backend_tool="multi_session",
+        backend_action="session_diff",
+    ),
+    AgentOperation(
         name="ida_batch",
         description="Execute several deterministic analysis operations sequentially in one request.",
         category="workflow",

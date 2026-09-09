@@ -99,6 +99,19 @@ class TestPrepareRpcArgs:
         assert funcs["limit"] == 5
         assert funcs["min_score"] == 0.5
 
+        data = rpc_args.prepare_rpc_args(
+            "data",
+            {
+                "action": "functions",
+                "structured": True,
+                "min_xrefs": 2,
+            },
+            schemas_data.TOOL_ARG_SCHEMAS,
+        )
+        assert not errors.is_error_result(data)
+        assert data["structured"] is True
+        assert data["min_xrefs"] == 2
+
     def test_graph_admits_action_and_address(self, rpc_args, schemas_data, errors):
         out = rpc_args.prepare_rpc_args(
             "graph",

@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import uuid
+from collections import Counter
 from copy import deepcopy
 from typing import Any
 
@@ -292,6 +293,7 @@ class ServerMultiSessionMixin:
             "cross_resolve": self._ms_cross_resolve,
             "cross_decompile": self._ms_cross_decompile,
             "cross_diff": self._ms_cross_diff,
+            "session_diff": self._ms_session_diff,
             "cross_xrefs": self._ms_cross_xrefs,
             "status": self._ms_status,
         }
@@ -721,6 +723,372 @@ class ServerMultiSessionMixin:
             "diff_lines": len(diff_lines),
             "diff_truncated": truncated,
             "returned_diff_lines": len(rendered),
+        }
+
+    _AUTO_FUNCTION_NAME = re.compile(
+        r"^(?:sub|loc|unk|nullsub|j|thunk|off|byte|word|dword|qword)_[0-9a-f]+$",
+        re.IGNORECASE,
+    )
+    _CALL_KEYWORDS = frozenset({
+        "FUNCTION", "if", "for", "while", "switch", "return", "sizeof",
+        "__readfsqword", "__readgsqword",
+    })
+    _CONTENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|0x[0-9A-Fa-f]+|\d+|\S")
+    _MAX_MATCH_TOKENS = 4096
+    _FUZZY_CANDIDATES_PER_FUNCTION = 8
+
+    @classmethod
+    def _stable_function_name(cls, item: dict[str, Any]) -> str | None:
+        name = str(item.get("name") or "").strip()
+        if not name or cls._AUTO_FUNCTION_NAME.fullmatch(name):
+            return None
+        return name.casefold()
+
+    @staticmethod
+    def _compact_function(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "address": item.get("addr"),
+            "name": str(item.get("name") or ""),
+            "size": int(item.get("size") or 0),
+        }
+
+    @classmethod
+    def _content_similarity(cls, left_code: str, right_code: str) -> float:
+        """Compare bounded pseudocode token streams instead of unbounded text."""
+        left_tokens = cls._CONTENT_TOKEN.findall(left_code)[:cls._MAX_MATCH_TOKENS]
+        right_tokens = cls._CONTENT_TOKEN.findall(right_code)[:cls._MAX_MATCH_TOKENS]
+        if not left_tokens or not right_tokens:
+            return 0.0
+        return difflib.SequenceMatcher(
+            None, left_tokens, right_tokens, autojunk=False
+        ).ratio()
+
+    @classmethod
+    def _change_signals(
+        cls,
+        left_code: str,
+        right_code: str,
+        left_size: int,
+        right_size: int,
+    ) -> dict[str, Any]:
+        """Extract small, deterministic patch-review signals from pseudocode."""
+        call_pattern = re.compile(r"\b([A-Za-z_][A-Za-z0-9_:]*)\s*\(")
+        number_pattern = re.compile(r"(?<![A-Za-z_])(?:0x[0-9A-Fa-f]+|\d+)(?![A-Za-z_])")
+
+        def calls(code: str) -> Counter[str]:
+            return Counter(
+                name for name in call_pattern.findall(code)
+                if name not in cls._CALL_KEYWORDS
+            )
+
+        left_calls, right_calls = calls(left_code), calls(right_code)
+        left_numbers = Counter(number_pattern.findall(left_code))
+        right_numbers = Counter(number_pattern.findall(right_code))
+        added_calls = sorted((right_calls - left_calls).elements())
+        removed_calls = sorted((left_calls - right_calls).elements())
+        added_constants = sorted((right_numbers - left_numbers).elements())
+        removed_constants = sorted((left_numbers - right_numbers).elements())
+        return {
+            "added_calls": added_calls[:20],
+            "removed_calls": removed_calls[:20],
+            "added_constants": added_constants[:20],
+            "removed_constants": removed_constants[:20],
+            "size_delta": right_size - left_size,
+            "counts": {
+                "added_calls": len(added_calls),
+                "removed_calls": len(removed_calls),
+                "added_constants": len(added_constants),
+                "removed_constants": len(removed_constants),
+            },
+        }
+
+    def _session_diff_inventory(
+        self,
+        session_id: str,
+        query: str,
+        max_functions: int,
+    ) -> tuple[list[dict[str, Any]] | None, dict | None, int]:
+        result = self._dispatch_to_session(
+            session_id,
+            "data",
+            {
+                "action": "functions",
+                "query": query or None,
+                "offset": 0,
+                "count": max_functions,
+                "include_xrefs": True,
+                "structured": True,
+            },
+        )
+        if isinstance(result, dict) and result.get("error"):
+            return None, result, 0
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+            return None, make_error(
+                MCPError.INTERNAL,
+                f"Session {session_id} did not return a structured function inventory",
+                hint="Ensure the IDA-side runtime matches this host version.",
+            ), 0
+        items = [dict(item) for item in result["items"] if isinstance(item, dict)]
+        return items, None, int(result.get("total") or len(items))
+
+    def _session_diff_decompile(
+        self,
+        session_id: str,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        failures: list[dict[str, Any]] = []
+        for item in items:
+            address = item.get("addr")
+            raw = self._dispatch_to_session(
+                session_id, "code", {"action": "decompile", "addr": address}
+            )
+            payload, error = self._decompile_payload(raw, session_id, address)
+            if error:
+                item["_decompile_error"] = {
+                    "code": error.get("code"),
+                    "message": error.get("message"),
+                }
+                failures.append({
+                    "session_id": session_id,
+                    **self._compact_function(item),
+                    **item["_decompile_error"],
+                })
+                continue
+            item["_decompiled"] = payload
+            item["_normalized"] = self._normalize_decompilation(
+                payload["code"], payload["name"]
+            )
+        return failures
+
+    def _ms_session_diff(self, args: dict) -> dict:
+        """Triage function-level changes across two complete IDA sessions."""
+        left_session = str(args.get("left_session") or "").strip().upper()
+        right_session = str(args.get("right_session") or "").strip().upper()
+        if not left_session or not right_session:
+            return make_error(MCPError.INVALID_ARGS, "left_session and right_session are required")
+        if left_session == right_session:
+            return make_error(MCPError.INVALID_ARGS, "left_session and right_session must differ")
+        try:
+            max_functions = max(1, min(500, int(args.get("max_functions", 200))))
+            limit = max(1, min(200, int(args.get("limit", 30))))
+            fuzzy_threshold = float(args.get("fuzzy_threshold", 0.62))
+        except (TypeError, ValueError):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "max_functions and limit must be integers; fuzzy_threshold must be numeric",
+            )
+        if not 0.4 <= fuzzy_threshold <= 1.0:
+            return make_error(MCPError.INVALID_ARGS, "fuzzy_threshold must be between 0.4 and 1.0")
+        strategy = str(args.get("match_strategy") or "auto").strip().lower()
+        if strategy not in {"auto", "name", "address", "content"}:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "match_strategy must be auto, name, address, or content",
+            )
+        query = str(args.get("query") or "")
+
+        left, err, left_total = self._session_diff_inventory(
+            left_session, query, max_functions
+        )
+        if err:
+            return err
+        right, err, right_total = self._session_diff_inventory(
+            right_session, query, max_functions
+        )
+        if err:
+            return err
+        assert left is not None and right is not None
+
+        failures = self._session_diff_decompile(left_session, left)
+        failures.extend(self._session_diff_decompile(right_session, right))
+        matched_left: set[int] = set()
+        matched_right: set[int] = set()
+        pairs: list[tuple[int, int, str, float]] = []
+
+        def add_unique_matches(method: str, key_fn) -> None:
+            left_keys: dict[Any, list[int]] = {}
+            right_keys: dict[Any, list[int]] = {}
+            for index, item in enumerate(left):
+                if index not in matched_left and (key := key_fn(item)) is not None:
+                    left_keys.setdefault(key, []).append(index)
+            for index, item in enumerate(right):
+                if index not in matched_right and (key := key_fn(item)) is not None:
+                    right_keys.setdefault(key, []).append(index)
+            for key in sorted(left_keys.keys() & right_keys.keys(), key=str):
+                if len(left_keys[key]) != 1 or len(right_keys[key]) != 1:
+                    continue
+                left_index, right_index = left_keys[key][0], right_keys[key][0]
+                matched_left.add(left_index)
+                matched_right.add(right_index)
+                confidence = {"name": 1.0, "exact_content": 0.99, "address": 0.86}[method]
+                pairs.append((left_index, right_index, method, confidence))
+
+        if strategy in {"auto", "name"}:
+            add_unique_matches("name", self._stable_function_name)
+        if strategy == "content":
+            add_unique_matches("exact_content", lambda item: item.get("_normalized"))
+        elif strategy == "auto":
+            add_unique_matches(
+                "exact_content",
+                lambda item: (
+                    item.get("_normalized")
+                    if self._stable_function_name(item) is None else None
+                ),
+            )
+        if strategy == "address":
+            add_unique_matches(
+                "address", lambda item: str(item.get("addr") or "").casefold() or None
+            )
+        elif strategy == "auto":
+            add_unique_matches(
+                "address",
+                lambda item: (
+                    str(item.get("addr") or "").casefold() or None
+                    if self._stable_function_name(item) is None else None
+                ),
+            )
+
+        fuzzy_evaluated = 0
+        if strategy in {"auto", "content"}:
+            candidates: list[tuple[float, int, int]] = []
+            for left_index, left_item in enumerate(left):
+                if left_index in matched_left or not left_item.get("_normalized"):
+                    continue
+                left_size = max(1, int(left_item.get("size") or 0))
+                plausible: list[tuple[float, int, dict[str, Any]]] = []
+                for right_index, right_item in enumerate(right):
+                    if right_index in matched_right or not right_item.get("_normalized"):
+                        continue
+                    # In automatic mode, two different analyst/compiler names
+                    # are stronger negative evidence than a superficially
+                    # similar body. Explicit content mode deliberately opts out
+                    # of that guard for renamed-function hunts.
+                    if (
+                        strategy == "auto"
+                        and self._stable_function_name(left_item) is not None
+                        and self._stable_function_name(right_item) is not None
+                    ):
+                        continue
+                    right_size = max(1, int(right_item.get("size") or 0))
+                    size_ratio = min(left_size, right_size) / max(left_size, right_size)
+                    if size_ratio < 0.35:
+                        continue
+                    plausible.append((size_ratio, right_index, right_item))
+                plausible.sort(key=lambda candidate: (-candidate[0], candidate[1]))
+                for _size_ratio, right_index, right_item in plausible[
+                    :self._FUZZY_CANDIDATES_PER_FUNCTION
+                ]:
+                    fuzzy_evaluated += 1
+                    similarity = self._content_similarity(
+                        left_item["_normalized"], right_item["_normalized"]
+                    )
+                    if similarity >= fuzzy_threshold:
+                        candidates.append((similarity, left_index, right_index))
+            for similarity, left_index, right_index in sorted(
+                candidates,
+                key=lambda candidate: (-candidate[0], candidate[1], candidate[2]),
+            ):
+                if left_index in matched_left or right_index in matched_right:
+                    continue
+                matched_left.add(left_index)
+                matched_right.add(right_index)
+                pairs.append((left_index, right_index, "fuzzy_content", similarity))
+
+        summaries: list[dict[str, Any]] = []
+        method_counts: Counter[str] = Counter()
+        changed_total = 0
+        unchanged_total = 0
+        for left_index, right_index, method, confidence in pairs:
+            method_counts[method] += 1
+            left_item, right_item = left[left_index], right[right_index]
+            left_code = left_item.get("_normalized")
+            right_code = right_item.get("_normalized")
+            summary: dict[str, Any] = {
+                "left": self._compact_function(left_item),
+                "right": self._compact_function(right_item),
+                "match_method": method,
+                "match_confidence": round(float(confidence), 4),
+            }
+            if not isinstance(left_code, str) or not isinstance(right_code, str):
+                summary.update({
+                    "status": "unavailable",
+                    "change_score": None,
+                    "left_error": left_item.get("_decompile_error"),
+                    "right_error": right_item.get("_decompile_error"),
+                })
+                summaries.append(summary)
+                continue
+            similarity = self._content_similarity(left_code, right_code)
+            changed = left_code != right_code
+            signals = self._change_signals(
+                left_code,
+                right_code,
+                int(left_item.get("size") or 0),
+                int(right_item.get("size") or 0),
+            )
+            signal_groups = sum(bool(signals[key]) for key in (
+                "added_calls", "removed_calls", "added_constants", "removed_constants"
+            ))
+            change_score = min(1.0, (1.0 - similarity) * 0.85 + signal_groups * 0.0375)
+            summary.update({
+                "status": "modified" if changed else "unchanged",
+                "similarity": round(similarity, 4),
+                "change_score": round(change_score, 4),
+                "signals": signals,
+            })
+            changed_total += int(changed)
+            unchanged_total += int(not changed)
+            summaries.append(summary)
+
+        include_unchanged = args.get("include_unchanged", False) is True
+        visible = [
+            item for item in summaries
+            if include_unchanged or item.get("status") != "unchanged"
+        ]
+        visible.sort(key=lambda item: (
+            item.get("change_score") is None,
+            -(item.get("change_score") or 0.0),
+            str(item["left"].get("address") or ""),
+        ))
+        unmatched_left = [
+            self._compact_function(item)
+            for index, item in enumerate(left) if index not in matched_left
+        ]
+        unmatched_right = [
+            self._compact_function(item)
+            for index, item in enumerate(right) if index not in matched_right
+        ]
+        return {
+            "ok": True,
+            "left_session": left_session,
+            "right_session": right_session,
+            "query": query or None,
+            "summary": {
+                "matched": len(pairs),
+                "modified": changed_total,
+                "unchanged": unchanged_total,
+                "unavailable": sum(item.get("status") == "unavailable" for item in summaries),
+                "left_only": len(unmatched_left),
+                "right_only": len(unmatched_right),
+            },
+            "matching": {
+                "strategy": strategy,
+                "methods": dict(sorted(method_counts.items())),
+                "fuzzy_threshold": fuzzy_threshold,
+                "fuzzy_candidates_evaluated": fuzzy_evaluated,
+            },
+            "coverage": {
+                "left": {"scanned": len(left), "total": left_total, "truncated": left_total > len(left)},
+                "right": {"scanned": len(right), "total": right_total, "truncated": right_total > len(right)},
+            },
+            "changes": visible[:limit],
+            "changes_returned": min(len(visible), limit),
+            "changes_truncated": len(visible) > limit,
+            "left_only": unmatched_left[:limit],
+            "right_only": unmatched_right[:limit],
+            "unmatched_truncated": len(unmatched_left) > limit or len(unmatched_right) > limit,
+            "decompile_failures": failures[:limit],
+            "decompile_failures_truncated": len(failures) > limit,
         }
 
     def _ms_cross_xrefs(self, args: dict) -> dict:

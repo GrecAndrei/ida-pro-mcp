@@ -606,6 +606,28 @@ def test_live_compare_functions_diffs_two_real_ida_sessions(
         assert any("7" in line for line in removed), compared
         assert any("11" in line for line in added), compared
         assert compared["diff_truncated"] is False
+
+        triage = _assert_ok(
+            client.call(
+                "ida_diff_sessions",
+                {
+                    "left_session": baseline_sid,
+                    "right_session": patched_sid,
+                    "query": "fixture_leaf",
+                    "match_strategy": "auto",
+                    "max_functions": 10,
+                    "limit": 10,
+                },
+            ),
+            "ida_diff_sessions",
+        )
+        assert triage["summary"]["matched"] == 1, triage
+        assert triage["summary"]["modified"] == 1, triage
+        assert triage["summary"]["unchanged"] == 0, triage
+        assert triage["changes"][0]["left"]["name"] == "fixture_leaf", triage
+        assert triage["changes"][0]["right"]["name"] == "fixture_leaf", triage
+        assert "7" in triage["changes"][0]["signals"]["removed_constants"], triage
+        assert "11" in triage["changes"][0]["signals"]["added_constants"], triage
     finally:
         if patched_sid:
             with contextlib.suppress(Exception):

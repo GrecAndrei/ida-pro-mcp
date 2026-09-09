@@ -486,6 +486,149 @@ def test_cross_diff_bounds_output_and_reports_decompile_failures(tmp_path):
     })["error"] is True
 
 
+def test_session_diff_matches_ranks_and_explains_whole_binary_changes(tmp_path):
+    inventories = {
+        "AAAA0001": [
+            {"addr": "0x1000", "name": "parse_config", "size": 40, "xrefs_to": 2, "xrefs_from": 1},
+            {"addr": "0x1100", "name": "sub_1100", "size": 12, "xrefs_to": 1, "xrefs_from": 0},
+            {"addr": "0x1200", "name": "removed_helper", "size": 8, "xrefs_to": 0, "xrefs_from": 0},
+        ],
+        "BBBB0002": [
+            {"addr": "0x2000", "name": "parse_config", "size": 48, "xrefs_to": 2, "xrefs_from": 1},
+            {"addr": "0x2100", "name": "sub_2100", "size": 12, "xrefs_to": 1, "xrefs_from": 0},
+            {"addr": "0x2200", "name": "added_helper", "size": 10, "xrefs_to": 0, "xrefs_from": 0},
+        ],
+    }
+    code = {
+        "0x1000": ("parse_config", "int parse_config() { return memcpy(dst, src, 16); }"),
+        "0x2000": ("parse_config", "int parse_config() { return checked_copy(dst, src, 32); }"),
+        "0x1100": ("sub_1100", "int sub_1100() { return 7; }"),
+        "0x2100": ("sub_2100", "int sub_2100() { return 7; }"),
+        "0x1200": ("removed_helper", "int removed_helper() { return 1; }"),
+        "0x2200": ("added_helper", "int added_helper() { return 99; }"),
+    }
+
+    def data_response(session_id):
+        return lambda _args: {
+            "ok": True,
+            "items": inventories[session_id],
+            "total": len(inventories[session_id]),
+        }
+
+    def code_response(args):
+        name, pseudocode = code[str(args["addr"])]
+        return {"ok": True, "addr": args["addr"], "name": name, "code": pseudocode}
+
+    server = _Server(tmp_path, responses={
+        ("data", "AAAA0001"): data_response("AAAA0001"),
+        ("data", "BBBB0002"): data_response("BBBB0002"),
+        ("code", "AAAA0001"): code_response,
+        ("code", "BBBB0002"): code_response,
+    })
+    result = server._handle_multi_session("session_diff", {
+        "left_session": "aaaa0001",
+        "right_session": "bbbb0002",
+        "limit": 10,
+    })
+
+    assert result["ok"] is True
+    assert result["summary"] == {
+        "matched": 2,
+        "modified": 1,
+        "unchanged": 1,
+        "unavailable": 0,
+        "left_only": 1,
+        "right_only": 1,
+    }
+    assert result["matching"]["methods"] == {"exact_content": 1, "name": 1}
+    assert len(result["changes"]) == 1
+    changed = result["changes"][0]
+    assert changed["left"]["name"] == "parse_config"
+    assert changed["right"]["name"] == "parse_config"
+    assert changed["signals"]["removed_calls"] == ["memcpy"]
+    assert changed["signals"]["added_calls"] == ["checked_copy"]
+    assert changed["signals"]["removed_constants"] == ["16"]
+    assert changed["signals"]["added_constants"] == ["32"]
+    assert changed["signals"]["size_delta"] == 8
+    assert result["left_only"][0]["name"] == "removed_helper"
+    assert result["right_only"][0]["name"] == "added_helper"
+    assert result["coverage"]["left"]["truncated"] is False
+
+
+def test_session_diff_content_matching_failures_and_validation(tmp_path):
+    def inventory(items, total=None):
+        return lambda _args: {"ok": True, "items": items, "total": total or len(items)}
+
+    left_items = [{"addr": "0x10", "name": "sub_10", "size": 20}]
+    right_items = [{"addr": "0x10", "name": "sub_90", "size": 24}]
+    server = _Server(tmp_path, responses={
+        ("data", "AAAA0001"): inventory(left_items, total=5),
+        ("data", "BBBB0002"): inventory(right_items),
+        ("code", "AAAA0001"): {
+            "ok": True, "addr": "0x10", "name": "sub_10",
+            "code": "int sub_10() { return transform(value, 4); }",
+        },
+        ("code", "BBBB0002"): {
+            "ok": True, "addr": "0x90", "name": "sub_90",
+            "code": "int sub_90() { return transform(value, 8); }",
+        },
+    })
+    result = server._ms_session_diff({
+        "left_session": "AAAA0001",
+        "right_session": "BBBB0002",
+        "match_strategy": "content",
+        "fuzzy_threshold": 0.4,
+        "include_unchanged": True,
+    })
+    assert result["summary"]["modified"] == 1
+    assert result["changes"][0]["match_method"] == "fuzzy_content"
+    assert result["coverage"]["left"]["truncated"] is True
+
+    server._responses[("code", "BBBB0002")] = {
+        "error": True, "code": "DECOMPILER_FAILED", "message": "no decompiler"
+    }
+    unavailable = server._ms_session_diff({
+        "left_session": "AAAA0001",
+        "right_session": "BBBB0002",
+        "match_strategy": "address",
+    })
+    assert unavailable["summary"]["matched"] == 1
+    assert unavailable["summary"]["unavailable"] == 1
+    assert unavailable["changes"][0]["status"] == "unavailable"
+    assert unavailable["decompile_failures"][0]["code"] == "DECOMPILER_FAILED"
+
+    assert server._ms_session_diff({})["error"] is True
+    assert server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "AAAA0001"
+    })["error"] is True
+    assert server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002", "limit": "many"
+    })["error"] is True
+    assert server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002", "fuzzy_threshold": 0.1
+    })["error"] is True
+    assert server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002", "match_strategy": "guess"
+    })["error"] is True
+
+    server._responses[("data", "AAAA0001")] = {"ok": True}
+    malformed = server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002"
+    })
+    assert malformed["error"] is True
+
+    server._responses[("data", "AAAA0001")] = inventory(left_items)
+    server._responses[("data", "BBBB0002")] = {
+        "error": True, "code": "SESSION_NOT_FOUND", "message": "gone"
+    }
+    right_error = server._ms_session_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002"
+    })
+    assert right_error["code"] == "SESSION_NOT_FOUND"
+
+    assert server._content_similarity("", "return 1") == 0.0
+
+
 def test_cross_xrefs_can_query_importers_and_handles_search_errors(tmp_path):
     responses = {
         ("search", "BBBB0002"): {"results": [{"ea": "0x20", "text": "call puts"}, {"addr": "0x30", "name": "puts@plt"}]},

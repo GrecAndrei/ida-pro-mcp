@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-09 — Add whole-session binary diff triage
+
+- Added `ida_diff_sessions`, a deterministic whole-binary patch-review
+  workflow that inventories two open sessions, automatically matches functions
+  by stable symbol, normalized content, address, and bounded fuzzy content,
+  then ranks modified pairs by change score.
+- Diff summaries expose added and removed calls, numeric constants, function
+  size deltas, unmatched functions, scan coverage, matching evidence, and
+  bounded decompiler failures without hiding partial results.
+- Added strict-schema, dispatch, policy, malformed-input, ranking, and
+  real-IDA two-session tests, plus maintained release-audit and session
+  guidance. The public agent surface now contains 109 operations.
+- Aligned the host RPC schema with the IDA-side function inventory's existing
+  `structured` and `min_xrefs` arguments so whole-session triage reaches the
+  live runtime without weakening unknown-argument rejection.
+
 ## 2026-09-09 — v1.0.0a2
 
 - Promotes the cross-session function comparison operation and the release

@@ -696,6 +696,7 @@ def test_new_operations_present_in_catalog():
         "ida_apply_sig",
         "ida_list_sigs",
         "ida_compare_functions",
+        "ida_diff_sessions",
     }
     assert expected <= names, f"Missing: {expected - names}"
 
@@ -719,6 +720,29 @@ def test_compare_functions_has_strict_cross_session_contract():
     )
     assert op.validate({"left_session": "SID_BASE"})
     assert op.validate({**arguments, "context_lines": "five"})
+
+
+def test_diff_sessions_has_strict_whole_binary_contract():
+    op = get_agent_operation("ida_diff_sessions")
+    assert op is not None
+    arguments = {
+        "left_session": "SID_BASE",
+        "right_session": "SID_PATCHED",
+        "query": "parse",
+        "match_strategy": "auto",
+        "fuzzy_threshold": 0.7,
+        "max_functions": 400,
+        "limit": 40,
+        "include_unchanged": False,
+    }
+    assert not op.validate(arguments)
+    assert op.to_backend_call(arguments) == (
+        "multi_session",
+        {"action": "session_diff", **arguments},
+    )
+    assert op.validate({"left_session": "SID_BASE"})
+    assert op.validate({**arguments, "match_strategy": "guess"})
+    assert op.validate({**arguments, "fuzzy_threshold": "high"})
 
 
 def test_new_operations_have_valid_schemas_and_examples():

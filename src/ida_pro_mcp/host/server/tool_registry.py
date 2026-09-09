@@ -127,7 +127,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
 
 
-    "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_diff", "cross_xrefs", "status"],
+    "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_diff", "session_diff", "cross_xrefs", "status"],
     "truncation": ["continue", "peek", "search", "summary"],
     "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable", "struct_member_add", "struct_member_del", "struct_member_rename", "struct_member_set_type", "enum_member_add", "enum_member_rename", "enum_member_revalue", "til_delete", "til_export", "til_import"],
     "wiki": ["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],

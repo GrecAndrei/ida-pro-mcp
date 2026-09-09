@@ -357,6 +357,7 @@ READ_ONLY_ACTIONS = {
     ("multi_session", "cross_resolve"),
     ("multi_session", "cross_decompile"),
     ("multi_session", "cross_diff"),
+    ("multi_session", "session_diff"),
     ("multi_session", "cross_xrefs"),
     ("multi_session", "status"),
     # Emulate tool reads only query the emulator/backend without mutating

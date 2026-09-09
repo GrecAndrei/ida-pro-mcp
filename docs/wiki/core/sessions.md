@@ -70,6 +70,17 @@ it deliberately preserves numeric constants so changed bounds, masks, and
 allocation sizes stay visible. Set `normalize=false` when exact decompiler text
 is required, and adjust `context_lines` or `max_diff_lines` for output size.
 
+For release-wide triage, call
+`ida_diff_sessions(left_session=..., right_session=...)`. It inventories and
+decompiles a bounded set from both binaries, then matches functions using
+stable names, relocation-tolerant normalized content, addresses, and fuzzy
+content evidence. The result ranks modified pairs by `change_score`, shows
+added/removed calls and numeric constants, and lists functions present on only
+one side. Distinct meaningful function names are treated as negative evidence
+in automatic mode; use `match_strategy="content"` when deliberately hunting a
+renamed function. Use `query` to scope a large binary and inspect
+`coverage.*.truncated` before treating the result as complete.
+
 ## Agent SSO (subagent isolation)
 
 When several subagents share one MCP connection (opencode-style), they used to

@@ -8,7 +8,7 @@ for each session by default.
 
 The current version is `1.0.0a2`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
-stable 1.0.0 release. The default client surface contains 108 exact-schema operations.
+stable 1.0.0 release. The default client surface contains 109 exact-schema operations.
 The generated [tool reference](docs/TOOLS_REFERENCE.md) contains the complete
 list, arguments, and examples.
 
@@ -188,7 +188,7 @@ complete schemas and examples remain in the [generated operation reference](docs
 |---|---|
 | **Session** | `open_binary`, `open_background`, `session_state`, `session_status`, `session_health`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch` |
 | **Discovery** | `overview`, `find`, `semantic_search`, `reranker_status`, `function_families`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `r2_status`, `r2_bininfo`, `r2_load_hints`, `r2_disassemble_hypothesis`, `r2_vxrefs`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
-| **Code** | `decompile`, `disassemble`, `compare_functions`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `get_type`, `callgraph`, `emulate` |
+| **Code** | `decompile`, `disassemble`, `compare_functions`, `diff_sessions`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `get_type`, `callgraph`, `emulate` |
 | **Findings** | `write_finding`, `mark_examined`, `list_findings`, `search_findings`, `update_finding`, `export_findings`, `publish_findings`, `import_annotations`, `analysis_brief`, `next_target` |
 | **Edit** | `create_function`, `change_function`, `rename`, `comment`, `patch_bytes`, `save_idb`, `make_code`, `undefine`, `rename_local`, `declare_type`, `apply_type`, `add_segment`, `set_segment_attrs`, `apply_sig`, `sreg_set`, `create_data`, `create_strlit`, `undo_begin`, `undo_end`, `add_entry`, `idb_snapshot`, `idb_restore_snapshot`, `struct_member_add`, `struct_member_del`, `struct_member_rename`, `struct_member_set_type`, `enum_member_add`, `enum_member_rename`, `enum_member_revalue`, `til_delete`, `til_export`, `til_import`, `mark_dangerous` |
 | **Calculation** | `calc_eval`, `calc_offset`, `calc_convert`, `calc_resolve`, `calc_deref`, `calc_chain`, `calc_align`, `calc_bitops` |

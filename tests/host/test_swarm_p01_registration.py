@@ -137,9 +137,10 @@ class TestNewOperationRegistration(unittest.TestCase):
         cls.actions = tool_actions()
         cls.all_ops = {operation.name: operation for operation in list_agent_operations()}
 
-    def test_operation_count_grew_to_107(self):
+    def test_operation_count_includes_session_diff(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 108, "catalog includes cross-session function comparison")
+        self.assertEqual(len(names), 109, "catalog includes whole-session binary diff triage")
+        self.assertIn("ida_diff_sessions", names)
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
 
