@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-09 — Repair native-build workflow dispatch
+
+- Moved the runner temporary-directory lookup out of job-level workflow
+  expressions, where GitHub rejects the `runner` context before creating a
+  job. Manual and path-triggered native builds now reach the compiler steps.
+
 ## 2026-09-09 — Close release security and coverage gates
 
 - Rejected carriage-return and line-feed characters before reflecting CORS

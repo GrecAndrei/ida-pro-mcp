@@ -38,8 +38,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      LLAMA_CPP_ROOT: ${{ runner.temp }}/llama.cpp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -55,13 +53,13 @@ jobs:
 
       - name: Clone llama.cpp (pinned)
         run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_CPP_ROOT"
-          git -C "$LLAMA_CPP_ROOT" fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
-          git -C "$LLAMA_CPP_ROOT" checkout "$LLAMA_CPP_COMMIT"
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp "$RUNNER_TEMP/llama.cpp"
+          git -C "$RUNNER_TEMP/llama.cpp" fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
+          git -C "$RUNNER_TEMP/llama.cpp" checkout "$LLAMA_CPP_COMMIT"
 
       - name: Build trimmed library + quantizer
         run: |
-          JOBS="$(nproc)" LLAMA_CPP_SRC="$LLAMA_CPP_ROOT" \
+          JOBS="$(nproc)" LLAMA_CPP_SRC="$RUNNER_TEMP/llama.cpp" \
             ./scripts/build_native_llama.sh
 
       - name: Smoke-test libmcp_llama.so loads
@@ -83,12 +81,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x "$LLAMA_CPP_ROOT/build-mcp/mcp_quantize"
+          test -x "$RUNNER_TEMP/llama.cpp/build-mcp/mcp_quantize"
           # mcp_quantize prints usage and exits 2 when invoked with no args.
           # Asserting that exact exit code is what catches a freshly built
           # binary that crashes or segfaults at startup — a bare pipeline to
           # `head` always reports success regardless of the real status.
-          if out="$("$LLAMA_CPP_ROOT/build-mcp/mcp_quantize" 2>&1)"; then
+          if out="$("$RUNNER_TEMP/llama.cpp/build-mcp/mcp_quantize" 2>&1)"; then
             rc=0
           else
             rc=$?

@@ -42,6 +42,11 @@ release descriptions are prohibited. The template requires:
 - **Integrity & Provenance**: `sha256sum` and `gh attestation verify` commands.
 - **Canonical Links**: Direct references to the Wiki, Tools Reference, and Safety model.
 
+The native backend workflow is path-triggered for source changes and can also
+be dispatched manually before a release to verify the pinned llama.cpp build
+and quantizer smoke test. A skipped path-triggered run is not a native build
+result; use the manual dispatch when that evidence is required.
+
 ## GitHub alpha artifacts
 
 The `Alpha Release Artifacts` workflow is manual and accepts only an existing
