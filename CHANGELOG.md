@@ -9,7 +9,8 @@
 - The alpha package exposes 108 strict-schema `ida_*` operations and includes
   real IDA 9.3/9.4 live validation guidance.
 - Added a regression test that keeps the package version covered by the
-  changed-line release gate.
+  changed-line release gate; it reads the canonical source file so editable
+  install metadata cannot mask a version mismatch.
 
 ## 2026-09-09 — Repair native-build workflow dispatch
 
