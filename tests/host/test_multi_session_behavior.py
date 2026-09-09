@@ -382,6 +382,73 @@ def test_cross_decompile_resolves_symbol_or_direct_target_and_marks_result(tmp_p
     assert server._ms_cross_decompile({"session_id": "AAAA0001"})["error"] is True
 
 
+def test_cross_diff_compares_two_sessions_and_preserves_numeric_changes(tmp_path):
+    server = _Server(tmp_path, responses={
+        ("code", "AAAA0001"): {
+            "ok": True,
+            "addr": "0x401000",
+            "name": "sub_401000",
+            "prototype": "int sub_401000(void)",
+            "code": "int sub_401000() {\n  return sub_401100(16);\n}",
+        },
+        ("code", "BBBB0002"): {
+            "ok": True,
+            "addr": "0x501000",
+            "name": "sub_501000",
+            "prototype": "int sub_501000(void)",
+            "code": "int sub_501000() {\n  return sub_501100(32);\n}",
+        },
+    })
+
+    result = server._ms_cross_diff({
+        "left_session": "aaaa0001",
+        "left_address": "0x401000",
+        "right_session": "bbbb0002",
+        "right_address": "0x501000",
+    })
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["normalized"] is True
+    assert "return sub_ADDR(16);" in result["diff"]
+    assert "return sub_ADDR(32);" in result["diff"]
+    assert "401100" not in result["diff"] and "501100" not in result["diff"]
+    assert result["left"]["session_id"] == "AAAA0001"
+    assert result["right"]["session_id"] == "BBBB0002"
+    assert [call[1] for call in server.calls] == ["AAAA0001", "BBBB0002"]
+
+
+def test_cross_diff_bounds_output_and_reports_decompile_failures(tmp_path):
+    long_left = "\n".join(f"left_{i}" for i in range(20))
+    long_right = "\n".join(f"right_{i}" for i in range(20))
+    server = _Server(tmp_path, responses={
+        ("code", "AAAA0001"): {"ok": True, "code": long_left},
+        ("code", "BBBB0002"): {"ok": True, "code": long_right},
+    })
+    result = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+        "max_diff_lines": 4,
+    })
+    assert result["diff_truncated"] is True
+    assert result["returned_diff_lines"] == 4
+
+    server._responses[("code", "BBBB0002")] = {
+        "error": True, "code": "DECOMPILER_FAILED", "message": "no decompiler"
+    }
+    failed = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+    })
+    assert failed["error"] is True
+    assert failed["code"] == MCPError.DECOMPILER_FAILED
+
+    assert server._ms_cross_diff({})["error"] is True
+    assert server._ms_cross_diff({
+        "left_session": "AAAA0001", "right_session": "BBBB0002"
+    })["error"] is True
+
+
 def test_cross_xrefs_can_query_importers_and_handles_search_errors(tmp_path):
     responses = {
         ("search", "BBBB0002"): {"results": [{"ea": "0x20", "text": "call puts"}, {"addr": "0x30", "name": "puts@plt"}]},

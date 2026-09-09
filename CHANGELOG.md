@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-09 — Add cross-session function comparison
+
+- Added the public `ida_compare_functions` operation for bounded pseudocode
+  diffs between functions in two IDA sessions, with raw and normalized
+  similarity scores.
+- Normalization suppresses IDA-generated naming, relocation, and whitespace
+  noise while preserving numeric constants that may encode security-relevant
+  bounds, masks, and allocation sizes.
+- Added strict-schema, routing, policy, error, truncation, and behavioral tests,
+  plus a real-IDA two-session patch fixture and maintained session,
+  patch-validation, and live-testing guidance.
+
 ## 2026-09-08 — Cover intelligence core to 99% (zero missed statements)
 
  - Added 59 offline tests for `host/intelligence/core.py` (93%→99%,
@@ -167,7 +179,6 @@
    on the consumer module instead of mutating the global `threading` module.
  - Scoped the expected runpy `sys.modules` `RuntimeWarning` in the installer
    `__main__` entrypoint test to that warning only instead of emitting noise.
-
 ## 2026-09-08 — Harden native-backend loader test against local dev builds
 
  - Made `test_native_preference_and_loader_fallback_boundaries` hermetic by hiding

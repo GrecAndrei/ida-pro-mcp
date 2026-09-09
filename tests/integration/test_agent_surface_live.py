@@ -122,6 +122,29 @@ def _build_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
+def _build_patched_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build a second fixture whose leaf function changes one numeric bound."""
+    compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not compiler:
+        pytest.fail("No C compiler found for the cross-session comparison fixture.")
+    fixture_dir = tmp_path_factory.mktemp("ida-agent-patched-fixture")
+    source = fixture_dir / "agent_surface_patched_fixture.c"
+    binary = fixture_dir / "agent_surface_patched_fixture"
+    source.write_text(
+        _fixture_source().replace("return value + 7;", "return value + 11;"),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [compiler, "-O0", "-g", "-fno-inline", "-fno-pie", "-no-pie", "-o", str(binary), str(source)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        pytest.fail(f"Could not build patched live IDA fixture:\n{result.stderr or result.stdout}")
+    return binary
+
+
 def _ida_dir() -> Path:
     idat_override = os.environ.get("IDA_MCP_LIVE_IDAT")
     if idat_override:
@@ -416,6 +439,7 @@ def _wait_for_index(client: LiveMCPClient, submission: dict[str, Any], timeout: 
 class LiveContext:
     client: LiveMCPClient
     binary: Path
+    session_id: str
 
 
 @pytest.fixture(scope="module")
@@ -431,8 +455,10 @@ def live_context(tmp_path_factory: pytest.TempPathFactory) -> LiveContext:
     )
     client.start()
     try:
-        _assert_ok(client.call("ida_open_binary", {"binary_path": str(binary)}), "ida_open_binary")
-        yield LiveContext(client=client, binary=binary)
+        opened = _assert_ok(client.call("ida_open_binary", {"binary_path": str(binary)}), "ida_open_binary")
+        session_id = str(opened.get("session_id") or "")
+        assert session_id, opened
+        yield LiveContext(client=client, binary=binary, session_id=session_id)
     finally:
         with contextlib.suppress(Exception):
             _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session")
@@ -534,6 +560,61 @@ def test_live_code_navigation_uses_fixture_symbols(live_context: LiveContext):
     for name, arguments in calls:
         payload = _assert_ok(client.call(name, arguments), name)
         assert payload
+
+
+def test_live_compare_functions_diffs_two_real_ida_sessions(
+    tmp_path_factory: pytest.TempPathFactory,
+    live_context: LiveContext,
+):
+    if os.environ.get("IDA_MCP_LIVE_BINARY"):
+        pytest.skip("cross-session patch assertion requires the generated fixture pair")
+
+    client = live_context.client
+    baseline_sid = live_context.session_id
+    patched_binary = _build_patched_fixture(tmp_path_factory)
+    patched_sid = ""
+    try:
+        opened = _assert_ok(
+            client.call("ida_open_binary", {"binary_path": str(patched_binary)}),
+            "ida_open_binary patched fixture",
+        )
+        patched_sid = str(opened.get("session_id") or "")
+        assert patched_sid and patched_sid != baseline_sid, opened
+        wait_until_analyzed(client)
+
+        compared = _assert_ok(
+            client.call(
+                "ida_compare_functions",
+                {
+                    "left_session": baseline_sid,
+                    "left_address": "fixture_leaf",
+                    "right_session": patched_sid,
+                    "right_address": "fixture_leaf",
+                    "normalize": True,
+                    "max_diff_lines": 100,
+                },
+            ),
+            "ida_compare_functions",
+        )
+        assert compared["left"]["session_id"] == baseline_sid
+        assert compared["right"]["session_id"] == patched_sid
+        assert compared["changed"] is True
+        assert 0.0 < float(compared["similarity"]) < 1.0
+        diff_lines = str(compared["diff"]).splitlines()
+        removed = [line for line in diff_lines if line.startswith("-") and not line.startswith("---")]
+        added = [line for line in diff_lines if line.startswith("+") and not line.startswith("+++")]
+        assert any("7" in line for line in removed), compared
+        assert any("11" in line for line in added), compared
+        assert compared["diff_truncated"] is False
+    finally:
+        if patched_sid:
+            with contextlib.suppress(Exception):
+                _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "close patched session")
+        with contextlib.suppress(Exception):
+            _assert_ok(
+                client.call("ida_session_switch", {"session_id": baseline_sid, "reopen": True}),
+                "restore baseline session",
+            )
 
 
 def test_live_read_only_operation_matrix_reaches_real_handlers(live_context: LiveContext):

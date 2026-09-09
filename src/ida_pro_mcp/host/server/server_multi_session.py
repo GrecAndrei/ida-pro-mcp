@@ -9,8 +9,10 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import os
+import re
 import threading
 import uuid
 from copy import deepcopy
@@ -289,6 +291,7 @@ class ServerMultiSessionMixin:
             "group_remove": self._ms_group_remove,
             "cross_resolve": self._ms_cross_resolve,
             "cross_decompile": self._ms_cross_decompile,
+            "cross_diff": self._ms_cross_diff,
             "cross_xrefs": self._ms_cross_xrefs,
             "status": self._ms_status,
         }
@@ -598,6 +601,127 @@ class ServerMultiSessionMixin:
                 "addr": addr,
             }
         return result
+
+    @staticmethod
+    def _normalize_decompilation(code: str, function_name: str = "") -> str:
+        """Reduce IDA-generated naming and whitespace noise for comparison.
+
+        Numeric constants are deliberately retained: changing a bound, mask, or
+        allocation size is often the security-relevant part of a patch.
+        """
+        text = str(code or "").replace("\r\n", "\n").replace("\r", "\n")
+        if function_name:
+            text = re.sub(rf"\b{re.escape(function_name)}\b", "FUNCTION", text)
+        text = re.sub(
+            r"\b(sub|loc|off|unk|byte|word|dword|qword|asc|stru|algn|nullsub|jpt|def)_[0-9A-Fa-f]+\b",
+            lambda match: f"{match.group(1)}_ADDR",
+            text,
+        )
+        return "\n".join(" ".join(line.split()) for line in text.splitlines())
+
+    @staticmethod
+    def _decompile_payload(result: Any, session_id: str, address: Any) -> tuple[dict | None, dict | None]:
+        if isinstance(result, dict) and result.get("error"):
+            error = deepcopy(result)
+            details = error.get("details")
+            if not isinstance(details, dict):
+                details = {}
+            error["details"] = {
+                **details,
+                "comparison_target": {"session_id": session_id, "address": address},
+            }
+            return None, error
+        if not isinstance(result, dict) or result.get("ok") is False:
+            details = result if isinstance(result, dict) else {"result": result}
+            return None, make_error(
+                MCPError.DECOMPILER_FAILED,
+                f"Could not decompile {address} in session {session_id}",
+                details={"session_id": session_id, "address": address, "cause": details},
+            )
+        code = result.get("code") or result.get("pseudocode")
+        if not isinstance(code, str) or not code.strip():
+            return None, make_error(
+                MCPError.DECOMPILER_FAILED,
+                f"Decompilation returned no pseudocode for {address} in session {session_id}",
+                details={"session_id": session_id, "address": address},
+            )
+        return {
+            "session_id": session_id,
+            "address": result.get("addr") or address,
+            "name": str(result.get("name") or ""),
+            "prototype": result.get("prototype"),
+            "structure": result.get("structure"),
+            "code": code,
+            "lines": len(code.splitlines()),
+        }, None
+
+    def _ms_cross_diff(self, args: dict) -> dict:
+        """Compare decompiled functions from two explicit IDA sessions."""
+        left_session = str(args.get("left_session") or "").strip().upper()
+        right_session = str(args.get("right_session") or "").strip().upper()
+        left_address = args.get("left_address")
+        right_address = args.get("right_address")
+        if not left_session or not right_session:
+            return make_error(MCPError.INVALID_ARGS, "left_session and right_session are required")
+        if left_address in (None, "") or right_address in (None, ""):
+            return make_error(MCPError.INVALID_ARGS, "left_address and right_address are required")
+
+        left_raw = self._dispatch_to_session(
+            left_session, "code", {"action": "decompile", "addr": left_address}
+        )
+        left, err = self._decompile_payload(left_raw, left_session, left_address)
+        if err:
+            return err
+        right_raw = self._dispatch_to_session(
+            right_session, "code", {"action": "decompile", "addr": right_address}
+        )
+        right, err = self._decompile_payload(right_raw, right_session, right_address)
+        if err:
+            return err
+
+        normalize = args.get("normalize", True) is not False
+        left_code = left["code"]
+        right_code = right["code"]
+        comparison_left = self._normalize_decompilation(left_code, left["name"]) if normalize else left_code
+        comparison_right = self._normalize_decompilation(right_code, right["name"]) if normalize else right_code
+        raw_similarity = difflib.SequenceMatcher(None, left_code, right_code).ratio()
+        similarity = difflib.SequenceMatcher(None, comparison_left, comparison_right).ratio()
+
+        try:
+            context_lines = max(0, min(20, int(args.get("context_lines", 3))))
+            max_diff_lines = max(1, min(2000, int(args.get("max_diff_lines", 400))))
+        except (TypeError, ValueError):
+            return make_error(MCPError.INVALID_ARGS, "context_lines and max_diff_lines must be integers")
+        diff_lines = list(difflib.unified_diff(
+            comparison_left.splitlines(),
+            comparison_right.splitlines(),
+            fromfile=f"{left_session}:{left['name'] or left['address']}",
+            tofile=f"{right_session}:{right['name'] or right['address']}",
+            lineterm="",
+            n=context_lines,
+        ))
+        truncated = len(diff_lines) > max_diff_lines
+        rendered = diff_lines[:max_diff_lines]
+
+        for item in (left, right):
+            item.pop("code", None)
+        return {
+            "ok": True,
+            "left": left,
+            "right": right,
+            "changed": comparison_left != comparison_right,
+            "similarity": round(similarity, 4),
+            "raw_similarity": round(raw_similarity, 4),
+            "normalized": normalize,
+            "normalization": (
+                "function names, IDA autogenerated address-suffixed names, and whitespace"
+                if normalize else "none"
+            ),
+            "diff": "\n".join(rendered) if rendered else "(identical)",
+            "diff_lines": len(diff_lines),
+            "diff_truncated": truncated,
+            "returned_diff_lines": len(rendered),
+        }
 
     def _ms_cross_xrefs(self, args: dict) -> dict:
         """Find all cross-references to a symbol across the group.

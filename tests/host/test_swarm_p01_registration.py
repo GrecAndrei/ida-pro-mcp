@@ -139,7 +139,7 @@ class TestNewOperationRegistration(unittest.TestCase):
 
     def test_operation_count_grew_to_107(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 107, "registration wave must add 40 ops on top of 67")
+        self.assertEqual(len(names), 108, "catalog includes cross-session function comparison")
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
 

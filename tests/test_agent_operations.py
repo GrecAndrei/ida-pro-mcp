@@ -695,8 +695,30 @@ def test_new_operations_present_in_catalog():
         "ida_callgraph",
         "ida_apply_sig",
         "ida_list_sigs",
+        "ida_compare_functions",
     }
     assert expected <= names, f"Missing: {expected - names}"
+
+
+def test_compare_functions_has_strict_cross_session_contract():
+    op = get_agent_operation("ida_compare_functions")
+    assert op is not None
+    arguments = {
+        "left_session": "SID_BASE",
+        "left_address": "0x401000",
+        "right_session": "SID_PATCHED",
+        "right_address": "0x501000",
+        "normalize": True,
+        "context_lines": 5,
+        "max_diff_lines": 200,
+    }
+    assert not op.validate(arguments)
+    assert op.to_backend_call(arguments) == (
+        "multi_session",
+        {"action": "cross_diff", **arguments},
+    )
+    assert op.validate({"left_session": "SID_BASE"})
+    assert op.validate({**arguments, "context_lines": "five"})
 
 
 def test_new_operations_have_valid_schemas_and_examples():

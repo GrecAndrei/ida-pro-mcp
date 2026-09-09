@@ -70,6 +70,7 @@ GRACEFUL: dict[str, str | None] = {
     "ida_function_families": "NO_RESULTS",       # no embedding index yet
     "ida_index_status": None,                    # no background job
     "ida_cancel_index": "NOT_FOUND",             # unknown task id
+    "ida_compare_functions": "FILE_NOT_FOUND",   # example session ids are placeholders
     "ida_continue": "TRUNCATION_TOKEN_INVALID",  # bogus token
     "ida_patch_bytes": "GOVERNANCE_BLOCKED",     # destructive hard block
     "ida_update_finding": "NOT_FOUND",           # unknown entry id

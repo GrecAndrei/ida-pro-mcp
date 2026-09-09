@@ -33,6 +33,7 @@ Example workflows:
 
 - `ida_find(query=...)` to map a crash address back to a function and call chain
 - `ida_decompile(address=...)` / `ida_disassemble(address=...)` for the affected function body
+- `ida_compare_functions(left_session=..., left_address=..., right_session=..., right_address=...)` to compare vulnerable and patched functions while suppressing relocation/name noise
 - `ida_xrefs_to(address=...)`, `ida_callers(address=...)`, `ida_callees(address=...)` to trace calls into unsafe parsing or bounds-sensitive code
 - `ida_calc_offset(address=..., target=...)` to compare patched and vulnerable binaries for expected changes
 - `ida_write_finding(...)` with `ida_update_finding(...)` to build an audit trail for advisories and regression tests
@@ -48,6 +49,7 @@ Example workflows:
 - `ida_overview()` and `ida_list_strings()` to detect accidentally embedded local paths or debug strings
 - `ida_list_imports()` to verify that unexpected dependencies were not introduced
 - `ida_list_functions()` and `ida_list_segments()` to compare release candidates against previous known-good builds
+- `ida_compare_functions(...)` for a bounded pseudocode diff of matched functions in two open sessions; numeric constants remain visible after normalization
 - `ida_export_findings(format='markdown', path=...)` to document binary metadata for reproducible-release review
 
 ## 4. Firmware and embedded systems maintenance
