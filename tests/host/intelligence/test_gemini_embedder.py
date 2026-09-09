@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 from unittest import mock
+from urllib.parse import urlparse
 
 import pytest
 
@@ -259,7 +260,7 @@ def test_vertex_access_token_path(monkeypatch):
     with mock.patch("ida_pro_mcp.host.intelligence.gemini.requests.post", side_effect=_capture):
         res = g.embed("some pseudocode")
     assert res.ok is True and len(res.vector) == 768
-    assert "europe-west1-aiplatform.googleapis.com" in captured["url"]
+    assert urlparse(captured["url"]).hostname == "europe-west1-aiplatform.googleapis.com"
     assert "/projects/proj-1/" in captured["url"]
     assert captured["headers"]["Authorization"] == "Bearer tok"
     inst = captured["body"]["instances"][0]

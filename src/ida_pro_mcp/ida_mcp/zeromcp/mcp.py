@@ -103,6 +103,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         if not origin:
             return
+        # Never reflect control characters into an HTTP response header, even
+        # when an explicitly configured callable or wildcard allows the origin.
+        safe_origin = origin.replace("\r", "").replace("\n", "")
+        if safe_origin != origin:
+            return
         def is_allowed():
             allowed = self.mcp_server.cors_allowed_origins
             if allowed is None:
@@ -114,7 +119,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             return "*" in allowed or origin in allowed
         if not is_allowed():
             return
-        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Origin", safe_origin)
         if preflight:
             self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")

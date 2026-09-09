@@ -137,6 +137,15 @@ Outcome: exclusive IDB ownership is actually exclusive.
 
 Outcome: callers do not reopen an IDB that is still locked.
 
+### 15) HTTP origin reflection rejects header controls
+
+- The optional HTTP transport rejects carriage-return and line-feed characters
+  before reflecting an allowed `Origin` value into CORS response headers.
+- This remains enforced for wildcard and custom callable CORS policies.
+
+Outcome: a permissive CORS setting cannot turn a client-controlled origin into
+an HTTP response-splitting primitive.
+
 ## Operational Safety Guidance
 
 - Prefer least-privilege runtime environments for host and IDA.

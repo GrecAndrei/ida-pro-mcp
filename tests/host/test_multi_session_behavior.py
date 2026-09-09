@@ -443,6 +443,43 @@ def test_cross_diff_bounds_output_and_reports_decompile_failures(tmp_path):
     assert failed["error"] is True
     assert failed["code"] == MCPError.DECOMPILER_FAILED
 
+    server._responses[("code", "BBBB0002")] = None
+    malformed = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+    })
+    assert malformed["error"] is True
+    assert malformed["code"] == MCPError.DECOMPILER_FAILED
+
+    server._responses[("code", "BBBB0002")] = {"ok": True}
+    empty = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+    })
+    assert empty["error"] is True
+    assert empty["code"] == MCPError.DECOMPILER_FAILED
+
+    server._responses[("code", "AAAA0001")] = {
+        "error": True, "code": "SESSION_NOT_FOUND", "message": "gone"
+    }
+    left_failed = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+    })
+    assert left_failed["error"] is True
+    assert left_failed["code"] == "SESSION_NOT_FOUND"
+    assert left_failed["details"]["comparison_target"]["session_id"] == "AAAA0001"
+
+    server._responses[("code", "AAAA0001")] = {"ok": True, "code": long_left}
+    server._responses[("code", "BBBB0002")] = {"ok": True, "code": long_right}
+    invalid_limits = server._ms_cross_diff({
+        "left_session": "AAAA0001", "left_address": "0x1",
+        "right_session": "BBBB0002", "right_address": "0x2",
+        "context_lines": "three",
+    })
+    assert invalid_limits["error"] is True
+    assert invalid_limits["code"] == MCPError.INVALID_ARGS
+
     assert server._ms_cross_diff({})["error"] is True
     assert server._ms_cross_diff({
         "left_session": "AAAA0001", "right_session": "BBBB0002"

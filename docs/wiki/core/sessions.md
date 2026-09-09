@@ -166,3 +166,8 @@ after `IDA_MCP_RPC_QUEUE_TIMEOUT` seconds (default 300, `0` = unlimited) a
 queued call fails fast with a recoverable `IDA_BUSY` error. `IDA_TIMEOUT`
 means the socket recv deadline expired; `IDA_CRASHED` means the runtime
 process exited.
+
+The optional HTTP transport applies the same local-origin protections to MCP,
+SSE, and configuration requests. CORS origins are never reflected when they
+contain carriage-return or line-feed characters, even under an explicitly
+configured wildcard policy.

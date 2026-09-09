@@ -66,6 +66,11 @@ def test_cors_variants_and_http_dispatch_branches():
     mcp.McpHttpRequestHandler.send_cors_headers(fake)
     assert not any(row[0] == "header" for row in fake.sent)
 
+    server.cors_allowed_origins = "*"
+    fake = support._FakeHandler(server, headers={"Origin": "https://client.invalid\r\nX-Injected: true"})
+    mcp.McpHttpRequestHandler.send_cors_headers(fake)
+    assert not any(row[0] == "header" and row[1] == "Access-Control-Allow-Origin" for row in fake.sent)
+
     fake = support._FakeHandler(server, path="/mcp", headers={"Content-Length": "-1"})
     fake.send_error = mcp.McpHttpRequestHandler.send_error.__get__(fake, mcp.McpHttpRequestHandler)
     mcp.McpHttpRequestHandler.do_POST(fake)

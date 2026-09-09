@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-09 — Close release security and coverage gates
+
+- Rejected carriage-return and line-feed characters before reflecting CORS
+  origins into HTTP response headers, including wildcard and custom policies.
+- Replaced a CodeQL-triggering URL substring assertion with parsed-host
+  validation and covered malformed cross-session comparison payloads,
+  left-side failures, and invalid diff limits.
+
 ## 2026-09-09 — Add cross-session function comparison
 
 - Added the public `ida_compare_functions` operation for bounded pseudocode
