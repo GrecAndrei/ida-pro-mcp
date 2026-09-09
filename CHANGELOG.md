@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-09 — v1.0.0a2
+
+- Promotes the cross-session function comparison operation and the release
+  hardening completed since v1.0.0a1: CORS header-control rejection, expanded
+  malformed-input coverage, parsed-host URL validation, and a repaired native
+  backend workflow.
+- The alpha package exposes 108 strict-schema `ida_*` operations and includes
+  real IDA 9.3/9.4 live validation guidance.
+
 ## 2026-09-09 — Repair native-build workflow dispatch
 
 - Moved the runner temporary-directory lookup out of job-level workflow

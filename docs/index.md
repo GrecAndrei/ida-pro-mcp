@@ -17,6 +17,7 @@ versioning, and releases.
 
 ## Releases
 
+- [Release Notes (v1.0.0a2)](releases/v1.0.0a2.md) — Cross-session comparison and production hardening
 - [Release Notes (v1.0.0a1)](releases/v1.0.0a1.md) — Genesis alpha release overview and capabilities
 - [Release Description Template](releases/TEMPLATE.md) — Mandatory template for all future release notes
 

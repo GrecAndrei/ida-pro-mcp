@@ -60,7 +60,7 @@ snapshots before using them.
 
 ## What does Alpha mean here?
 
-The project is Alpha (1.0.0a1), so operation schemas and behavior may move.
+The project is Alpha (1.0.0a2), so operation schemas and behavior may move.
 Pin a commit when reproducibility matters.
 
 ## Is the optional threat corpus installed automatically?
