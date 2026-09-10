@@ -145,6 +145,30 @@ def _build_patched_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
+def _build_renamed_patched_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build a variant whose changed leaf also has a different stable name."""
+    compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not compiler:
+        pytest.fail("No C compiler found for the renamed cross-session fixture.")
+    fixture_dir = tmp_path_factory.mktemp("ida-agent-renamed-patched-fixture")
+    source = fixture_dir / "agent_surface_renamed_patched_fixture.c"
+    binary = fixture_dir / "agent_surface_renamed_patched_fixture"
+    variant = _fixture_source().replace("fixture_leaf", "renamed_fixture_leaf")
+    source.write_text(
+        variant.replace("return value + 7;", "return value + 19;"),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [compiler, "-O0", "-g", "-fno-inline", "-fno-pie", "-no-pie", "-o", str(binary), str(source)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        pytest.fail(f"Could not build renamed patched live IDA fixture:\n{result.stderr or result.stdout}")
+    return binary
+
+
 def _ida_dir() -> Path:
     idat_override = os.environ.get("IDA_MCP_LIVE_IDAT")
     if idat_override:
@@ -636,6 +660,156 @@ def test_live_compare_functions_diffs_two_real_ida_sessions(
             _assert_ok(
                 client.call("ida_session_switch", {"session_id": baseline_sid, "reopen": True}),
                 "restore baseline session",
+            )
+
+
+def test_live_diff_sessions_triages_complete_fixture_inventory(
+    tmp_path_factory: pytest.TempPathFactory,
+    live_context: LiveContext,
+):
+    if os.environ.get("IDA_MCP_LIVE_BINARY"):
+        pytest.skip("whole-inventory assertions require the generated fixture pair")
+
+    client = live_context.client
+    baseline_sid = live_context.session_id
+    patched_binary = _build_patched_fixture(tmp_path_factory)
+    patched_sid = ""
+    try:
+        opened = _assert_ok(
+            client.call("ida_open_binary", {"binary_path": str(patched_binary)}),
+            "ida_open_binary patched inventory fixture",
+        )
+        patched_sid = str(opened.get("session_id") or "")
+        assert patched_sid and patched_sid != baseline_sid, opened
+        wait_until_analyzed(client)
+
+        triage = _assert_ok(
+            client.call(
+                "ida_diff_sessions",
+                {
+                    "left_session": baseline_sid,
+                    "right_session": patched_sid,
+                    "query": "fixture_",
+                    "match_strategy": "name",
+                    "max_functions": 20,
+                    "limit": 20,
+                    "include_unchanged": True,
+                },
+            ),
+            "ida_diff_sessions full fixture inventory",
+        )
+        assert triage["coverage"]["left"]["scanned"] == 4, triage
+        assert triage["coverage"]["right"]["scanned"] == 4, triage
+        assert triage["summary"] == {
+            "matched": 4,
+            "modified": 1,
+            "unchanged": 3,
+            "unavailable": 0,
+            "left_only": 0,
+            "right_only": 0,
+        }, triage
+        by_name = {change["left"]["name"]: change for change in triage["changes"]}
+        assert set(by_name) == {
+            "fixture_entry",
+            "fixture_helper",
+            "fixture_leaf",
+            "fixture_mutation_target",
+        }, triage
+        assert by_name["fixture_leaf"]["status"] == "modified", triage
+        assert by_name["fixture_leaf"]["signals"]["removed_constants"] == ["7"], triage
+        assert by_name["fixture_leaf"]["signals"]["added_constants"] == ["11"], triage
+        assert all(
+            change["status"] == "unchanged"
+            for name, change in by_name.items()
+            if name != "fixture_leaf"
+        ), triage
+    finally:
+        if patched_sid:
+            with contextlib.suppress(Exception):
+                _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "close inventory fixture")
+        with contextlib.suppress(Exception):
+            _assert_ok(
+                client.call("ida_session_switch", {"session_id": baseline_sid, "reopen": True}),
+                "restore baseline after inventory diff",
+            )
+
+
+def test_live_diff_sessions_content_matches_renamed_patch_and_rejects_bad_pairs(
+    tmp_path_factory: pytest.TempPathFactory,
+    live_context: LiveContext,
+):
+    if os.environ.get("IDA_MCP_LIVE_BINARY"):
+        pytest.skip("renamed-function assertion requires the generated fixtures")
+
+    client = live_context.client
+    baseline_sid = live_context.session_id
+    same_session = client.call(
+        "ida_diff_sessions",
+        {"left_session": baseline_sid, "right_session": baseline_sid},
+    )
+    assert same_session.get("error") is True, same_session
+    assert same_session.get("code") == "INVALID_ARGS", same_session
+
+    invalid_strategy = client.call(
+        "ida_diff_sessions",
+        {
+            "left_session": baseline_sid,
+            "right_session": "MISSING-LIVE-SESSION",
+            "match_strategy": "guess",
+        },
+    )
+    assert invalid_strategy.get("error") is True, invalid_strategy
+    assert invalid_strategy.get("code") == "INVALID_ARGS", invalid_strategy
+
+    renamed_binary = _build_renamed_patched_fixture(tmp_path_factory)
+    renamed_sid = ""
+    try:
+        opened = _assert_ok(
+            client.call("ida_open_binary", {"binary_path": str(renamed_binary)}),
+            "ida_open_binary renamed patched fixture",
+        )
+        renamed_sid = str(opened.get("session_id") or "")
+        assert renamed_sid and renamed_sid != baseline_sid, opened
+        wait_until_analyzed(client)
+
+        triage = _assert_ok(
+            client.call(
+                "ida_diff_sessions",
+                {
+                    "left_session": baseline_sid,
+                    "right_session": renamed_sid,
+                    "match_strategy": "content",
+                    "fuzzy_threshold": 0.4,
+                    "max_functions": 50,
+                    "limit": 50,
+                    "include_unchanged": True,
+                },
+            ),
+            "ida_diff_sessions renamed content match",
+        )
+        renamed_match = next(
+            (
+                change
+                for change in triage["changes"]
+                if change["left"]["name"] == "fixture_leaf"
+                and change["right"]["name"] == "renamed_fixture_leaf"
+            ),
+            None,
+        )
+        assert renamed_match is not None, triage
+        assert renamed_match["match_method"] == "fuzzy_content", renamed_match
+        assert renamed_match["status"] == "modified", renamed_match
+        assert renamed_match["signals"]["removed_constants"] == ["7"], renamed_match
+        assert renamed_match["signals"]["added_constants"] == ["19"], renamed_match
+        assert triage["matching"]["fuzzy_candidates_evaluated"] > 0, triage
+    finally:
+        if renamed_sid:
+            with contextlib.suppress(Exception):
+                _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "close renamed fixture")
+        with contextlib.suppress(Exception):
+            _assert_ok(
+                client.call("ida_session_switch", {"session_id": baseline_sid, "reopen": True}),
+                "restore baseline after renamed diff",
             )
 
 

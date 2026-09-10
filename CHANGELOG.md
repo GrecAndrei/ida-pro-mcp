@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-10 — Expand live whole-session diff coverage
+
+- Added real-IDA tests for complete named-function inventory triage, unchanged
+  function preservation, explicit content matching of a renamed patch, and
+  malformed session-diff requests through the public MCP boundary.
+- Documented the expanded 12-test agent-surface live suite and its new binary
+  diff guarantees.
+
 ## 2026-09-10 — Give standalone coverage its measured runtime
 
 - Raised the standalone Python matrix timeout from 10 to 15 minutes after
