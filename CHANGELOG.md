@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-10 — Give standalone coverage its measured runtime
+
+- Raised the standalone Python matrix timeout from 10 to 15 minutes after
+  Python 3.12 completed 6,255 tests and the 97.7% changed-line coverage gate
+  but was cancelled during workflow cleanup at the former ceiling.
+- Added a workflow regression test that preserves the measured runtime budget.
+
 ## 2026-09-09 — Add whole-session binary diff triage
 
 - Added `ida_diff_sessions`, a deterministic whole-binary patch-review

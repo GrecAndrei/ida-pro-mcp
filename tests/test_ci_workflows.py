@@ -50,6 +50,9 @@ def test_standalone_ci_never_runs_live_ida_suite():
 def test_standalone_ci_enforces_changed_line_coverage():
     wf = _load_workflow("standalone-tests.yml")
     test_job = wf["jobs"]["test"]
+    assert test_job["timeout-minutes"] >= 15, (
+        "standalone test matrix needs enough time for Python 3.12 coverage"
+    )
     checkouts = [
         step
         for step in test_job["steps"]
