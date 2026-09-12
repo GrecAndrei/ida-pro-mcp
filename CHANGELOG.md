@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-12 — Remove static skill snapshots; tools/list + ida_help are the contract
+
+- Deleted the checked-in skill (`.agents/skills/`), the generated
+  `docs/TOOLS_REFERENCE.md`, `scripts/generate_tool_skills.py`, and the
+  `installer/skills/` publisher: harnesses were reading stale snapshots that
+  could name operations outside the exposed surface.
+- Removed the installer skill phases, `--skills-mode`, `--install-skills`,
+  `--no-install-skills`, and the `--only skills` phase. Discovery is live:
+  `tools/list` enumerates every `ida_*` operation and `ida_help` returns
+  exact arguments and examples.
+- Removed `render_agent_skill_markdown()` /
+  `render_agent_operations_markdown()`; updated README, AGENTS.md, guides,
+  wiki, packaging, and PR template. Replaced generated-doc sync tests with
+  live-discovery coverage binding every operation to `ida_help`.
+- Aligned wizard-answer sequences with the shortened interactive flow.
+
 ## 2026-09-10 — Expand live whole-session diff coverage
 
 - Added real-IDA tests for complete named-function inventory triage, unchanged

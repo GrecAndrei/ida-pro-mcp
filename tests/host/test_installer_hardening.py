@@ -161,27 +161,6 @@ def test_client_backups_are_unique_and_rollback_removes_new_files(tmp_path):
     assert not new_file.exists()
 
 
-def test_skill_replacement_preserves_old_destination_when_staging_fails(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer import main
-
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "SKILL.md").write_text("new", encoding="utf-8")
-    destination = tmp_path / "installed"
-    destination.mkdir()
-    (destination / "SKILL.md").write_text("old", encoding="utf-8")
-
-    def _fail_copy(*_args, **_kwargs):
-        raise OSError("copy failed")
-
-    monkeypatch.setattr(main.os, "symlink", _fail_copy)
-    monkeypatch.setattr(main.shutil, "copytree", _fail_copy)
-
-    with pytest.raises(OSError, match="copy failed"):
-        main._replace_with_symlink_or_copy(source, destination)
-    assert (destination / "SKILL.md").read_text(encoding="utf-8") == "old"
-
-
 def test_client_config_symlink_is_not_replaced(tmp_path):
     from ida_pro_mcp.installer import clients
     from ida_pro_mcp.installer.common import InstallReport
@@ -426,49 +405,6 @@ def test_bashrc_shim_dry_run_does_not_claim_a_modified_file(tmp_path, monkeypatc
     assert main.install_bashrc_cli(tmp_path / "install", dry_run=True, report=report) is True
     assert report.modified_files == []
     assert not (home / ".bashrc").exists()
-
-
-def test_claude_skills_dry_run_does_not_claim_modified_files(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer import main
-    from ida_pro_mcp.installer.common import InstallReport
-
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    report = InstallReport()
-
-    main._install_claude_opencode_skills(report, dry_run=True, ui=main.UI())
-
-    assert report.modified_files == []
-    assert report.steps[0]["status"] == "dry-run"
-
-
-def test_claude_skills_failure_is_visible_in_report(tmp_path, monkeypatch):
-    import importlib
-
-    from ida_pro_mcp.installer import main
-    from ida_pro_mcp.installer.common import InstallReport
-
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-
-    def fail_publish(*_args, **_kwargs):
-        raise OSError("permission denied")
-
-    skills = importlib.import_module(f"{main.__package__}.skills")
-    monkeypatch.setattr(skills, "_publish_skill", fail_publish)
-    report = InstallReport()
-
-    assert main._install_claude_opencode_skills(report, dry_run=False, ui=main.UI()) is False
-    assert report.steps == [
-        {
-            "name": "claude-skills",
-            "status": "warn",
-            "detail": "claude-skills install failed: permission denied",
-        }
-    ]
-    assert report.warnings == ["claude-skills install failed: permission denied"]
 
 
 def test_bashrc_shim_is_restored_by_install_rollback(tmp_path, monkeypatch):

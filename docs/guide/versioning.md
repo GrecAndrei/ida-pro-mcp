@@ -22,7 +22,7 @@ surface and workspace format may still change before `1.0.0`.
 1. Update `__version__` in `_version.py`.
 2. Add a dated entry to `CHANGELOG.md`.
 3. Run Ruff, schema validation, and the full non-live test suite.
-4. Regenerate `docs/TOOLS_REFERENCE.md` and the portable agent skill.
+4. Verify live discovery covers the surface (`tools/list` + `ida_help`).
 5. Build and inspect the wheel/sdist, then tag the exact commit with the same
    version, such as `v1.0.0a1`.
 6. Author the release artifact description under `docs/releases/<tag>.md` adhering

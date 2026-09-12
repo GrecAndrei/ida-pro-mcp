@@ -89,6 +89,6 @@ the [installer options](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/RE
 rather than placing secrets in source control. The optional threat corpus is
 also not downloaded by a normal install.
 
-References: [generated intelligence operations](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md),
+References: [generated intelligence operations](`ida_help`),
 [intelligence implementation](https://github.com/GrecAndrei/ida-pro-mcp/tree/master/src/ida_pro_mcp/host/intelligence),
 [installer options](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/install.py).

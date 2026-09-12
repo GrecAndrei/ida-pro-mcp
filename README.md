@@ -9,8 +9,9 @@ for each session by default.
 The current version is `1.0.0a2`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
 stable 1.0.0 release. The default client surface contains 109 exact-schema operations.
-The generated [tool reference](docs/TOOLS_REFERENCE.md) contains the complete
-list, arguments, and examples.
+Use live discovery for the complete contract: `tools/list` enumerates every
+operation with its schema, and `ida_help(topic="...")` returns the exact
+arguments and example for one operation.
 
 ## Before you install
 
@@ -70,9 +71,10 @@ up before they are changed; malformed, symlinked, or non-regular files are
 refused rather than overwritten.
 
 Restart the MCP client after installation so it reloads its configuration.
-The installer also installs the generated Codex skills by default and tries to
-install the generated Claude Code/OpenCode skills. Use `--no-install-skills`
-if you do not want those files.
+
+Agent harnesses discover the tool surface live: `tools/list` enumerates every
+operation with its schema, and `ida_help(topic="...")` returns exact arguments
+and an example. No static skill files are installed.
 
 The default install root is:
 
@@ -182,7 +184,8 @@ the operation exposes one.
 
 The front page stays task-oriented, but this compact index keeps the public
 surface easy to scan. Each name below is prefixed with `ida_` when called. The
-complete schemas and examples remain in the [generated operation reference](docs/TOOLS_REFERENCE.md).
+complete schemas and examples are available live via `tools/list` and
+`ida_help(topic="...")`.
 
 | Group | Operations |
 |---|---|
@@ -348,15 +351,15 @@ switch to experimental `idalib` while diagnosing a basic installation.
   installation, investigation, editing, and troubleshooting guides.
 - [Local wiki pages](docs/wiki/INDEX.md) — the same hand-authored material
   shipped for the built-in wiki tool.
-- [Generated operation reference](docs/TOOLS_REFERENCE.md) — every public
-  operation, schema, example, and backend mapping.
+- [Live operation discovery](docs/wiki/reference-faq.md) — `tools/list` and
+  `ida_help` expose every public operation, schema, and example.
 - [Safety model](docs/guide/safety-model.md) — trust boundaries, policy modes,
   loopback transport, session ownership, and filesystem guards.
 - [Investigation workspace](docs/wiki/core/investigation.md) — findings,
   evidence, targets, and exports.
 - [Intelligence and embeddings](docs/wiki/core/intelligence.md) — local and
   optional Gemini retrieval backends.
-- [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration and skills.
+- [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration.
 - [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
   flow for readers who need implementation detail.
 - [Security policy](SECURITY.md) — reporting and security guidance.

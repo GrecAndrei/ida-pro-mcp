@@ -6,8 +6,6 @@ from ida_pro_mcp.host.agent_operations import (
     adapt_agent_error_payload,
     build_agent_help,
     get_agent_operation,
-    render_agent_operations_markdown,
-    render_agent_skill_markdown,
     translate_public_batch_arguments,
 )
 from ida_pro_mcp.host.errors import MCPError
@@ -123,12 +121,10 @@ def test_public_batch_accepts_string_steps_and_preserves_bindings():
     assert translated["bindings"] == {"answer": "step1_value"}
 
 
-def test_generated_public_docs_contain_every_operation_once():
+def test_live_help_contains_every_operation_once():
     from ida_pro_mcp.host.agent_operations import list_agent_operations
 
     names = [op.name for op in list_agent_operations()]
-    skill = render_agent_skill_markdown()
-    reference = render_agent_operations_markdown()
-    assert "ida_decompile" in skill
-    assert "ida_help" in skill
-    assert all(reference.count(f"## `{name}`") == 1 for name in names)
+    live = build_agent_help({})
+    assert live["ok"] is True
+    assert [item["name"] for item in live["operations"]] == names

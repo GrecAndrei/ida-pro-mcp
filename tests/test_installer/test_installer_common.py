@@ -142,7 +142,6 @@ def test_installer_options_defaults() -> None:
     options = InstallerOptions()
     assert options.dry_run is False
     assert options.runtime_source == "auto"
-    assert options.skills_mode == "agent"
     assert options.ida_runtime == "idat"
     assert options.rollback_on_fail is True
 

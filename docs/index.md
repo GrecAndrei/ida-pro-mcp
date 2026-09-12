@@ -23,7 +23,7 @@ versioning, and releases.
 
 ## Operations
 
-- [OpenCode setup](operations/opencode-setup.md) — OpenCode-specific configuration and skills
+- [OpenCode setup](operations/opencode-setup.md) — OpenCode-specific configuration
 - [Live IDA testing](operations/live-ida-testing.md) — live IDA matrix and idat/idalib runner
 - [Rizin integration](operations/rizin-integration.md) — Rizin / r2 cross-validation
 - [Benchmarks](../benchmarks/README.md) — latency and throughput benchmarks
@@ -32,8 +32,6 @@ versioning, and releases.
 ## Reference
 
 - [Official Project Wiki](https://github.com/GrecAndrei/ida-pro-mcp/wiki) — complete user guides, client setup, and RE workflows
-- [Tool reference](TOOLS_REFERENCE.md) — generated tool/action/argument reference from
-  `host.agent_operations.AGENT_OPERATIONS`
 - [Technical reference](reference/technical-reference.md) — implementation-level architecture and runtime details
 - [Policy reference](reference/policy.md) — governance policy reference
 - [IDA headless scripting](reference/IDA_Headless_Scripting.txt) — background reference on IDA 9.2
@@ -43,23 +41,20 @@ versioning, and releases.
   - `wiki/INDEX.md` — index of available wiki topics (hand-authored)
   - `wiki/tools/*.md` — per-tool manuals (hand-authored)
 
-## Regeneration
+## Live discovery
 
-`TOOLS_REFERENCE.md` and the `.agents/skills/` skill files are generated from
-`host.agent_operations.AGENT_OPERATIONS` by `scripts/generate_tool_skills.py`.
-The wiki manuals are hand-authored. The installer's `--only skills` phase only
-copies the pre-generated skills into place — it does **not** regenerate them.
+There is no checked-in operation reference snapshot. The running server is
+the contract: `tools/list` enumerates every `ida_*` operation with its
+schema, and `ida_help(topic="...")` returns exact arguments and an example.
+The wiki manuals below are hand-authored.
 
 After operation schemas or descriptions change:
 ```bash
 python scripts/check_schema_integrity.py
-python scripts/generate_tool_skills.py
-ida-pro-mcp-install --only skills
 ```
 
 ## Recommended reading order
 
 1. [Project README](../README.md)
 2. [Wiki quickstart](wiki/QuickStart.md)
-3. [Tool reference](TOOLS_REFERENCE.md)
-4. [Technical reference](TECHNICAL_REFERENCE.md)
+3. [Technical reference](reference/technical-reference.md)

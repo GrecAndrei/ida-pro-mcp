@@ -53,7 +53,7 @@ echo "[*] Installing/updating IDA Pro MCP (${VERSION})..."
 "${VENV_PIP}" install --upgrade "${WHEEL_URL}" --quiet
 
 # 5. Execute automated configuration
-echo "[*] Auto-detecting IDA Pro installations, configuring MCP clients, and installing skills..."
+echo "[*] Auto-detecting IDA Pro installations and configuring MCP clients..."
 "${VENV_PY}" -m ida_pro_mcp.installer.main --auto "$@"
 
 echo ""

@@ -17,7 +17,6 @@ Choose the page that matches the job.
 ## Repository references
 
 - [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases)
-- [Generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md)
 - [README](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md)
 - [Safety model](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/guide/safety-model.md)
 - [Live IDA testing](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/operations/live-ida-testing.md)

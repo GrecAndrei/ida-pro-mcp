@@ -72,23 +72,6 @@ def test_ida_selection_explicit_single_multi_and_missing(tmp_path, monkeypatch):
         installer._resolve_ida_install(InstallerOptions(), ui)
 
 
-def test_install_codex_skill_modes_and_safe_link_paths(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
-    report = InstallReport()
-    installer.install_codex_skills(tmp_path, "none", report, dry_run=True)
-    assert report.steps[-1]["status"] == "skipped"
-    report = InstallReport()
-    installer.install_codex_skills(tmp_path, "agent", report, dry_run=True)
-    assert report.steps[-1]["status"] == "dry-run"
-
-    source = tmp_path / ".agents" / "skills" / "ida-pro-mcp"
-    source.mkdir(parents=True)
-    (source / "SKILL.md").write_text("skill", encoding="utf-8")
-    report = InstallReport()
-    installer.install_codex_skills(tmp_path, "agent", report, dry_run=True)
-    assert report.steps[-1]["status"] == "dry-run"
-
-
 def test_bashrc_shim_is_idempotent_and_dry_run(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -109,20 +92,18 @@ def test_run_install_dry_run_phases_without_ida(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(installer, "setup_runtime_environment", lambda **kwargs: calls.append("runtime") or tmp_path / "python")
     monkeypatch.setattr(installer, "resolve_r2_binary", lambda: ("/usr/bin/rz", "rz 1"))
-    monkeypatch.setattr(installer, "install_codex_skills", lambda *args: calls.append("skills"))
     monkeypatch.setattr(installer, "install_bashrc_cli", lambda *args, **kwargs: calls.append("shell"))
     opts = InstallerOptions(
         dry_run=True,
         yes=True,
         install_root=tmp_path / "install",
         source_root=source,
-        only={"runtime", "skills", "shell"},
+        only={"runtime", "shell"},
         with_r2=False,
         install_cli_shim=True,
-        install_claude_skills=False,
     )
     assert installer.run_install(opts, installer.UI()) == 0
-    assert calls == ["runtime", "skills", "shell"]
+    assert calls == ["runtime", "shell"]
     assert (tmp_path / "install" / "install-report.json").is_file()
 
 
@@ -203,19 +184,6 @@ def test_installer_path_client_and_symlink_helpers_cover_failure_contracts(tmp_p
     failed.metadata["client_update_failures"] = ["one"]
     with pytest.raises(RuntimeError, match="no supported client"):
         installer._report_client_configuration(tmp_path, [], failed, installer.UI())
-
-    source = tmp_path / "source.txt"
-    source.write_text("content", encoding="utf-8")
-    destination = tmp_path / "destination" / "source.txt"
-    mode = installer._replace_with_symlink_or_copy(source, destination)
-    assert mode in {"linked", "copied"} and destination.read_text(encoding="utf-8") == "content"
-    destination.unlink()
-    outside = tmp_path / "outside"
-    outside.write_text("outside", encoding="utf-8")
-    destination.symlink_to(outside)
-    with pytest.raises(RuntimeError, match="symlink"):
-        installer._replace_with_symlink_or_copy(source, destination)
-
 
 def test_installer_reranker_and_idalib_resolution_modes(tmp_path, monkeypatch):
     opts = InstallerOptions(rerank_disabled=True)

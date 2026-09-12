@@ -7,9 +7,9 @@ cd "$ROOT_DIR"
 echo "[1/6] Running schema integrity check"
 python scripts/check_schema_integrity.py
 
-echo "[2/6] Regenerating tool docs/skills and checking drift"
-python scripts/generate_tool_skills.py
-git diff --exit-code -- .agents/skills .agents/tool-docs
+echo "[2/6] Checking schema integrity"
+python scripts/check_schema_integrity.py
+git diff --exit-code -- docs/TOOLS_REFERENCE.md .agents/skills .agents/tool-docs
 
 echo "[3/6] Running test suite"
 python -m pytest -q

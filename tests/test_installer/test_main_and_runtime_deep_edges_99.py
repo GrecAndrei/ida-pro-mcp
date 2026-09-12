@@ -87,7 +87,7 @@ def test_main_interactive_wizard_gemini_existing_key_and_zembed(tmp_path, monkey
     monkeypatch.setattr(installer_main, "find_llama_server_bin", lambda *a: "")
     monkeypatch.setattr(installer_main, "find_rerank_model", lambda *a: "")
 
-    answers = iter(["1", "n", "1", "n", "4", "1", "1", "n", "1", "y", "n", "n", "y"])
+    answers = iter(["1", "n", "4", "1", "1", "n", "1", "y", "n", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(install_root=tmp_path / "gem", interactive=True)
     res = installer_main._run_interactive_wizard(opts, installer_main.UI())
@@ -103,7 +103,7 @@ def test_main_interactive_wizard_zembed_license_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(installer_main, "find_llama_server_bin", lambda *a: "")
     monkeypatch.setattr(installer_main, "find_rerank_model", lambda *a: "")
 
-    answers = iter(["1", "n", "1", "n", "3", "y", "n", "", "n", "1", "y", "n", "n", "y"])
+    answers = iter(["1", "n", "3", "y", "n", "", "n", "1", "y", "n", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(install_root=tmp_path / "zembed", interactive=True)
     res = installer_main._run_interactive_wizard(opts, installer_main.UI())
@@ -120,7 +120,7 @@ def test_main_interactive_wizard_native_lib_detected(tmp_path, monkeypatch):
     monkeypatch.setattr(installer_main, "find_llama_server_bin", lambda *a: "/usr/bin/llama-server")
     monkeypatch.setattr(installer_main, "find_rerank_model", lambda *a: "")
 
-    answers = iter(["1", "n", "1", "n", "1", "y", "1", "n", "1", "y", "n", "n", "y"])
+    answers = iter(["1", "n", "1", "y", "1", "n", "1", "y", "n", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(install_root=tmp_path / "native", interactive=True)
     res = installer_main._run_interactive_wizard(opts, installer_main.UI())
@@ -135,7 +135,7 @@ def test_main_interactive_wizard_policy_disabled_and_idalib_missing_whl(tmp_path
     monkeypatch.setattr(installer_main, "find_rerank_model", lambda *a: "")
     monkeypatch.setattr(installer_main, "find_idalib_python_dir", lambda *a: None)
 
-    answers = iter(["1", "n", "1", "n", "1", "", "2", "y", "n", "y", "y"])
+    answers = iter(["1", "n", "1", "", "2", "y", "n", "y", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(install_root=tmp_path / "idalib_opts", interactive=True)
     res = installer_main._run_interactive_wizard(opts, installer_main.UI())
@@ -147,59 +147,6 @@ def test_main_activate_idalib_chosen_install_none():
     opts = InstallerOptions(ida_runtime="idalib", dry_run=False)
     with pytest.raises(RuntimeError, match="no IDA install was resolved"):
         installer_main._activate_idalib_after_install(opts, None, InstallReport(), installer_main.UI())
-
-
-def test_main_replace_with_symlink_or_copy_replace_error_and_file_backup(tmp_path, monkeypatch):
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "file.txt").write_text("hello")
-    dst = tmp_path / "dst"
-    dst.mkdir()
-    (dst / "old.txt").write_text("old")
-
-    real_replace = os.replace
-    calls = 0
-    def fail_second_replace(s, d):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("disk full")
-        return real_replace(s, d)
-
-    monkeypatch.setattr(os, "replace", fail_second_replace)
-    with pytest.raises(OSError, match="disk full"):
-        installer_main._replace_with_symlink_or_copy(src, dst)
-
-
-def test_main_install_claude_skills_import_error(monkeypatch):
-    orig_import = __import__
-    def broken_import(name, *args, **kwargs):
-        if "skills" in name:
-            raise ImportError("no skills module")
-        return orig_import(name, *args, **kwargs)
-    monkeypatch.setattr("builtins.__import__", broken_import)
-    report = InstallReport()
-    ok = installer_main._install_claude_opencode_skills(report, False, installer_main.UI())
-    assert ok is False
-    assert any("claude-skills import failed" in w for w in report.warnings)
-
-
-def test_main_install_codex_skills_broken_symlink(tmp_path, monkeypatch):
-    source_root = tmp_path / "source"
-    skill = source_root / ".agents" / "skills" / "ida-pro-mcp"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("content")
-
-    codex = tmp_path / "codex"
-    codex_skills = codex / "skills"
-    codex_skills.mkdir(parents=True)
-    broken_sym = codex_skills / "ida-pro-mcp"
-    broken_sym.symlink_to(tmp_path / "nonexistent_target")
-    monkeypatch.setenv("CODEX_HOME", str(codex))
-
-    report = InstallReport()
-    with pytest.raises(RuntimeError, match="symlinked skill installation path"):
-        installer_main.install_codex_skills(source_root, "agent", report, False)
 
 
 def test_main_parse_args_setup_embedder_default_only():
@@ -339,46 +286,6 @@ def test_runtime_find_rerank_model_huggingface_search(tmp_path, monkeypatch):
 def test_main_doctor_exit_code_via_main(monkeypatch):
     monkeypatch.setattr(installer_main, "run_embedder_doctor", lambda opts, ui: 42)
     assert installer_main.main(["--embedder-doctor"]) == 42
-
-
-def test_replace_with_symlink_or_copy_deep_edges(tmp_path):
-    # 762: nonexistent src
-    with pytest.raises(FileNotFoundError):
-        installer_main._replace_with_symlink_or_copy(tmp_path / "nonexistent", tmp_path / "dst")
-
-    # 794-795: dst exists as directory, replaces and cleans up directory backup
-    src_dir = tmp_path / "src_dir"
-    src_dir.mkdir()
-    (src_dir / "file.txt").write_text("hello")
-    dst_dir = tmp_path / "dst_dir"
-    dst_dir.mkdir()
-    (dst_dir / "old.txt").write_text("old")
-    installer_main._replace_with_symlink_or_copy(src_dir, dst_dir)
-    assert dst_dir.exists()
-
-    # 796: dst exists as file, replaces and unlinks file backup
-    src_file = tmp_path / "src.txt"
-    src_file.write_text("new")
-    dst_file = tmp_path / "dst.txt"
-    dst_file.write_text("old")
-    installer_main._replace_with_symlink_or_copy(src_file, dst_file)
-    assert dst_file.exists()
-
-
-def test_install_skills_existing_directory(tmp_path, monkeypatch):
-    # 898-903: dst is existing dir, refreshes managed files
-    source_root = tmp_path / "source"
-    skill = source_root / ".agents" / "skills" / "ida-pro-mcp"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("skill")
-    codex = tmp_path / "codex"
-    codex_skills = codex / "skills" / "ida-pro-mcp"
-    codex_skills.mkdir(parents=True)
-    (codex_skills / "custom.txt").write_text("custom")
-    monkeypatch.setenv("CODEX_HOME", str(codex))
-    report = InstallReport()
-    installer_main.install_codex_skills(source_root, "agent", report, False)
-    assert (codex_skills / "custom.txt").exists()
 
 
 def test_parse_args_source_root_fallbacks(monkeypatch, tmp_path):
@@ -666,44 +573,6 @@ def test_runtime_deep_edge_cases(tmp_path, monkeypatch):
     assert found_rerank == str(cand_model)
 
 
-def test_is_checkout_skill_link_all_branches(tmp_path):
-    # Nonexistent path -> OSError in resolve(strict=True) -> False
-    assert installer_main._is_checkout_skill_link(tmp_path / "nonexistent") is False
-
-    # Target is not a dir -> False
-    f = tmp_path / "regular_file"
-    f.touch()
-    assert installer_main._is_checkout_skill_link(f) is False
-
-    # Target dir wrong name -> False
-    d = tmp_path / "wrong_name"
-    d.mkdir()
-    assert installer_main._is_checkout_skill_link(d) is False
-
-    # Structure: root / .agents / skills / ida-pro-mcp
-    root = tmp_path / "repo"
-    skill_dir = root / ".agents" / "skills" / "ida-pro-mcp"
-    skill_dir.mkdir(parents=True)
-
-    # Missing SKILL.md -> False
-    assert installer_main._is_checkout_skill_link(skill_dir) is False
-
-    (skill_dir / "SKILL.md").touch()
-    # Missing operations.md -> False
-    assert installer_main._is_checkout_skill_link(skill_dir) is False
-
-    refs = skill_dir / "references"
-    refs.mkdir()
-    (refs / "operations.md").touch()
-
-    # Without .git -> False
-    assert installer_main._is_checkout_skill_link(skill_dir) is False
-
-    # With .git dir -> True
-    (root / ".git").mkdir()
-    assert installer_main._is_checkout_skill_link(skill_dir) is True
-
-
 def test_run_embedder_doctor_symlink_and_gemini_modes(tmp_path, monkeypatch):
     # Symlinked install root -> returns 1
     real_root = tmp_path / "real_root"
@@ -747,15 +616,13 @@ def test_interactive_wizard_gemini_prompts(monkeypatch):
     ui = installer_main.UI()
 
     # 1. AI Studio with key entered
-    opts1 = InstallerOptions(interactive=True, skills_mode="agent")
+    opts1 = InstallerOptions(interactive=True)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     def mock_prompt_choice(prompt, choices, default=None):
         if "Runtime" in prompt:
             return "snapshot"
-        if "skills mode" in prompt:
-            return "agent"
         if "Embedding backend" in prompt:
             return "gemini-embedding-2 (cloud, requires API key)"
         if "Gemini access" in prompt:
@@ -772,13 +639,13 @@ def test_interactive_wizard_gemini_prompts(monkeypatch):
     assert res1.gemini_api_key == "test-ai-key"
 
     # 2. AI Studio with empty key
-    opts2 = InstallerOptions(interactive=True, skills_mode="agent")
+    opts2 = InstallerOptions(interactive=True)
     monkeypatch.setattr(installer_main, "_prompt_secret", lambda *a, **kw: "")
     res2 = installer_main._run_interactive_wizard(opts2, ui)
     assert res2.gemini_api_key == ""
 
     # 3. Vertex AI
-    opts3 = InstallerOptions(interactive=True, skills_mode="agent")
+    opts3 = InstallerOptions(interactive=True)
     def mock_prompt_choice_vertex(prompt, choices, default=None):
         if "Embedding backend" in prompt:
             return "gemini-embedding-2 (cloud, requires API key)"

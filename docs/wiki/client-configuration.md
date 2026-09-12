@@ -75,7 +75,7 @@ For non-interactive unattended installation:
 python install.py --auto
 ```
 
-To cleanly uninstall the MCP server entries, skills, launcher shims, and IDA plugins:
+To cleanly uninstall the MCP server entries, launcher shims, and IDA plugins:
 
 ```bash
 python install.py --uninstall

@@ -82,6 +82,6 @@ comments and, where appropriate, names still-auto-named functions. Run a
 dry-run first. `ida_import_annotations` performs the reverse direction by
 adopting existing IDB names and comments as confirmed findings.
 
-References: [generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md),
+References: [generated operation reference](`ida_help`),
 [blackboard store](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/stores/blackboard_store.py),
 [blackboard/IDB sync](https://github.com/GrecAndrei/ida-pro-mcp/tree/master/src/ida_pro_mcp/host/server).

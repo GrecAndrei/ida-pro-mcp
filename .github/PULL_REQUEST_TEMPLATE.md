@@ -19,7 +19,7 @@
 - [ ] `ruff check .` clean
 - [ ] `python scripts/check_schema_integrity.py` passes
 - [ ] `pytest -q` passes locally (live-IDA tests may skip)
-- [ ] Generated docs/skills up to date (`python scripts/generate_tool_skills.py`)
+- [ ] Live discovery up to date (`tools/list` + `ida_help` cover the changed surface)
 - [ ] Relevant benchmark scope passes (`python benchmarks/run.py --scope ...`)
 
 ## Safeguards

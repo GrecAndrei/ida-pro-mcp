@@ -56,7 +56,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 - `src/ida_pro_mcp/installer/`
   - `main.py` — installer entry point (`ida-pro-mcp-install` / `python install.py`)
-  - `skills/__init__.py` — auto-generates Claude Code / OpenCode skills from TOOL_DESCRIPTIONS
 
 ## Tool Call Dispatch Pipeline
 
@@ -122,7 +121,7 @@ RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 ## Risky Areas (Review Carefully)
 
 - Session/runtime lifecycle and process management
-- Tool/action schema contract changes (regenerate skills and tool docs after)
+- Tool/action schema contract changes (verify live discovery after)
 - Bridge protocol between host and IDA runtime
 - Workflow/planner behavior that alters action execution ordering
 - Blackboard auto-extraction pipeline (affects every tool response)

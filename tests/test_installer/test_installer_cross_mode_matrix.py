@@ -118,7 +118,7 @@ def test_python_compat_warning_only_applies_to_managed_ida_94(monkeypatch, tmp_p
     assert "python_kind" not in old_report.metadata
 
 
-def test_run_install_composes_runtime_corpus_r2_sigs_clients_and_skills(tmp_path, monkeypatch):
+def test_run_install_composes_runtime_corpus_r2_sigs_and_clients(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
     install_root = tmp_path / "install"
@@ -149,8 +149,6 @@ def test_run_install_composes_runtime_corpus_r2_sigs_clients_and_skills(tmp_path
     )
     monkeypatch.setattr(installer, "build_stdio_config", lambda *_a, **_k: {"command": "python"})
     monkeypatch.setattr(installer, "configure_clients", lambda **_k: configured.append("client") or configured)
-    monkeypatch.setattr(installer, "install_codex_skills", lambda *_a, **_k: None)
-    monkeypatch.setattr(installer, "_install_claude_opencode_skills", lambda *_a, **_k: None)
     monkeypatch.setattr(installer, "install_bashrc_cli", lambda *_a, **_k: None)
     monkeypatch.setattr(installer, "resolve_r2_binary", lambda: ("/usr/bin/rz", "rz 0.9"))
     monkeypatch.setattr(

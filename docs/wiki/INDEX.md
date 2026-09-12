@@ -21,10 +21,8 @@ findings, and make reviewed IDB changes.
 
 ## Detailed reference
 
-- [Generated operation reference](../TOOLS_REFERENCE.md)
 - [RISC-V raw-blob firmware](riscv_firmware.md)
 - [Architecture and safety guides](../guide/architecture.md)
 
 The older pages under `tools/` and `core/` remain as detailed reference
-material. Start with the task pages above; use `ida_help` and the generated
-operation reference for exact schemas.
+material. Start with the task pages above; use `tools/list` and `ida_help` for exact schemas.

@@ -31,14 +31,14 @@ For unattended or non-interactive automation:
 python install.py --auto
 ```
 
-To cleanly uninstall plugins, skills, and client entries:
+To cleanly uninstall plugins and client entries:
 
 ```bash
 python install.py --uninstall
 ```
 
-The installer prepares the runtime, locates IDA, configures supported MCP
-clients, and installs the portable skill for supported clients.
+The installer prepares the runtime, locates IDA, and configures supported MCP
+clients.
 
 The default managed install root is `~/.local/share/ida-pro-mcp` on Unix-like
 systems and `%LOCALAPPDATA%\ida-pro-mcp` on Windows. Set `IDA_PRO_MCP_HOME` or
@@ -124,4 +124,4 @@ Continue with `ida_next_target` or summarize with
 
 References: [README.md](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md),
 [installer source](https://github.com/GrecAndrei/ida-pro-mcp/tree/master/src/ida_pro_mcp/installer),
-[generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md).
+[generated operation reference](`ida_help`).

@@ -72,7 +72,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 :: 5. Execute automated configuration
-echo [*] Auto-detecting IDA Pro installations, configuring MCP clients, and installing skills...
+echo [*] Auto-detecting IDA Pro installations and configuring MCP clients...
 "%VENV_PY%" -m ida_pro_mcp.installer.main --auto %*
 if %ERRORLEVEL% neq 0 (
     echo [-] Error: Configuration step returned an error.

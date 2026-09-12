@@ -156,8 +156,6 @@ class InstallerOptions:
     # best-effort partial changes can opt out explicitly.
     rollback_on_fail: bool = True
     runtime_source: str = "auto"
-    skills_mode: str = "agent"
-    install_claude_skills: bool = True  # install skills for Claude Code / OpenCode
     interactive: bool | None = None
     embed_auto: bool = True
     embed_profile: str = "qwen3-embedding-0.6b"

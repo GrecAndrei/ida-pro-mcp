@@ -14,8 +14,7 @@ Ask the server:
 ida_help(query="ida_decompile")
 ```
 
-You can also consult the generated
-[operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md). This wiki intentionally focuses
+Use `tools/list` for the full operation catalog. This wiki intentionally focuses
 on workflows rather than repeating every schema.
 
 ## What does `risk_ack` mean?
@@ -74,4 +73,4 @@ The operator baseline uses `IDA_MCP_POLICY_MODE` or
 [safety model](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/guide/safety-model.md).
 
 References: [README.md](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md),
-[generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md).
+`ida_help` and `tools/list` (live discovery).

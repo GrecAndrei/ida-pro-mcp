@@ -62,5 +62,5 @@ comments and names are appropriate, then repeat with the required
 `risk_ack: true`. Publishing is an IDB mutation and should be treated as an
 analyst review step, not automatic truth promotion.
 
-References: [generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md),
+References: [generated operation reference](`ida_help`),
 [investigation workspace implementation](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/stores/blackboard_store.py).

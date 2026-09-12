@@ -532,73 +532,6 @@ def test_module_entrypoints_delegate_to_server_main(monkeypatch):
     assert seen == ["called"]
 
 
-def test_installer_skill_links_and_copy_fallbacks(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer import main as installer
-
-    checkout = tmp_path / "checkout"
-    source = checkout / ".agents" / "skills" / "ida-pro-mcp"
-    (source / "references").mkdir(parents=True)
-    (source / "SKILL.md").write_text("skill", encoding="utf-8")
-    (source / "references" / "operations.md").write_text("ops", encoding="utf-8")
-    (checkout / ".git").mkdir()
-    link_root = tmp_path / "codex" / "skills"
-    link_root.mkdir(parents=True)
-    link = link_root / "ida-pro-mcp"
-    link.symlink_to(source, target_is_directory=True)
-    assert installer._is_checkout_skill_link(link) is True
-    assert installer._is_checkout_skill_link(tmp_path / "missing") is False
-
-    with pytest.raises(FileNotFoundError):
-        installer._replace_with_symlink_or_copy(tmp_path / "missing", tmp_path / "out")
-
-    destination = tmp_path / "out" / "skill.txt"
-    monkeypatch.setattr(installer.os, "symlink", lambda *_a, **_k: (_ for _ in ()).throw(OSError("no links")))
-    source_file = tmp_path / "source.txt"
-    source_file.write_text("source", encoding="utf-8")
-    assert installer._replace_with_symlink_or_copy(source_file, destination) == "copied"
-    assert destination.read_text(encoding="utf-8") == "source"
-
-    # Existing directory backups are removed after a successful replacement.
-    source_dir = tmp_path / "source-dir"
-    source_dir.mkdir()
-    (source_dir / "new").write_text("new", encoding="utf-8")
-    existing = tmp_path / "out-dir"
-    existing.mkdir()
-    (existing / "old").write_text("old", encoding="utf-8")
-    assert installer._replace_with_symlink_or_copy(source_dir, existing) in {"linked", "copied"}
-    assert (existing / "new").read_text(encoding="utf-8") == "new"
-
-
-def test_installer_skill_installation_error_and_checkout_refresh(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer import main as installer
-
-    report = InstallReport()
-    skills = types.ModuleType("ida_pro_mcp.installer.skills")
-    skills.default_skill_dirs = lambda: [tmp_path / "skills"]
-    skills.install_skills = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("skill failure"))
-    monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.skills", skills)
-    assert installer._install_claude_opencode_skills(report, False, installer.UI()) is False
-    assert report.warnings
-
-    source = tmp_path / "source" / ".agents" / "skills" / "ida-pro-mcp"
-    (source / "references").mkdir(parents=True)
-    (source / "SKILL.md").write_text("new skill", encoding="utf-8")
-    (source / "references" / "operations.md").write_text("new ops", encoding="utf-8")
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
-    destination = tmp_path / "codex" / "skills" / "ida-pro-mcp"
-    destination.mkdir(parents=True)
-    (destination / "custom-reference.md").write_text("keep", encoding="utf-8")
-
-    real_skills = types.ModuleType("ida_pro_mcp.installer.skills")
-    real_skills.install_skills = lambda dirs, dry_run=False: {
-        "ida-pro-mcp": [dirs[0] / "ida-pro-mcp" / "SKILL.md"]
-    }
-    monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.skills", real_skills)
-    report = InstallReport()
-    installer.install_codex_skills(tmp_path / "source", "agent", report, False)
-    assert str(destination / "SKILL.md") in [str(path) for path in report.modified_files]
-
-
 def test_installer_reranker_validation_and_python_warning(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main as installer
 
@@ -621,7 +554,7 @@ def test_installer_reranker_validation_and_python_warning(tmp_path, monkeypatch)
     installer._warn_ida_python_compat(types.SimpleNamespace(version=("bad",)), InstallReport(), installer.UI())
 
 
-def test_installer_uninstall_removes_skills_plugins_and_reports(tmp_path, monkeypatch):
+def test_installer_uninstall_removes_plugins_and_reports(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import clients as client_module, main as installer
 
     install_root = tmp_path / "install"
@@ -632,20 +565,13 @@ def test_installer_uninstall_removes_skills_plugins_and_reports(tmp_path, monkey
     plugin_dir.mkdir(parents=True)
     for name in ("server_script.py", "ida_pro_mcp_plugin.py"):
         (plugin_dir / name).write_text("plugin", encoding="utf-8")
-    skill_dir = tmp_path / "skills"
-    (skill_dir / "ida-pro-mcp").mkdir(parents=True)
     monkeypatch.setattr(client_module, "get_config_paths", lambda _root: {})
     discovery = types.ModuleType("ida_pro_mcp.installer.discovery")
     discovery.detect_ida_installs = lambda: [types.SimpleNamespace(path=ida_root)]
     monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.discovery", discovery)
-    skills = types.ModuleType("ida_pro_mcp.installer.skills")
-    skills.SKILL_NAME = "ida-pro-mcp"
-    skills.default_skill_dirs = lambda: [skill_dir]
-    monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.skills", skills)
     opts = InstallerOptions(install_root=install_root, source_root=tmp_path)
     report = InstallReport()
     assert installer._run_uninstall(opts, installer.UI(), report) == 0
-    assert not (skill_dir / "ida-pro-mcp").exists()
     assert not (ida_root / "plugins" / "server_script.py").exists()
     assert (install_root / "uninstall-report.json").exists()
 

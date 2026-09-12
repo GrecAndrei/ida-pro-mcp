@@ -1,8 +1,6 @@
 # OpenCode Integration Guide
 
-The installer configures OpenCode and installs one portable `ida-pro-mcp`
-skill. Its operation reference is installed inside the skill directory, so it
-remains readable outside the source checkout.
+The installer configures OpenCode for the `ida-pro-mcp` MCP server.
 
 ```bash
 python install.py

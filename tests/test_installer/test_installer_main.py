@@ -101,9 +101,9 @@ def test_run_embedder_doctor(tmp_path: Path) -> None:
         assert rc in (0, 1)
 
 
-def test_main_skills_only(tmp_path: Path) -> None:
+def test_main_only_shell_phase(tmp_path: Path) -> None:
     with patch("ida_pro_mcp.installer.main.run_install", return_value=0):
-        rc = main(["--only", "skills", "--dry-run"])
+        rc = main(["--only", "shell", "--dry-run"])
         assert rc == 0
 
 
@@ -131,43 +131,10 @@ def test_main_uninstall(tmp_path: Path) -> None:
     with (
         patch("ida_pro_mcp.installer.clients.remove_server_entry_from_clients", return_value=["Cursor"]),
         patch("ida_pro_mcp.installer.discovery.detect_ida_installs", return_value=[]),
-        patch("ida_pro_mcp.installer.skills.default_skill_dirs", return_value=[tmp_path / "skills"]),
     ):
         rc = main(["--uninstall", "--install-root", str(install_root)])
         assert rc == 0
         assert not (bin_dir / "ida-pro-mcp").exists()
-
-
-def test_install_codex_skills_reuses_checkout_symlinks_in_packaged_mode(tmp_path: Path, monkeypatch) -> None:
-    from ida_pro_mcp.installer.main import install_codex_skills
-
-    # Create dummy checkout skill structure
-    repo_root = tmp_path / "checkout"
-    git_dir = repo_root / ".git"
-    git_dir.mkdir(parents=True)
-    skill_src = repo_root / ".agents" / "skills" / "ida-pro-mcp"
-    skill_src.mkdir(parents=True)
-    (skill_src / "SKILL.md").write_text("# Test Skill\n")
-    (skill_src / "references").mkdir()
-    (skill_src / "references" / "operations.md").write_text("# Ops\n")
-
-    codex_home = tmp_path / "codex"
-    codex_skills = codex_home / "skills"
-    codex_skills.mkdir(parents=True)
-    skill_link = codex_skills / "ida-pro-mcp"
-    skill_link.symlink_to(skill_src, target_is_directory=True)
-    assert skill_link.is_symlink()
-
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    report = InstallReport()
-    # In packaged mode (source_root has no .agents/skills/ida-pro-mcp)
-    packaged_root = tmp_path / "empty_source"
-    packaged_root.mkdir()
-
-    install_codex_skills(packaged_root, "agent", report, dry_run=True)
-    # The checkout link should be kept intact and acknowledged
-    assert skill_link.is_symlink()
-    assert any("checkout-backed" in step.get("detail", "") for step in report.steps)
 
 
 def test_checkout_client_map_matches_bundled_client_map() -> None:
@@ -190,7 +157,7 @@ def test_checkout_client_map_matches_bundled_client_map() -> None:
     assert set(checkout_map) == set(bundled_map)
 
 
-def test_main_uninstall_removes_plugin_and_symlinked_skill(tmp_path: Path) -> None:
+def test_main_uninstall_removes_plugin(tmp_path: Path) -> None:
     install_root = tmp_path / "install"
     ida_dir = tmp_path / "ida-pro-9.4"
     plugins = ida_dir / "plugins"
@@ -206,18 +173,6 @@ def test_main_uninstall_removes_plugin_and_symlinked_skill(tmp_path: Path) -> No
         source="explicit",
     )
 
-    skills_root = tmp_path / "skills"
-    skills_root.mkdir()
-    checkout = tmp_path / "checkout"
-    checkout_skill = checkout / ".agents" / "skills" / "ida-pro-mcp"
-    checkout_skill.mkdir(parents=True)
-    (checkout / ".git").mkdir()
-    (checkout_skill / "SKILL.md").write_text("# skill\n", encoding="utf-8")
-    (checkout_skill / "references").mkdir()
-    (checkout_skill / "references" / "operations.md").write_text("# ops\n", encoding="utf-8")
-    link = skills_root / "ida-pro-mcp"
-    link.symlink_to(checkout_skill, target_is_directory=True)
-
     with (
         patch(
             "ida_pro_mcp.installer.clients.remove_server_entry_from_clients",
@@ -227,14 +182,7 @@ def test_main_uninstall_removes_plugin_and_symlinked_skill(tmp_path: Path) -> No
             "ida_pro_mcp.installer.discovery.detect_ida_installs",
             return_value=[install],
         ),
-        patch(
-            "ida_pro_mcp.installer.skills.default_skill_dirs",
-            return_value=[skills_root],
-        ),
     ):
         rc = main(["--uninstall", "--install-root", str(install_root)])
         assert rc == 0
         assert not (plugins / "server_script.py").exists()
-        assert not link.is_symlink() and not link.exists()
-        # The checkout source itself is untouched.
-        assert (checkout_skill / "SKILL.md").is_file()

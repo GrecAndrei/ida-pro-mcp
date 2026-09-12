@@ -83,6 +83,6 @@ opt into SSO with `ida_sso_activate`, then issue tickets and have each agent
 call `ida_agent_login`. Identity, active session, ownership, and continuation
 tokens are then scoped per agent.
 
-References: [session operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md),
+References: [session operation reference](`ida_help`),
 [session implementation](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/server/server_session.py),
 [server configuration](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/config.py).

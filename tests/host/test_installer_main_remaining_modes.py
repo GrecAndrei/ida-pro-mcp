@@ -86,7 +86,7 @@ def test_interactive_wizard_local_missing_model_and_gemini_access_modes(tmp_path
     monkeypatch.setattr(installer, "find_rerank_model", lambda *_args: "")
 
     # local backend, no model path, then the final safety prompts
-    answers = iter(["1", "n", "1", "n", "1", "", "1", "y", "n", "n", "y"])
+    answers = iter(["1", "n", "1", "", "1", "y", "n", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(
         install_root=tmp_path / "local",
@@ -100,7 +100,7 @@ def test_interactive_wizard_local_missing_model_and_gemini_access_modes(tmp_path
     # Gemini + Vertex takes the cloud credential branch; patch the secret
     # prompt so the test never reads from a real terminal.
     monkeypatch.setattr(installer, "_prompt_secret", lambda _question: "")
-    answers = iter(["1", "n", "1", "n", "4", "2", "project", "europe", "n", "1", "y", "n", "1", "y", "n", "n", "y"])
+    answers = iter(["1", "n", "4", "2", "project", "europe", "n", "1", "y", "n", "1", "y", "n", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     opts = InstallerOptions(
         install_root=tmp_path / "gemini",
@@ -152,9 +152,6 @@ def test_parse_args_covers_setup_embedder_and_all_explicit_options(tmp_path, mon
             "--with-corpus",
             "--verify-corpus",
             "--no-embed-auto",
-            "--skills-mode",
-            "none",
-            "--no-install-skills",
             "--with-r2",
             "--sigs",
             "signatures",
@@ -183,31 +180,6 @@ def test_parse_args_covers_setup_embedder_and_all_explicit_options(tmp_path, mon
     assert opts.ida_runtime == "idalib"
     assert opts.no_ida_prompt is True
     assert opts.source_root is not None
-
-
-def test_skill_install_helpers_cover_copy_and_failure_paths(tmp_path, monkeypatch):
-    source = tmp_path / "source"
-    skill = source / ".agents" / "skills" / "ida-pro-mcp"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("skill", encoding="utf-8")
-    (skill / "extra.txt").write_text("extra", encoding="utf-8")
-    codex = tmp_path / "codex"
-    monkeypatch.setenv("CODEX_HOME", str(codex))
-
-    report = InstallReport()
-    monkeypatch.setattr(installer.os, "symlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("links disabled")))
-    installer.install_codex_skills(source, "agent", report, False)
-    assert (codex / "skills" / "ida-pro-mcp" / "SKILL.md").read_text(encoding="utf-8") == "skill"
-
-    report = InstallReport()
-    skills_module = __import__("ida_pro_mcp.installer.skills", fromlist=["install_skills"])
-    monkeypatch.setattr(skills_module, "default_skill_dirs", lambda: [tmp_path / "claude"])
-    monkeypatch.setattr(skills_module, "install_skills", lambda *_args, **_kwargs: {"claude": [tmp_path / "claude" / "SKILL.md"]})
-    assert installer._install_claude_opencode_skills(report, False, installer.UI()) is True
-    assert report.modified_files
-
-    monkeypatch.setattr(skills_module, "install_skills", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("write failed")))
-    assert installer._install_claude_opencode_skills(InstallReport(), False, installer.UI()) is False
 
 
 def test_idalib_activation_and_bashrc_platform_boundaries(tmp_path, monkeypatch):

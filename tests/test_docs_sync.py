@@ -5,13 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ida_pro_mcp.host.agent_operations import list_agent_operations, render_agent_operations_markdown
+from ida_pro_mcp.host.agent_operations import list_agent_operations
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Meta-docs that describe the product surface and must not name operations or
 # tools that no longer exist. These are hand-edited prose (unlike the
-# generated TOOLS_REFERENCE / SKILL.md).
+# former generated TOOLS_REFERENCE / SKILL.md snapshots).
 META_DOCS = (
     "CONTRIBUTING.md",
     "docs/guide/use-cases.md",
@@ -95,26 +95,27 @@ def test_readme_operation_count_matches_the_registry():
     assert f"{count} exact-schema operations" in text
 
 
-def test_tools_reference_is_generated_from_the_public_operation_contract():
-    reference = REPO_ROOT / "docs" / "TOOLS_REFERENCE.md"
-    generated = reference.read_text(encoding="utf-8")
-    assert generated.replace("<!-- GENERATED: scripts/generate_tool_skills.py -->\n", "") == render_agent_operations_markdown()
+def test_live_help_covers_every_public_operation_once():
+    """Live discovery (tools/list + ida_help) must expose every operation.
 
+    Static skill/reference snapshots are gone on purpose: the running server
+    is the contract. This binds the full catalog to ida_help so an operation
+    cannot exist without live help coverage.
+    """
+    from ida_pro_mcp.host.agent_operations import build_agent_help
 
-def test_skill_markdown_is_generated_from_the_public_operation_contract():
-    from ida_pro_mcp.host.agent_operations import render_agent_skill_markdown
-
-    skill = REPO_ROOT / ".agents" / "skills" / "ida-pro-mcp" / "SKILL.md"
-    generated = skill.read_text(encoding="utf-8")
-    assert generated.replace("<!-- GENERATED: scripts/generate_tool_skills.py -->\n", "") == render_agent_skill_markdown()
-
-
-def test_every_public_operation_is_documented_once():
-    text = (REPO_ROOT / "docs" / "TOOLS_REFERENCE.md").read_text(encoding="utf-8")
-    headings = re.findall(r"^## `(ida_[a-z0-9_]+)`$", text, flags=re.MULTILINE)
     names = [operation.name for operation in list_agent_operations()]
-    assert headings == names
-    assert len(headings) == len(set(headings))
+    assert len(names) == len(set(names))
+    live = build_agent_help({})
+    assert live["ok"] is True
+    assert live["count"] == len(names)
+    seen = [item["name"] for item in live["operations"]]
+    assert seen == names
+    for name in names:
+        exact = build_agent_help({"topic": name})
+        assert exact["ok"] is True, name
+        assert exact["operation"]["name"] == name
+        assert exact["operation"]["inputSchema"]["type"] == "object"
 
 
 def test_meta_docs_reference_only_real_operations():

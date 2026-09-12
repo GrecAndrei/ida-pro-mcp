@@ -90,5 +90,5 @@ relax the operator's setting. See the maintained
 [safety model](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/guide/safety-model.md)
 for trust-boundary detail.
 
-References: [generated edit-operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md),
+References: [generated edit-operation reference](`ida_help`),
 [IDA-side edit implementation](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/ida_mcp/tools/modify.py).

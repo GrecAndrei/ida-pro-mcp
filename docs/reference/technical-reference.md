@@ -11,8 +11,7 @@ the agent-facing MCP interface. Each `AgentOperation` contains:
 - a public `ida_*` name and concise description;
 - a strict JSON input schema and a valid example;
 - a mapping to one legacy backend tool/action; and
-- data used to generate `ida_help`, the installed skill reference, and
-  `docs/TOOLS_REFERENCE.md`.
+- data served live by `tools/list` and `ida_help`.
 
 The host server advertises this catalog by default. It validates public
 arguments before translating a call into the existing IDA backend dispatcher.
@@ -34,9 +33,7 @@ workflow.
 1. Add an `AgentOperation` in `src/ida_pro_mcp/host/agent_operations.py` with a strict schema,
    example, backend mapping, and concise description.
 2. Add a behavior-focused contract test for the public schema and mapping.
-3. Run `python scripts/generate_tool_skills.py` to refresh the installed skill
-   and documentation reference.
-4. Run `python scripts/check_schema_integrity.py` and `pytest -q`.
+3. Run `python scripts/check_schema_integrity.py` and `pytest -q`.
 
 ## Architecture
 

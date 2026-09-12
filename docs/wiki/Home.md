@@ -15,13 +15,11 @@ This project is Alpha (`1.0.0a2`) — see [GitHub Releases](https://github.com/G
    IDB
 
 Use [Navigation](Navigation) to choose a task. For exact operation arguments,
-call `ida_help` from the client or read the repository's generated
-[TOOLS_REFERENCE.md](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md).
+call `ida_help` from the client or `tools/list` for the full catalog.
 
-The wiki explains the working path; it is not a replacement for the generated
-operation contracts. If a workflow page and the current operation reference
-disagree, follow the operation reference and report the discrepancy before
-publishing a change.
+The wiki explains the working path; it is not a replacement for the live
+operation contracts. If a workflow page and `ida_help` disagree, follow
+`ida_help` and report the discrepancy before publishing a change.
 
 ## What persists
 

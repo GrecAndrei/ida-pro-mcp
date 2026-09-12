@@ -8,9 +8,7 @@ import os
 import shlex
 import shutil
 import sys
-import tempfile
 import traceback
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -84,26 +82,6 @@ class UI:
 def _absolute_path(path: Path | str) -> Path:
     """Expand a user path without resolving symlinks or requiring existence."""
     return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
-
-
-def _is_checkout_skill_link(path: Path) -> bool:
-    """Return whether a link targets a complete skill inside a Git checkout."""
-    try:
-        target = path.resolve(strict=True)
-        if (
-            not target.is_dir()
-            or target.name != "ida-pro-mcp"
-            or target.parent.name != "skills"
-            or target.parent.parent.name != ".agents"
-            or not (target / "SKILL.md").is_file()
-            or not (target / "references" / "operations.md").is_file()
-        ):
-            return False
-        checkout_root = target.parent.parent.parent
-        git_marker = checkout_root / ".git"
-        return git_marker.is_dir() or git_marker.is_file()
-    except OSError:
-        return False
 
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
@@ -397,17 +375,6 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             "Install CLI shell shim into ~/.bashrc?",
             default=opts.install_cli_shim,
         )
-
-    opts.skills_mode = _prompt_choice(
-        "Codex skills mode",
-        ["agent", "none"],
-        opts.skills_mode,
-    )
-
-    opts.install_claude_skills = _prompt_yes_no(
-        "Install auto-generated skills for Claude Code / OpenCode (~/.claude/skills, ~/.config/opencode/skills)?",
-        default=opts.install_claude_skills,
-    )
 
     # These choices select an embedding *model*.  The server backend that runs
     # the model is determined separately: either the native in-process library
@@ -757,177 +724,6 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
     return True
 
 
-def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
-    if not src.exists() and not src.is_symlink():
-        raise FileNotFoundError(src)
-    reject_symlink_path(dst, "skill destination")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(tempfile.mkdtemp(prefix=f".{dst.name}.staging-", dir=str(dst.parent)))
-    staged = staging_dir / dst.name
-    try:
-        try:
-            os.rmdir(staging_dir)
-            os.symlink(src, staged, target_is_directory=src.is_dir())
-            mode = "linked"
-        except OSError:
-            # Recreate the staging directory if symlinks are unavailable
-            # (notably Windows without developer mode).
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            if src.is_dir():
-                shutil.copytree(src, staged, ignore_dangling_symlinks=True)
-            else:
-                shutil.copy2(src, staged)
-            mode = "copied"
-
-        backup: Path | None = None
-        if dst.exists() or dst.is_symlink():
-            backup = dst.parent / f".{dst.name}.backup-{os.getpid()}-{uuid.uuid4().hex}"
-            os.replace(dst, backup)
-        try:
-            os.replace(staged, dst)
-        except BaseException:
-            if backup is not None and not (dst.exists() or dst.is_symlink()):
-                os.replace(backup, dst)
-            raise
-        if backup is not None:
-            if backup.is_dir() and not backup.is_symlink():
-                shutil.rmtree(backup)
-            else:
-                backup.unlink()
-        return mode
-    finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-
-
-def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> bool:
-    """Auto-generate and install skills for Claude Code and OpenCode."""
-    try:
-        from .skills import SKILL_NAME, default_skill_dirs, install_skills
-    except ImportError as exc:
-        message = f"claude-skills import failed: {exc}"
-        report.add_warning(message)
-        report.add_step("claude-skills", "warn", message)
-        ui.warn(message)
-        return False
-    try:
-        target_dirs = default_skill_dirs()
-        skipped_links = [
-            str(target_dir / SKILL_NAME)
-            for target_dir in target_dirs
-            if _is_checkout_skill_link(target_dir / SKILL_NAME)
-        ]
-        written = install_skills(target_dirs, dry_run=dry_run)
-        count = sum(len(paths) for paths in written.values())
-        if not dry_run:
-            for paths in written.values():
-                for p in paths:
-                    report.add_modified(p)
-        action = "would install" if dry_run else "installed"
-        detail = f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs"
-        if skipped_links:
-            detail += f"; retained {len(skipped_links)} checkout-backed skill link(s)"
-        report.add_step(
-            "claude-skills", "ok" if not dry_run else "dry-run",
-            detail,
-        )
-        ui.ok(f"Claude/OpenCode skills: {action} {len(written)} skills")
-        return True
-    except Exception as exc:
-        message = f"claude-skills install failed: {exc}"
-        report.add_warning(message)
-        report.add_step("claude-skills", "warn", message)
-        ui.warn(message)
-        return False
-
-
-def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dry_run: bool) -> None:
-    if mode == "none":
-        report.add_step("skills", "skipped", "skills mode set to none")
-        return
-    source_root_skills = source_root / ".agents" / "skills"
-    agent_skill = source_root_skills / "ida-pro-mcp"
-    if not (agent_skill / "SKILL.md").exists():
-        # PyPI wheels intentionally contain the runtime package, not the
-        # repository's .agents tree.  Generate the same skill content from the
-        # operation registry so a packaged install is still useful to Codex.
-        from .skills import install_skills
-
-        codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
-        codex_skills = _absolute_path(codex_home) / "skills"
-        destination = codex_skills / "ida-pro-mcp"
-        if destination.is_symlink() and _is_checkout_skill_link(destination):
-            report.add_step(
-                "skills",
-                "dry-run" if dry_run else "ok",
-                f"using existing checkout-backed skill link at {destination}",
-            )
-            return
-        written = install_skills([codex_skills], dry_run=dry_run)
-        count = sum(len(paths) for paths in written.values())
-        if not dry_run:
-            for paths in written.values():
-                for path in paths:
-                    report.add_modified(path)
-        action = "would generate" if dry_run else "generated"
-        report.add_step(
-            "skills",
-            "dry-run" if dry_run else "ok",
-            f"{action} {count} files to {codex_skills / 'ida-pro-mcp'}",
-        )
-        return
-    selected = [agent_skill]
-    codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
-    codex_skills = _absolute_path(codex_home) / "skills"
-    # A checkout-backed Codex skill is a supported development layout:
-    # ~/.codex/skills/ida-pro-mcp -> <checkout>/.agents/skills/ida-pro-mcp.
-    # It is safe to retain only when the link resolves to this exact source
-    # skill.  Any other destination symlink remains rejected so an installer
-    # run cannot write through a user-controlled redirect.
-    reject_symlink_path(codex_skills, "skill installation root")
-    destination = codex_skills / selected[0].name
-    if destination.is_symlink():
-        try:
-            if (
-                destination.resolve(strict=True) == agent_skill.resolve(strict=True)
-                or _is_checkout_skill_link(destination)
-            ):
-                report.add_step(
-                    "skills",
-                    "dry-run" if dry_run else "ok",
-                    f"using existing checkout-backed skill link at {destination}",
-                )
-                return
-        except OSError:
-            pass
-        reject_symlink_path(destination / "SKILL.md", "skill installation path")
-    else:
-        reject_symlink_path(destination / "SKILL.md", "skill installation path")
-    if dry_run:
-        report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
-        return
-    codex_skills.mkdir(parents=True, exist_ok=True)
-    for src in selected:
-        dst = codex_skills / src.name
-        if dst.is_dir() and not dst.is_symlink():
-            # Preserve user-added references/files in an existing skill
-            # directory; only refresh the two files managed by this project.
-            from .skills import install_skills
-
-            written = install_skills([codex_skills], dry_run=False)
-            for paths in written.values():
-                for path in paths:
-                    report.add_modified(path)
-        else:
-            _replace_with_symlink_or_copy(src, dst)
-            report.add_modified(dst)
-    report.add_step(
-        "skills",
-        "dry-run" if dry_run else "ok",
-        f"would install {len(selected)} skills to {codex_skills}" if dry_run
-        else f"installed {len(selected)} skills",
-    )
-
-
 def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser = argparse.ArgumentParser(description="IDA Pro MCP installer")
     parser.add_argument(
@@ -1036,9 +832,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="require IDA_MCP_BRON_CORPUS_SHA256_* hashes for every threat-corpus source",
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
-    parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
-    parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
-    parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
     parser.add_argument(
         "--with-r2",
         action="store_true",
@@ -1055,7 +848,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         ".sig/.sig.gz file or a directory (walked recursively, subpaths preserved).",
     )
 
-    parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell", "r2", "sigs"], default=[], help="run only selected install phases")
+    parser.add_argument("--only", action="append", choices=["runtime", "clients", "shell", "r2", "sigs"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
         "--ida-runtime",
@@ -1095,8 +888,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         install_cli_shim=args.install_cli_shim,
         rollback_on_fail=args.rollback_on_fail,
         runtime_source=args.runtime_source,
-        skills_mode=args.skills_mode,
-        install_claude_skills=not args.no_install_skills,
         interactive=True if args.interactive else (False if args.no_interactive else None),
         embed_auto=not args.no_embed_auto,
         embed_profile=args.embed_profile,
@@ -1360,25 +1151,7 @@ def _run_uninstall(opts: InstallerOptions, ui: UI, report: InstallReport) -> int
         ui.ok(f"Removed server configuration from: {', '.join(removed_clients)}")
         report.add_step("clients", "uninstalled", f"removed from {len(removed_clients)} clients")
 
-    # 2. Remove skills
-    from .skills import SKILL_NAME, default_skill_dirs
-    for sdir in default_skill_dirs():
-        target_skill = sdir / SKILL_NAME
-        if target_skill.is_symlink() or target_skill.is_file():
-            # A checkout-backed skill link (or stray file) is removed as a
-            # link: rmtree refuses symlinks, so unlink the entry itself and
-            # leave the checkout source untouched.
-            if not opts.dry_run:
-                target_skill.unlink(missing_ok=True)
-                report.add_modified(target_skill)
-            ui.ok(f"Removed skill directory: {target_skill}")
-        elif target_skill.is_dir():
-            if not opts.dry_run:
-                shutil.rmtree(target_skill, ignore_errors=True)
-                report.add_modified(target_skill)
-            ui.ok(f"Removed skill directory: {target_skill}")
-
-    # 3. Remove IDA plugin if IDA installs found
+    # 2. Remove IDA plugin if IDA installs found
     from .discovery import detect_ida_installs
     try:
         installs = detect_ida_installs()
@@ -1424,7 +1197,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         reject_symlink_path(install_root, "installer root")
         # Resolve IDA only when a later phase actually needs it or the user
         # explicitly asked for an IDA override. Client configuration and
-        # signature staging both need a concrete install, but runtime/skills/
+        # signature staging both need a concrete install, but runtime/
         # shell-only installs should not fail just because IDA is absent on
         # this machine.
         chosen_install = None
@@ -1903,18 +1676,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 
-        if _phase_enabled(opts, "skills"):
-            ui.info("Installing Codex skills")
-            install_codex_skills(source_root, opts.skills_mode, report, opts.dry_run)
-            ui.ok("Codex skills processed")
-
-            if opts.install_claude_skills:
-                ui.info("Installing Claude Code / OpenCode skills")
-                _install_claude_opencode_skills(report, opts.dry_run, ui)
-            else:
-                report.add_step("claude-skills", "skipped", "disabled by user")
-        else:
-            report.add_step("skills", "skipped", "filtered by --only")
+        # Agent skills are discovered live via tools/list + ida_help; no static
+        # skill files are installed.
 
         if opts.install_cli_shim and _phase_enabled(opts, "shell"):
             ui.info("Installing shell CLI shim")

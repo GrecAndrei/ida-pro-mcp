@@ -18,8 +18,8 @@ analysis path.
 - `src/ida_pro_mcp/ida_mcp/`: bridge-side tools and compatibility dispatcher.
 - `src/ida_pro_mcp/server_script.py`: IDA plugin/runtime loader.
 - `src/ida_pro_mcp/installer/`: IDA discovery, runtime/client configuration
-  (22+ AI agent environments across JSON, JSON5, TOML, YAML), launcher shims,
-  and `agentskills.io` skill distribution.
+  (22+ AI agent environments across JSON, JSON5, TOML, YAML) and launcher
+  shims.
 - `src/ida_pro_mcp/native/`: optional in-process llama.cpp driver.
 - `scripts/`: release packaging, verification tools, schema integrity, and
   auto-installers (`install.sh`, `install.bat`).
@@ -94,8 +94,9 @@ For a new public operation, update these surfaces together:
    where compatibility requires them.
 3. Add schema, routing, acknowledgement, and policy-pair tests. Assert the
    result and error envelope rather than private handler calls.
-4. Regenerate the tool reference and skill, update the README's operation
-   count/summary, and update the relevant hand-authored wiki page.
+4. Update the README's operation count/summary and the relevant hand-authored
+   wiki page. Live discovery (`tools/list` + `ida_help`) is the contract; no
+   static skill or reference snapshot is generated.
 
 The legacy catalog still needs matching entries in `_TOOL_ACTIONS`, `TOOLS`,
 `TOOL_DESCRIPTIONS`, exports/module maps, and host-only dispatch branches where
@@ -105,27 +106,25 @@ Keep these invariants true:
 
 - every `TOOLS` entry has an `_TOOL_ACTIONS` entry and a description;
 - every public operation has a strict schema and a validating example;
-- generated references match `agent_operations.py`;
+- live discovery (`tools/list` + `ida_help`) exposes every public operation;
 - no public operation is silently exposed through a different argument name.
 
-## Generated docs and hand-authored docs
+## Live discovery instead of generated skill snapshots
 
-Never hand-edit generated operation references. After changing a public schema,
-description, example, or operation list, run:
+There is no checked-in skill, no generated operation reference, and no
+installer skill phase. Harnesses must call `tools/list` for the full
+`ida_*` catalog and `ida_help(topic="...")` for exact arguments. After
+changing a public schema, description, example, or operation list, run:
 
 ```bash
 python scripts/check_schema_integrity.py
-python scripts/generate_tool_skills.py
 ```
 
-This regenerates `docs/TOOLS_REFERENCE.md` and
-`.agents/skills/ida-pro-mcp/` from `agent_operations.py`; verify the generated
-diff is clean and include it with the source change. Update the relevant
-`docs/guide/` page and `docs/wiki/` page when user guidance or behavior
-changes. Update `docs/index.md` when the documentation map changes. Change the
-README operation summary only when the public summary/workflow changes. Do not
-copy research-note claims, stale counts, paths, or benchmarks into maintained
-docs without rechecking them.
+and update the relevant `docs/guide/` page and `docs/wiki/` page when user
+guidance or behavior changes. Update `docs/index.md` when the documentation
+map changes. Change the README operation summary only when the public
+summary/workflow changes. Do not copy research-note claims, stale counts,
+paths, or benchmarks into maintained docs without rechecking them.
 
 ## Installer and native constraints
 
@@ -137,7 +136,7 @@ tests, and preserve atomic writes, backups, symlink/path checks, and rollback.
 The installer supports 22+ coding environments across JSON (`mcpServers`, `servers`,
 `mcp`), JSON5 with nested keys (`mcp.servers`), TOML (`mcp_servers`), and YAML
 (`mcp_servers`). It provides `--auto` for non-interactive unattended runs, `--uninstall`
-for clean removal of plugins/skills/client configs/shims, and generates portable launcher
+for clean removal of plugins/client configs/shims, and generates portable launcher
 shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-installers live
 at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
 
@@ -156,7 +155,6 @@ python -m pip install --upgrade pip
 python -m pip install -e . --group dev
 ruff check .
 python scripts/check_schema_integrity.py
-python scripts/generate_tool_skills.py
 python scripts/check_workflow_pins.py
 rm -rf .pytest_tmp && python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
 git diff --check
@@ -260,8 +258,7 @@ Before merge or release, `[major]` work must have:
 - release artifacts (wheel/sdist/installers/native or other published outputs)
   built, inspected, and traceable to the reviewed commit before publishing;
 - maintained guides, `docs/releases/TEMPLATE.md`, and relevant hand-authored
-  wiki pages updated, plus generated docs/skills regenerated when the public
-  surface changes;
+  wiki pages updated when the public surface changes;
 - CodeQL results reviewed for Python and GitHub Actions; workflow permissions
   (including `attestations: write`), action pin integrity, and untrusted-input
   handling explicitly checked;
@@ -284,12 +281,11 @@ Before merge or release, `[major]` work must have:
    host/runtime, IDA-side, store/retrieval, installer, native, documentation,
    workflow, or release.
 4. Make the smallest coherent change in the correct layer. Keep migration code
-   with its regression test and generated docs with the source change.
+   with its regression test.
 5. Add stable-interface tests for valid behavior, failure behavior, policy
    boundaries, and compatibility effects. Use fake IDA offline and reserve
    real-IDA claims for `tests/integration/`.
-6. If the public schema or description changed, run the schema check and
-   generator and include the resulting generated files.
+6. If the public schema or description changed, run the schema check.
 7. If installer, native, retrieval, or workflow behavior changed, run the
    corresponding focused checks and document unavailable external inputs.
 8. Run the applicable routine checks:
@@ -298,7 +294,6 @@ Before merge or release, `[major]` work must have:
    python -m pip install --upgrade pip
    ruff check .
    python scripts/check_schema_integrity.py
-   python scripts/generate_tool_skills.py
    python scripts/check_workflow_pins.py
    rm -rf .pytest_tmp && python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
    git diff --check

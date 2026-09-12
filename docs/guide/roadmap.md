@@ -7,8 +7,7 @@ The default MCP interface is the action-specific `ida_*` operation catalog in
 
 - advertised `tools/list` schemas;
 - backend dispatch mappings;
-- `ida_help` responses;
-- Codex, Claude Code, and OpenCode skill references; and
+- `ida_help` responses; and
 - operation contract tests.
 
 The previous broad `tool(action=...)` backend remains behind
