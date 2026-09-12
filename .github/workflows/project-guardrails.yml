@@ -56,12 +56,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e . --group dev
           pip install build pip-audit
-      - name: Lint and verify generated contracts
+      - name: Lint and verify contracts
         run: |
           ruff check .
           python scripts/check_schema_integrity.py
-          python scripts/generate_tool_skills.py
-          git diff --exit-code -- .agents/skills docs/TOOLS_REFERENCE.md
           git diff --check
       - name: Run offline suite
         env:

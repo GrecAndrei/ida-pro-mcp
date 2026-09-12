@@ -318,8 +318,6 @@ def _configure_offline_environment() -> None:
         "IDA_MCP_BATCH_STATE_DIR": safe / "batch",
         "IDA_MCP_SESSION_LOG_DIR": safe / "session-logs",
         "IDA_MCP_PORT_FILE": safe / "port-file",
-        "CODEX_HOME": safe / "codex",
-        "CODEX_SKILL_ROOT": safe / "codex-skills",
     }
     for name, value in path_env.items():
         if isinstance(value, Path) and not name.endswith("_FILE"):

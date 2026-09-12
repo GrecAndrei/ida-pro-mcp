@@ -91,14 +91,8 @@ tests/artifacts/
 # OS junk
 .DS_Store
 Thumbs.db
-# Generated public agent skill is source-controlled because installers copy it
-# verbatim. Other local agent artifacts remain ignored.
-.agents/*
-!.agents/skills/
-.agents/skills/*
-!.agents/skills/README.md
-!.agents/skills/ida-pro-mcp/
-!.agents/skills/ida-pro-mcp/**
+# Local agent-scratch area (briefings, handoffs, per-agent working notes).
+.agents/
 embedder.json
 ida-install.json
 ORIGINAL_REQUEST.md

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-12 — Sweep dead skill-infrastructure traces
+
+- CI no longer runs the removed `scripts/generate_tool_skills.py` or diffs the
+  removed `.agents/skills` / `docs/TOOLS_REFERENCE.md` paths; guardrail and
+  standalone workflows verify the live contract with
+  `check_schema_integrity.py` only.
+- Dropped the dead `CODEX_HOME` / `CODEX_SKILL_ROOT` sandbox env vars from the
+  test conftest (their only consumer was the removed skills publisher).
+- Collapsed the `.gitignore` skill un-ignore block to a plain `.agents/`
+  ignore and fixed the release template's stale install/operations-reference
+  text; removed stale local `build/`, `dist/`, and skill scratch copies.
+
 ## 2026-09-12 — Remove static skill snapshots; tools/list + ida_help are the contract
 
 - Deleted the checked-in skill (`.agents/skills/`), the generated

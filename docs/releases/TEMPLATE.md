@@ -19,7 +19,7 @@ curl -fsSL https://github.com/GrecAndrei/ida-pro-mcp/releases/download/{TAG}/ins
 *Or download `install.sh` from the release assets below and run `./install.sh`.*
 
 #### Windows (One-Click Install)
-Download **`install.bat`** from the release assets below and **double-click it**. It auto-detects Python, configures IDA Pro, sets up your AI coding tools, and installs skills automatically.
+Download **`install.bat`** from the release assets below and **double-click it**. It auto-detects Python, configures IDA Pro, and sets up your AI coding tools.
 
 #### Standalone Executable
 Download the native binary for your architecture from the release assets below (e.g. `ida-pro-mcp-installer-linux-x86_64`), make it executable (`chmod +x`), and run it directly.
@@ -47,6 +47,6 @@ gh attestation verify ida_pro_mcp-{VERSION}-py3-none-any.whl --repo GrecAndrei/i
 
 ### Links
 - 📖 [Official Wiki & Documentation](https://github.com/GrecAndrei/ida-pro-mcp/wiki)
-- 📋 [Operations Reference](docs/TOOLS_REFERENCE.md)
+- 📋 [Operations Reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md#operations-at-a-glance) — live discovery via `tools/list` and `ida_help`
 - 🛡️ [Safety & Mutation Policy](docs/guide/safety-model.md)
 - 📝 [Full Changelog](CHANGELOG.md)

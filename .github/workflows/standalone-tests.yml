@@ -45,11 +45,8 @@ jobs:
       - name: Ruff lint check
         run: ruff check .
 
-      - name: Verify generated tool docs are up to date
-        run: |
-          python scripts/check_schema_integrity.py
-          python scripts/generate_tool_skills.py
-          git diff --exit-code -- .agents/skills docs/TOOLS_REFERENCE.md
+      - name: Verify operation contract integrity
+        run: python scripts/check_schema_integrity.py
 
       - name: Run standalone test suite with changed-line coverage
         env:
