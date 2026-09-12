@@ -1,4 +1,10 @@
-# Changelog
+## 2026-09-12 — Honor authored release notes in the alpha release workflow
+
+- The protected `publish` job had no checkout, so
+  `docs/releases/<tag>.md` was never present in its workspace and releases
+  always fell back to auto-generated notes. The job now checks out the
+  requested tag before creating the release so the authored notes file is
+  used.
 
 ## 2026-09-12 — Prepare v1.0.0a3 release metadata
 
