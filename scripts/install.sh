@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="GrecAndrei/ida-pro-mcp"
-VERSION="${IDA_PRO_MCP_VERSION:-1.0.0a2}"
+VERSION="${IDA_PRO_MCP_VERSION:-1.0.0a3}"
 TAG="v${VERSION#v}"
 WHEEL_URL="https://github.com/${REPO}/releases/download/${TAG}/ida_pro_mcp-${VERSION}-py3-none-any.whl"
 

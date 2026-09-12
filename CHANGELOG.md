@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-12 — Prepare v1.0.0a3 release metadata
+
+- Bumped the package version to `1.0.0a3` across `_version.py`, the README,
+  versioning guide, wiki Home/FAQ, the IDA plugin descriptor, and the
+  auto-installer scripts.
+- Authored the v1.0.0a3 release notes highlighting the live-discovery
+  contract, whole-session binary diff triage, and the streamlined installer.
+
 ## 2026-09-12 — Sweep dead skill-infrastructure traces
 
 - CI no longer runs the removed `scripts/generate_tool_skills.py` or diffs the

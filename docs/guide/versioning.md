@@ -14,7 +14,7 @@ Major releases may change the public MCP contract or persistence format. Minor
 releases add backwards-compatible operations or supported runtimes. Patch
 releases contain compatible fixes, documentation, and maintenance.
 
-The current checkout is `1.0.0a2`. It is an alpha: the exact-schema `ida_*`
+The current checkout is `1.0.0a3`. It is an alpha: the exact-schema `ida_*`
 surface and workspace format may still change before `1.0.0`.
 
 ## Release checklist

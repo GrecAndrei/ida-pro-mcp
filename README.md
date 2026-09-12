@@ -6,7 +6,7 @@ when explicitly allowed, write annotations or other changes back to the IDB.
 The host process runs outside IDA and starts a separate IDA headless process
 for each session by default.
 
-The current version is `1.0.0a2`. This is alpha software. The public
+The current version is `1.0.0a3`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
 stable 1.0.0 release. The default client surface contains 109 exact-schema operations.
 Use live discovery for the complete contract: `tools/list` enumerates every

@@ -3,7 +3,7 @@
 IDA Pro MCP connects an MCP client to IDA Pro for repeatable analysis, a
 binary-scoped investigation workspace, and reviewed IDB annotations.
 
-This project is Alpha (`1.0.0a2`) — see [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases) for artifacts and release notes. It exposes 109 deterministic, strict-schema `ida_*` operations supporting Hex-Rays decompilation, whole-binary patch triage, cross-references, type management, firmware detection, and multi-agent configuration across 22+ coding tools.
+This project is Alpha (`1.0.0a3`) — see [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases) for artifacts and release notes. It exposes 109 deterministic, strict-schema `ida_*` operations supporting Hex-Rays decompilation, whole-binary patch triage, cross-references, type management, firmware detection, and multi-agent configuration across 22+ coding tools.
 
 ## Start here
 

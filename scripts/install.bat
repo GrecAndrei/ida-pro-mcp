@@ -3,12 +3,12 @@ setlocal enabledelayedexpansion
 title IDA Pro MCP Auto-Installer
 
 echo ========================================================
-echo           IDA Pro MCP Auto-Installer (v1.0.0a2)
+echo           IDA Pro MCP Auto-Installer (v1.0.0a3)
 echo ========================================================
 
 set "REPO=GrecAndrei/ida-pro-mcp"
-set "VERSION=1.0.0a2"
-set "TAG=v1.0.0a2"
+set "VERSION=1.0.0a3"
+set "TAG=v1.0.0a3"
 set "WHEEL_URL=https://github.com/%REPO%/releases/download/%TAG%/ida_pro_mcp-%VERSION%-py3-none-any.whl"
 
 :: 1. Find Python (3.11+)

@@ -10,4 +10,4 @@ def test_current_release_version_is_consistent():
         r'^__version__ = "([^"]+)"$', version_source.read_text(), re.MULTILINE
     )
     assert match is not None
-    assert match.group(1) == "1.0.0a2"
+    assert match.group(1) == "1.0.0a3"

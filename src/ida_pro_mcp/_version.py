@@ -5,4 +5,4 @@ identifier. Versions follow PEP 440: ``MAJOR.MINOR.PATCH`` with ``aN``, ``bN``,
 or ``rcN`` pre-release suffixes.
 """
 
-__version__ = "1.0.0a2"
+__version__ = "1.0.0a3"

@@ -7,6 +7,6 @@
     "logoPath": ".github/logo.png",
     "description": "Model Context Protocol bridge for deterministic IDA Pro analysis and automation.",
     "idaVersions": ">=9.2",
-    "version": "1.0.0a2"
+    "version": "1.0.0a3"
   }
 }
