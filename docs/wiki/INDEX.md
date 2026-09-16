@@ -21,8 +21,23 @@ findings, and make reviewed IDB changes.
 
 ## Detailed reference
 
-- [RISC-V raw-blob firmware](riscv_firmware.md)
-- [Architecture and safety guides](../guide/architecture.md)
+## Tool Reference Manuals
 
-The older pages under `tools/` and `core/` remain as detailed reference
-material. Start with the task pages above; use `tools/list` and `ida_help` for exact schemas.
+- [Discovery](tools/discovery.md) — 31 operations: reconnaissance, structured search, semantic retrieval, firmware analysis (`ida_fw_*`), and r2/rizin sidecar (`ida_r2_*`).
+- [Code](tools/code.md) — 11 operations: decompilation, disassembly, call graphs, cross-session function diffing, whole-binary diff triage, and emulation.
+- [Edit](tools/edit.md) — 33 operations: names, comments, function boundaries, patching, type/segment edits, snapshots, and transactions.
+- [Types](tools/types.md) — Struct, enum, and typedef declarations, struct/enum member edits, and TIL import/export.
+- [Segments](tools/segments.md) — Segment layout, attributes, permissions, and segment-register (`sreg`) mappings.
+- [Findings](tools/findings.md) — 10 operations: persistent investigation workspace, evidence recording, and IDB publishing.
+- [Session](tools/session.md) — 12 operations: session lifecycle, background opening, health diagnostics, and Agent SSO.
+- [Calculation](tools/calculation.md) — 8 operations: address math, pointer chains, alignments, conversions, and bitwise operations.
+- [Signatures](tools/signatures.md) — FLIRT signature inspection and application.
+- [Support](tools/support.md) — `ida_help`, pagination continuation (`ida_continue`), and IDAPython escape hatch (`ida_python`).
+- [Workflow](tools/workflow.md) — Sequential multi-operation macro execution (`ida_batch`).
+
+## Core Architecture & Concepts
+
+- [Sessions Core Guide](core/sessions.md) — Process management, safe mode gate, lease files, and RPC concurrency.
+- [Investigation Workspace](core/investigation.md) — Binary-scoped knowledge store, item kinds, lifecycle states, and evidence models.
+- [Frontier Guide](core/frontier.md) — Target selection strategies (`unresolved`, `frontier`, `stale`, `conflict`, `coverage`).
+- [Intelligence Guide](core/intelligence.md) — Semantic indexing slices, bi-encoder retrieval, and cross-encoder reranking.

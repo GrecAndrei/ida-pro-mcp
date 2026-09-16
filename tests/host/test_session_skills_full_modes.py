@@ -149,7 +149,7 @@ def test_activity_dead_end_shapes_dashboard_and_phase_modes(tmp_path):
     assert dashboard["activity"]["functions_decompiled"] == 1
     assert dashboard["activity"]["searches_performed"] == 2
     assert dashboard["bootstrap"].get("initialized", False) is False
-    assert dashboard["suggested_next"] == ["blackboard.export", "session.notebook"]
+    assert dashboard["suggested_next"] == ["ida_export_findings", "ida_analysis_brief", "ida_list_findings"]
     assert manager.get_activity_log(sid, limit=2)["total"] == 3
     assert manager.get_phase(sid)["phase"] == "reporting"
     assert manager.get_phase("missing")["code"] == MCPError.SESSION_NOT_FOUND

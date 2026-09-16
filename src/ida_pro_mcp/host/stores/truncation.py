@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import json
+import os
 import re
 import secrets
 import threading
@@ -12,8 +13,23 @@ from ..errors import MCPError, make_error
 
 # Minimum sensible token limit to prevent degenerate truncation
 _MIN_MAX_TOKENS = 500
-_MAX_TRUNCATION_STORE = 50
-_TOKEN_TTL_SEC = 600  # 10 minutes
+_DEFAULT_MAX_TRUNCATION_STORE = 500
+_DEFAULT_TOKEN_TTL_SEC = 3600  # 1 hour (sliding window)
+
+try:
+    _MAX_TRUNCATION_STORE = int(
+        os.environ.get("IDA_MCP_MAX_TRUNCATION_STORE", str(_DEFAULT_MAX_TRUNCATION_STORE))
+    )
+except Exception:
+    _MAX_TRUNCATION_STORE = _DEFAULT_MAX_TRUNCATION_STORE
+
+try:
+    _TOKEN_TTL_SEC = float(
+        os.environ.get("IDA_MCP_TRUNCATION_TTL", str(_DEFAULT_TOKEN_TTL_SEC))
+    )
+except Exception:
+    _TOKEN_TTL_SEC = float(_DEFAULT_TOKEN_TTL_SEC)
+
 # Recursion guard for _truncate_recursive: a pathologically deep (or
 # self-referential) response must not blow the interpreter stack and be
 # misreported by the dispatcher as an IDA/connection failure.
@@ -32,12 +48,18 @@ _STORE_LOCK = threading.Lock()
 
 
 def _prune_expired() -> None:
-    """Remove tokens older than _TOKEN_TTL_SEC."""
+    """Remove tokens older than _TOKEN_TTL_SEC since creation or last access."""
     with _STORE_LOCK:
         now = time.time()
         expired = []
         for tok, entry in _TRUNCATION_STORE.items():
-            if now - entry.get("created_at", 0) > _TOKEN_TTL_SEC:
+            created_at = entry.get("created_at", 0)
+            last_accessed = entry.get("last_accessed")
+            if last_accessed is not None and last_accessed >= created_at:
+                active_time = last_accessed
+            else:
+                active_time = created_at
+            if now - active_time > _TOKEN_TTL_SEC:
                 expired.append(tok)
         for tok in expired:
             _TRUNCATION_STORE.pop(tok, None)
@@ -58,19 +80,21 @@ def _store_truncation(
     # re-slice exactly these values, and the pruned envelope (with the slices)
     # is what was already returned to the caller. Holding the full response
     # here kept every non-truncated key — including already-sliced payloads and
-    # big metadata blobs — alive for the token's 10-minute TTL.
+    # big metadata blobs — alive for the token's TTL.
     values: dict[str, Any] = {}
     for path in fields:
         value = _get_nested(response, path)
         if value is not None:
             values[path] = value
+    now = time.time()
     with _STORE_LOCK:
         _TRUNCATION_STORE[token] = {
             "values": values,
             "fields": fields,
             "session_id": session_id or "",
             "owner_id": owner_id or "",
-            "created_at": time.time(),
+            "created_at": now,
+            "last_accessed": None,
         }
         _TRUNCATION_ORDER.append(token)
         while len(_TRUNCATION_ORDER) > _MAX_TRUNCATION_STORE:
@@ -82,26 +106,34 @@ def _store_truncation(
 def _get_entry(token: str, session_id: str = "", owner_id: str = "") -> dict[str, Any] | None:
     """Retrieve a token entry, checking TTL, session, and owner scope."""
     _prune_expired()
-    entry = _TRUNCATION_STORE.get(token)
-    if not entry:
-        return None
-    # Session scoping: when the entry was stored under a session, require an
-    # exact match. Empty caller session_id must not unlock foreign tokens.
-    entry_sid = entry.get("session_id", "")
-    entry_owner = entry.get("owner_id", "")
-    if entry_sid or entry_owner:
-        # Scoped entry: require exact matches on whichever scope is bound.
-        if entry_sid and session_id != entry_sid:
+    with _STORE_LOCK:
+        entry = _TRUNCATION_STORE.get(token)
+        if not entry:
             return None
-        if entry_owner and owner_id != entry_owner:
+        # Session scoping: when the entry was stored under a session, require an
+        # exact match. Empty caller session_id must not unlock foreign tokens.
+        entry_sid = entry.get("session_id", "")
+        entry_owner = entry.get("owner_id", "")
+        if entry_sid or entry_owner:
+            # Scoped entry: require exact matches on whichever scope is bound.
+            if entry_sid and session_id != entry_sid:
+                return None
+            if entry_owner and owner_id != entry_owner:
+                return None
+        elif session_id or owner_id:
+            # Fail closed: a token stored with NO scope (private host-internal
+            # path) must not be unlocked by a scoped caller. Only an equally
+            # unscoped caller — the same private path that minted it — may
+            # continue it, so a leaked token cannot be replayed across sessions.
             return None
-    elif session_id or owner_id:
-        # Fail closed: a token stored with NO scope (private host-internal
-        # path) must not be unlocked by a scoped caller. Only an equally
-        # unscoped caller — the same private path that minted it — may
-        # continue it, so a leaked token cannot be replayed across sessions.
-        return None
-    return entry
+
+        # Refresh sliding-window access time and maintain LRU order
+        now = time.time()
+        entry["last_accessed"] = now
+        with contextlib.suppress(ValueError):
+            _TRUNCATION_ORDER.remove(token)
+        _TRUNCATION_ORDER.append(token)
+        return entry
 
 
 def _get_nested(container: Any, field: str) -> Any:
@@ -203,6 +235,10 @@ def continue_truncated(
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
             "Unknown or expired continuation token",
+            hint=(
+                "Continuation tokens expire after 1 hour of inactivity or when the host server restarts. "
+                "Re-run the original operation to get a fresh token."
+            ),
         )
 
     field, err, value = _resolve_field(entry, field)
@@ -229,6 +265,8 @@ def continue_truncated(
             items = value[start : start + chunk]
             next_offset = start + len(items)
             info["next_offset"] = next_offset
+        total = info.get("total", len(value))
+        has_more = next_offset < total
         return {
             "ok": True,
             "token": token,
@@ -236,8 +274,10 @@ def continue_truncated(
             "items": items,
             "offset": start,
             "count": len(items),
-            "total": info.get("total", len(value)),
-            "next_offset": next_offset if next_offset < info.get("total", len(value)) else None,
+            "total": total,
+            "next_offset": next_offset if has_more else None,
+            "has_more": has_more,
+            "done": not has_more,
         }
 
     if info.get("type") == "string" and isinstance(value, str):
@@ -254,6 +294,8 @@ def continue_truncated(
             text = value[start : start + chunk]
             next_offset = start + len(text)
             info["next_offset"] = next_offset
+        total = info.get("total", len(value))
+        has_more = next_offset < total
         return {
             "ok": True,
             "token": token,
@@ -261,8 +303,10 @@ def continue_truncated(
             "text": text,
             "offset": start,
             "count": len(text),
-            "total": info.get("total", len(value)),
-            "next_offset": next_offset if next_offset < info.get("total", len(value)) else None,
+            "total": total,
+            "next_offset": next_offset if has_more else None,
+            "has_more": has_more,
+            "done": not has_more,
         }
 
     return make_error(
@@ -282,6 +326,10 @@ def peek_truncated(
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
             "Unknown or expired continuation token",
+            hint=(
+                "Continuation tokens expire after 1 hour of inactivity or when the host server restarts. "
+                "Re-run the original operation to get a fresh token."
+            ),
         )
 
     fields = entry.get("fields", {})
@@ -299,12 +347,16 @@ def peek_truncated(
             "remaining": max(0, total - (next_off or 0)) if next_off is not None else 0,
         }
 
+    created_at = entry.get("created_at", 0)
+    last_accessed = entry.get("last_accessed")
+    active_time = last_accessed if (last_accessed is not None and last_accessed >= created_at) else created_at
     return {
         "ok": True,
         "token": token,
         "fields": meta,
-        "created_at": entry.get("created_at", 0),
-        "ttl_remaining_sec": max(0, _TOKEN_TTL_SEC - (time.time() - entry.get("created_at", 0))),
+        "created_at": created_at,
+        "last_accessed": active_time,
+        "ttl_remaining_sec": max(0, int(_TOKEN_TTL_SEC - (time.time() - active_time))),
     }
 
 
@@ -364,6 +416,10 @@ def search_truncated(
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
             "Unknown or expired continuation token",
+            hint=(
+                "Continuation tokens expire after 1 hour of inactivity or when the host server restarts. "
+                "Re-run the original operation to get a fresh token."
+            ),
         )
 
     if not pattern:
@@ -466,6 +522,10 @@ def summary_truncated(
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
             "Unknown or expired continuation token",
+            hint=(
+                "Continuation tokens expire after 1 hour of inactivity or when the host server restarts. "
+                "Re-run the original operation to get a fresh token."
+            ),
         )
 
     field_name, err, value = _resolve_field(entry, field)

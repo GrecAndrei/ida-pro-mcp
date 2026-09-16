@@ -14,6 +14,20 @@ Choose the page that matches the job.
 | Check behavior with a real IDA installation | [Live IDA validation](live-ida-validation) |
 | Find terminology and configuration pointers | [Reference and FAQ](reference-faq) |
 
+## Tool Reference Manuals
+
+- [Discovery Operations (31 ops)](tools/discovery.md)
+- [Code Operations (11 ops)](tools/code.md)
+- [Edit Operations (33 ops)](tools/edit.md)
+- [Types Operations](tools/types.md)
+- [Segments Operations](tools/segments.md)
+- [Findings Operations (10 ops)](tools/findings.md)
+- [Session Operations (12 ops)](tools/session.md)
+- [Calculation Operations (8 ops)](tools/calculation.md)
+- [Signatures Operations](tools/signatures.md)
+- [Support Operations (3 ops)](tools/support.md)
+- [Workflow Operations (1 op)](tools/workflow.md)
+
 ## Repository references
 
 - [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases)

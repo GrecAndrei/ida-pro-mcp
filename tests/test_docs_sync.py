@@ -165,3 +165,12 @@ def test_arch_surface_policy_matches_current_tiering():
     assert "ADVERTISED_TOOLS" in section
     assert "HIDDEN_TOOLS_IN_LIST" in section
     assert "ADVERTISED_ACTIONS" in section
+
+
+def test_wiki_covers_every_public_operation():
+    """Every public operation in list_agent_operations() must be documented in docs/wiki/."""
+    wiki_dir = REPO_ROOT / "docs" / "wiki"
+    wiki_text = "\n".join(f.read_text(encoding="utf-8") for f in wiki_dir.rglob("*.md"))
+    names = _operation_names()
+    missing = sorted(name for name in names if name not in wiki_text)
+    assert not missing, f"Operations missing from docs/wiki/: {missing}"

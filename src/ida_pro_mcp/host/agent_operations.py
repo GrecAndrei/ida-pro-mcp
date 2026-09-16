@@ -1853,8 +1853,8 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_continue",
         description=(
-            "Continue a truncated result; pass field when the response lists "
-            "more than one truncated field."
+            "Continue a truncated result, search within it, or inspect metadata; "
+            "pass field when more than one field is truncated."
         ),
         category="support",
         input_schema=_schema(
@@ -1877,6 +1877,30 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "count": {
                     "type": "integer",
                     "description": "Optional number of items/characters to return.",
+                },
+                "idb": {
+                    "type": "string",
+                    "description": "Optional session ID or IDB path if scoped to a specific session.",
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Optional substring or regex to search within the truncated content without paging.",
+                },
+                "is_regex": {
+                    "type": "boolean",
+                    "description": "Whether pattern should be treated as a regular expression (default false).",
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Whether search pattern matching is case-sensitive (default false).",
+                },
+                "summary": {
+                    "type": "boolean",
+                    "description": "If true, return a high-level summary of the truncated content without returning all items.",
+                },
+                "peek": {
+                    "type": "boolean",
+                    "description": "If true, inspect continuation metadata (remaining items, chunk size) without advancing offset.",
                 },
             },
             ["token"],

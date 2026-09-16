@@ -1,27 +1,89 @@
 # Segments
 
-Inspect and manage binary segments — their address ranges, permissions, and class.
+Inspect and manage binary segments and architecture segment registers.
 
-| Operation | Purpose | Required |
+Segments define memory layout, address ranges, permissions, and classes (e.g. CODE, DATA, BSS).
+Segment registers govern memory addressing modes on segmented architectures (x86 `CS`/`DS`, ARM `T`, RISC-V `GP`).
+
+---
+
+## Operations Overview
+
+| Operation | Purpose | Required Arguments |
 | --- | --- | --- |
-| `ida_list_segments()` | List all segments with name, address range, size, permissions, class, and bitness. | — |
-| `ida_add_segment(start, end, name)` | Create a new segment. Optional: `sclass` (CODE/DATA/BSS/etc.). | `start`, `end`, `name`, `risk_ack` |
-| `ida_set_segment_attrs(address, attr, value)` | Update one segment attribute: `name`, `align`, `comb`, `perm`, `bitness`, `type`, or `color`. `address` is any address inside the segment. For permissions use `attr='perm'` with a value like `'rwx'` or an integer bitmap. | `address`, `attr`, `value`, `risk_ack` |
+| `ida_list_segments` | List all segments with name, address range, size, permissions, class, and bitness. | — |
+| `ida_add_segment(start, end, name)` | Create a new segment. Optional: `sclass` (`CODE`, `DATA`, `BSS`, `CONST`, `STACK`, `XTRN`). | `start`, `end`, `name`, `risk_ack` |
+| `ida_set_segment_attrs(address, attr, value)` | Update one segment attribute: `name`, `align`, `comb`, `perm`, `bitness`, `type`, or `color`. | `address`, `attr`, `value`, `risk_ack` |
+| `ida_sreg_get(start, reg)` | Read the current segment-register value mapping for a code address. | `start`, `reg` |
+| `ida_sreg_list(start)` | List the segment-register mappings and change points in effect for an address. | `start` |
+| `ida_sreg_set(start, reg, value)` | Set the segment-register mapping for a code address or range. | `start`, `reg`, `value`, `risk_ack` |
 
-## Working pattern
+---
 
-1. `ida_list_segments` to see the current segment map — useful for raw firmware
-   where IDA may not have carved the correct regions.
-2. `ida_add_segment` to define MMIO regions, ROM/RAM boundaries, or any range
-   IDA did not create automatically.
-3. `ida_set_segment_attrs` to fix up permissions, name, bitness, or color on an
-   existing segment (e.g. mark a data region read-only with
-   `attr='perm', value='r--'` after confirming it should not be writable).
+## 1. Managing Memory Segments
 
-## Notes
+### Listing Segments
 
-- Segment writes require `risk_ack: true`.
-- `start` and `end` are hex strings (e.g. `"0x20000000"`, `"0x20010000"`).
-- `sclass` values: `CODE`, `DATA`, `BSS`, `CONST`, `STACK`, `XTRN`.
-- For firmware with a single flat ROM segment IDA will usually auto-create it;
-  use these operations when you need to split it or add synthetic regions.
+```json
+{"name": "ida_list_segments"}
+```
+
+Returns segment names, start/end addresses, permissions (e.g. `"r-x"`, `"rw-"`), class, and bitness (16/32/64).
+
+### Defining New Segments
+
+When analyzing raw firmware blobs or carving MMIO peripheral memory regions that IDA did not automatically map:
+
+```json
+{
+  "start": "0x40000000",
+  "end": "0x40010000",
+  "name": "MMIO_UART",
+  "sclass": "DATA",
+  "risk_ack": true
+}
+```
+
+### Changing Segment Permissions & Attributes
+
+To mark a segment read-only or change its alignment:
+
+```json
+{
+  "address": "0x40000000",
+  "attr": "perm",
+  "value": "r--",
+  "risk_ack": true
+}
+```
+
+Supported attributes: `perm`, `name`, `align`, `comb`, `bitness`, `type`, `color`.
+
+---
+
+## 2. Segment Registers (`sreg_*`)
+
+On architectures with mode-switching or register-relative addressing:
+
+- **ARM / Thumb mode**: The `T` register toggles between ARM (0) and Thumb (1) instruction decoding.
+- **x86 segmented mode**: `CS`, `DS`, `ES`, `FS`, `GS`, `SS` selectors.
+- **RISC-V Global Pointer (GP)**: Sets the base address for GP-relative offsets (`x3`).
+
+### Reading and Listing Segment Registers
+
+- `ida_sreg_get(start="0x1000", reg="T")`: Returns the selector value at address `0x1000`.
+- `ida_sreg_list(start="0x1000")`: Lists all registered segment register values for the range.
+
+### Setting Segment Registers
+
+```json
+{
+  "start": "0x1000",
+  "end": "0x2000",
+  "reg": "T",
+  "value": 1,
+  "risk_ack": true
+}
+```
+
+After modifying segment registers, IDA queues reanalysis for the affected region so instructions and cross-references disassemble correctly.

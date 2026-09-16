@@ -1118,11 +1118,26 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "Invalid continuation token. Check the token value.",
                 )
             token = token.strip()
-            # Truncation tokens are minted against the idb-resolved session the
-            # original call ran in (call_tool), so resolve idb here too — falling
-            # back to the shared active default only when no idb was supplied.
-            # Without this the two would drift on a multiplexed connection and a
-            # legitimately-scoped token would fail to resolve.
+            # Direct import: the truncation stores live in ..stores.truncation.
+            from ..stores.truncation import (
+                _STORE_LOCK,
+                _TRUNCATION_STORE,
+                continue_truncated,
+                peek_truncated,
+                search_truncated,
+                summary_truncated,
+            )
+
+            # Check registered token scope in store under lock so that unscoped
+            # tokens (minted before an IDB was opened or from host tools) and tokens
+            # from previously active sessions don't get rejected by ambient state drift.
+            with _STORE_LOCK:
+                raw_entry = _TRUNCATION_STORE.get(token)
+                entry_sid = raw_entry.get("session_id", "") if raw_entry else ""
+                entry_owner = raw_entry.get("owner_id", "") if raw_entry else ""
+
+            caller_owner = self._truncation_owner_id() if hasattr(self, "_truncation_owner_id") else ""
+
             sid = ""
             if args.get("idb"):
                 _trunc_target = None
@@ -1133,36 +1148,77 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 if _trunc_target is not None:
                     sid = _trunc_target.session_id
             if not sid:
-                sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
-            owner = self._truncation_owner_id() if hasattr(self, "_truncation_owner_id") else ""
-            # Direct import: the truncation stores live in ..stores.truncation.
-            # (Previously ``from . import server as _server_mod`` then
-            # ``_server_mod.continue_truncated`` — but the server module does not
-            # re-export those functions, so every continue/peek/search/summary
-            # action raised AttributeError.)
-            from ..stores.truncation import (
-                continue_truncated,
-                peek_truncated,
-                search_truncated,
-                summary_truncated,
-            )
+                if raw_entry is not None:
+                    if entry_sid:
+                        # Token is bound to an IDB session; ensure current client owns or adopts it.
+                        if hasattr(self, "_ensure_client_owns_session"):
+                            with contextlib.suppress(Exception):
+                                if hasattr(self, "_client_owns_session") and not self._client_owns_session(entry_sid):
+                                    report = self._session_ownership_report(entry_sid) if hasattr(self, "_session_ownership_report") else {}
+                                    if not report.get("locked"):
+                                        self._client_adopt_session(entry_sid)
+                        sid = entry_sid
+                    else:
+                        # Unscoped token: keep sid empty so _get_entry doesn't fail closed.
+                        sid = ""
+                else:
+                    # Token not in store: fall back to current session.
+                    sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
+
+            if raw_entry is not None:
+                if entry_owner:
+                    entry_base = entry_owner.split(":", 1)[0]
+                    caller_base = caller_owner.split(":", 1)[0]
+                    if caller_owner == entry_owner or (caller_base and caller_base == entry_base):
+                        owner = entry_owner
+                    else:
+                        owner = caller_owner
+                else:
+                    owner = ""
+            else:
+                owner = caller_owner
 
             if action == "continue":
-                field = args.get("field")
-                offset = args.get("offset")
-                count = args.get("count")
-                result = continue_truncated(
-                    token,
-                    field=field if isinstance(field, str) else None,
-                    offset=_bounded_int(offset, 0, min_value=0, max_value=500000)
-                    if offset is not None
-                    else None,
-                    count=_bounded_int(count, 0, min_value=1, max_value=5000)
-                    if count is not None
-                    else None,
-                    session_id=sid,
-                    owner_id=owner,
-                )
+                if args.get("pattern") or args.get("query"):
+                    pattern = str(args.get("pattern") or args.get("query") or "").strip()
+                    field = args.get("field")
+                    result = search_truncated(
+                        token,
+                        pattern=pattern,
+                        field=field if isinstance(field, str) else None,
+                        is_regex=_coerce_bool(args.get("is_regex"), False),
+                        case_sensitive=_coerce_bool(args.get("case_sensitive"), False),
+                        limit=_bounded_int(args.get("count") or args.get("limit", 50), 50, min_value=1, max_value=500),
+                        session_id=sid,
+                        owner_id=owner,
+                    )
+                elif _coerce_bool(args.get("summary"), False):
+                    field = args.get("field")
+                    result = summary_truncated(
+                        token,
+                        field=field if isinstance(field, str) else None,
+                        limit=_bounded_int(args.get("count") or args.get("limit", 20), 20, min_value=1, max_value=100),
+                        session_id=sid,
+                        owner_id=owner,
+                    )
+                elif _coerce_bool(args.get("peek"), False):
+                    result = peek_truncated(token, session_id=sid, owner_id=owner)
+                else:
+                    field = args.get("field")
+                    offset = args.get("offset")
+                    count = args.get("count")
+                    result = continue_truncated(
+                        token,
+                        field=field if isinstance(field, str) else None,
+                        offset=_bounded_int(offset, 0, min_value=0, max_value=500000)
+                        if offset is not None
+                        else None,
+                        count=_bounded_int(count, 0, min_value=1, max_value=5000)
+                        if count is not None
+                        else None,
+                        session_id=sid,
+                        owner_id=owner,
+                    )
             elif action == "peek":
                 result = peek_truncated(token, session_id=sid, owner_id=owner)
             elif action == "search":

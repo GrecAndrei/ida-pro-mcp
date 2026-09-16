@@ -5,13 +5,25 @@ Meta-operations.
 | Operation | Purpose |
 | --- | --- |
 | `ida_help(query=...)` | Exact contract and example for an operation, or search the catalog. |
-| `ida_continue(token)` | Continue a truncated result (`_continue.token` / `_continue.fields`). |
+| `ida_continue(token)` | Continue a truncated result, search within it, or inspect metadata (`_continue.token` / `_continue.fields`). |
 | `ida_python(code)` | Execute a Python expression in the active IDA process. `risk_ack` required. Blocked in safe mode. Pass `idb=<session_id>` on a shared connection to target a specific session. |
 
 Prefer `ida_help` over guessing an operation's arguments — every operation
 has a strict schema and a validating example. Responses can be truncated to
-bound token usage; `ida_continue` fetches the rest without re-running the
-operation.
+bound token usage; `ida_continue` fetches subsequent chunks without re-running
+the original operation:
+
+- **Sliding-window TTL**: Tokens remain valid for 1 hour from creation or last
+  access, refreshed automatically on every continuation call. The host LRU cache
+  retains up to 500 active tokens.
+- **Search within truncated results**: Pass `pattern="needle"` (with optional
+  `is_regex: true` and `case_sensitive: true`) to grep within the full stored
+  response without materializing every intermediate chunk.
+- **Inspect metadata & summary**: Pass `peek: true` to view remaining counts and
+  TTL without advancing the cursor, or `summary: true` for structural breakdowns.
+- **Session safety**: Pass `idb=<session_id>` if targeting a specific session on
+  a multi-session connection. Unscoped and previous-session tokens resolve
+  cleanly without false expiration from ambient session switches.
 
 `ida_python` is the escape hatch for anything the surface does not cover. It
 runs arbitrary code inside IDA, so it requires `risk_ack: true`, is gated by

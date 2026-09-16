@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from ida_pro_mcp.host.errors import _RECOVERY_ACTIONS, MCPError, make_error
 from ida_pro_mcp.host.stores.truncation import (
+    _MAX_TRUNCATION_STORE,
     _TOKEN_TTL_SEC,
     _TRUNCATION_ORDER,
     _TRUNCATION_STORE,
@@ -356,7 +357,7 @@ class TestTruncationStoreEviction(unittest.TestCase):
 
     def test_evicts_oldest(self):
         tokens = []
-        for i in range(55):  # More than _MAX_TRUNCATION_STORE (50)
+        for i in range(_MAX_TRUNCATION_STORE + 5):  # Exceed store capacity
             t = _store_truncation({"i": i}, {"i": {"type": "list", "total": 1, "chunk_size": 1, "next_offset": 1}})
             tokens.append(t)
         # First tokens should be evicted

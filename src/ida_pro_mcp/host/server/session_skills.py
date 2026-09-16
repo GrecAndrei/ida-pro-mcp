@@ -19,36 +19,37 @@ _ANALYSIS_PHASES = {
     "triage": {
         "order": 0,
         "threshold": {"functions_listed": 1, "strings_listed": 1, "imports_listed": 1},
-        "suggested_tools": ["idb.summary", "data.imports", "data.strings"],
+        "suggested_tools": ["ida_overview", "ida_list_imports", "ida_list_strings"],
         "description": "Initial triage: identify binary type, imports, and suspicious strings.",
     },
     "import_analysis": {
         "order": 1,
         "threshold": {"imports_categorized": 20, "api_patterns_detected": 1},
-        "suggested_tools": ["imports_deep.thunks", "data.imports"],
+        "suggested_tools": ["ida_list_imports", "ida_find"],
         "description": "Categorize imports and detect API usage patterns.",
     },
     "deep_analysis": {
         "order": 2,
         "threshold": {"functions_decompiled": 10, "function_attrs_indexed": 1},
-        "suggested_tools": ["code.decompile", "ctree.get"],
+        "suggested_tools": ["ida_decompile", "ida_disassemble"],
         "description": "Deep decompilation and semantic analysis.",
     },
     "behavior_mapping": {
         "order": 3,
         "threshold": {"functions_analyzed": 50, "xrefs_traced": 30},
+        "suggested_tools": ["ida_callgraph", "ida_xrefs_to", "ida_callers", "ida_callees"],
         "description": "Map control flow and cross-reference chains.",
     },
     "vulnerability": {
         "order": 4,
         "threshold": {"functions_analyzed": 100, "dangerous_apis_identified": 5},
-        "suggested_tools": ["gadgets.find", "stack_analysis.analyze_frame"],
+        "suggested_tools": ["ida_mark_dangerous", "ida_find", "ida_search_query_lang"],
         "description": "Vulnerability and exploit analysis.",
     },
     "reporting": {
         "order": 5,
         "threshold": {"bookmarks_created": 5},
-        "suggested_tools": ["blackboard.export", "session.notebook"],
+        "suggested_tools": ["ida_export_findings", "ida_analysis_brief", "ida_list_findings"],
         "description": "Compile findings and produce report.",
     },
 }

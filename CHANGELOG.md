@@ -1,3 +1,10 @@
+## 2026-09-16 — Overhaul truncation pagination and sync full agent operation documentation
+
+- Fixed premature and inconvenient truncation token expiration: extended default token TTL to 1 hour with sliding-window refresh on access, expanded in-memory store capacity to 500 with LRU eviction, and added `has_more` and `done` pagination indicators.
+- Fixed session resolution for continuation: unscoped tokens and tokens from previously active sessions now resolve cleanly without fail-closed rejection due to ambient session switching.
+- Enhanced `ida_continue`: added support for in-flight search via `pattern`, `is_regex`, and `case_sensitive`, structural breakdowns via `summary=True`, metadata inspection via `peek=True`, and explicit session scoping via optional `idb`.
+- Synchronized complete documentation across `docs/wiki/` and internal session skill phases to fully cover all 109 public `ida_*` catalog operations, eliminating obsolete legacy/dot-notation references and adding `test_wiki_covers_every_public_operation()`.
+
 ## 2026-09-12 — Honor authored release notes in the alpha release workflow
 
 - The protected `publish` job had no checkout, so

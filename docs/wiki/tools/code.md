@@ -1,32 +1,113 @@
 # Code
 
-Decompilation, disassembly, references, and raw memory inspection.
+Decompilation, disassembly, call graphs, cross-references, memory inspection,
+cross-session function comparison, whole-binary diff triage, emulation, and type inspection.
 
-| Operation | Purpose | Required |
+Every operation accepts an optional `idb` parameter targeting a specific session.
+
+---
+
+## Operations Overview
+
+| Operation | Purpose | Required Arguments |
 | --- | --- | --- |
 | `ida_decompile(address)` | Decompile one function with bounded CFG and ctree-derived structural evidence. | `address` |
-| `ida_disassemble(address)` | Disassemble a function or range (`end`), in `csmini`/`classic`/`annotated` styles. | `address` |
-| `ida_xrefs_to(address)` | Cross-references to a function, data item, or address. | `address` |
-| `ida_callers(address)` | Functions that call the target. | `address` |
-| `ida_callees(address)` | Functions called by the target. | `address` |
-| `ida_read_bytes(address, size)` | Read raw bytes at any address as a hex dump with ASCII preview (max 4096 bytes). | `address`, `size` |
-| `ida_callgraph(address)` | Export a call graph rooted at a function. `direction` is `down`/`up`/`both`, `depth` controls traversal depth, `format` is `mermaid`/`json`/`dot`. | `address` |
+| `ida_disassemble(address)` | Disassemble a function or address range (`end`), in `csmini`, `classic`, or `annotated` style. | `address` |
+| `ida_xrefs_to(address)` | Cross-references targeting a function, data item, or code address. | `address` |
+| `ida_callers(address)` | List functions that call the target function. | `address` |
+| `ida_callees(address)` | List functions called by the target function. | `address` |
+| `ida_read_bytes(address, size)` | Read raw bytes at an address as a formatted hex dump with ASCII preview (max 4096 bytes). | `address`, `size` |
+| `ida_callgraph(address)` | Export a call graph rooted at a function (`direction="down"\|"up"\|"both"`, `format="mermaid"\|"json"\|"dot"`). | `address` |
+| `ida_compare_functions(left_session, left_address, right_session, right_address)` | Unified pseudocode diff comparing two functions across open IDA sessions. | `left_session`, `left_address`, `right_session`, `right_address` |
+| `ida_diff_sessions(left_session, right_session)` | Automated whole-session function inventory matching and change triage across two open sessions. | `left_session`, `right_session` |
+| `ida_emulate(action, address=...)` | Drive IDA's built-in emulator/debugger (`ida_dbg`) end to end. Mutating actions require `risk_ack: true`. | `action` |
+| `ida_get_type(name)` | Inspect the full layout of a struct, enum, or typedef (members, offsets, sizes, and nested types). | `name` |
 
-`address` accepts a function name or a hexadecimal address (e.g.
-`0x401000`). Single-function decompilation is small-area work and stays
-available in safe mode; `ida_decompile` responses include call-target
-evidence when available.
+---
 
-`ida_read_bytes` is useful when you need to verify the raw bytes at an
-address — e.g. to confirm a patch, inspect a header, or check bytes that
-IDA has not yet made code. `ida_callgraph` builds the full reachability
-tree; use `max_nodes` to cap output size for large binaries.
+## 1. Decompilation & Disassembly
 
-## Working pattern
+`address` accepts a function name (e.g. `"parse_packet"`) or a hex address string (e.g. `"0x401000"`).
+Single-function decompilation is small-area work and remains available even when a session is in safe mode.
 
-1. `ida_decompile` or `ida_disassemble` the function.
-2. Follow `ida_xrefs_to` / `ida_callers` to find where it is used.
-3. `ida_callees` or `ida_callgraph` to map what it reaches.
-4. `ida_read_bytes` to inspect raw memory when the disassembly is ambiguous.
-5. Record what you learned with `ida_write_finding` (see
-   [Investigation](../core/investigation.md)).
+`ida_decompile` responses include:
+- `pseudocode`: Clean, decompiled C-like pseudocode.
+- `structure`: Structural evidence summarizing CFG shape, cyclomatic complexity, loops, and call targets.
+- `api_calls`: APIs invoked by this function.
+
+`ida_disassemble` accepts `style`:
+- `csmini`: Compact summary with instruction count, basic blocks, and call targets.
+- `classic`: Standard IDA assembly listing text.
+- `annotated`: Assembly with decoded operands, comments, and resolved cross-references.
+
+---
+
+## 2. Call Trees & Graph Analysis
+
+- `ida_callers(address)`: Inbound call sites. Answers: *Who reaches this function?*
+- `ida_callees(address)`: Outbound calls. Answers: *What does this function invoke?*
+- `ida_xrefs_to(address)`: Complete cross-references including data reads, writes, and code jumps.
+- `ida_callgraph(address, direction="both", depth=2, format="mermaid")`: Generates a visual call graph.
+  `format="mermaid"` is ideal for markdown rendering in agent artifacts; `format="json"` is best for programmatic exploration.
+
+---
+
+## 3. Cross-Session Function Comparison & Diff Triage
+
+When validating a patch, triaging a new firmware release, or auditing malware variants:
+
+### Comparing Single Functions (`ida_compare_functions`)
+
+```json
+{
+  "left_session": "SID_VULNERABLE",
+  "left_address": "0x401200",
+  "right_session": "SID_PATCHED",
+  "right_address": "0x401450",
+  "normalize": true
+}
+```
+
+Decompiles in both runtimes and computes a bounded unified diff. When `normalize=true` (default), function names, autogenerated address labels, and whitespace differences are normalized away so only substantive logical changes appear. Numeric constants (e.g. buffer sizes, masks, loop bounds) are deliberately preserved so security fixes remain distinct.
+
+### Whole-Session Binary Diff (`ida_diff_sessions`)
+
+```json
+{
+  "left_session": "SID_BASELINE",
+  "right_session": "SID_CANDIDATE",
+  "query": "net_",
+  "match_strategy": "auto"
+}
+```
+
+Inventories and matches functions across both binaries using name stability, relocation-tolerant normalized text, addresses, and bounded fuzzy similarity. Modified pairs are ranked by `change_score`, highlighting added or removed calls and constants, and listing functions exclusive to either binary.
+
+---
+
+## 4. Emulation (`ida_emulate`)
+
+`ida_emulate` provides structured execution through IDA's built-in debugger engine (`ida_dbg`), auto-selecting the best available backend (`builtin` candidates, then `native`):
+
+- **Read actions**: `info`, `backend`, `state`, `get_reg`, `read_mem`.
+- **Execution actions**: `start`, `step` (`mode="into"|"over"|"ret"`, `count=1`), `run_to`, `suspend`, `continue`, `stop`.
+- **State mutation actions**: `set_reg`, `set_mem`.
+
+Mutating actions require `risk_ack: true`.
+
+---
+
+## 5. Memory Inspection & Type Verification
+
+- `ida_read_bytes(address="0x401000", size=64)`: Returns a hex dump with ASCII representation. Crucial for verifying raw structures, headers, or instructions before patching.
+- `ida_get_type(name="pkt_header")`: Displays the declared struct or enum member layout and offsets. See [Types](types.md) for declaring and applying types.
+
+---
+
+## Recommended Analysis Flow
+
+1. `ida_decompile(address="...")` or `ida_disassemble(address="...")` to examine logic.
+2. `ida_xrefs_to` / `ida_callers` to trace how execution reaches the function.
+3. `ida_callees` or `ida_callgraph` to trace downstream operations.
+4. `ida_read_bytes` when raw memory or alignment needs inspection.
+5. Record observations with `ida_write_finding` (see [Investigation](../core/investigation.md)).

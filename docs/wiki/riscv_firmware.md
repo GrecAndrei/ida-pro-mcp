@@ -17,21 +17,22 @@ each returns on the fixture so you know what "sane" looks like.
    `file_kind: raw`, `raw_binary_mode: true`, a riscv-first candidate with an
    RV64 lean, and `inferred_load_base: 0x80000000` when the dominant lui/auipc
    hi20 resolves.
-2. `ida_analysis(action="set_architecture", processor="riscv", bitness=64)`
-   → switches the processor and emits RISC-V arch hints (incl. the GP note).
-3. `ida_analysis(action="set_gp", gp="0x80002000")` → sets the global pointer
-   so GP-relative xrefs resolve, queues reanalysis.
-4. `ida_segments(action="sreg_set", start="0x80000000", reg="GP", value=...)`
-   → same GP value via the segment-register seam (pick one; both write the
-   same processor state).
-5. `ida_analysis(action="add_entry", addr=..., ordinal=..., name=...)` →
-   promote a bootstrapped reset-vector / ISR candidate to a real entry.
-6. `ida_modify(action="create_data", addr=..., item_type="array", count=...)`
-   and `ida_modify(action="create_strlit", addr=..., size=..., strtype="c")`
+2. `ida_open_binary(binary_path="/path/to/fw.bin", processor="riscv", bitness=64, baseaddr="0x80000000")`
+   → opens with the inferred processor, bitness, and base address.
+   (For legacy clients, `analysis(action="set_architecture", processor="riscv", bitness=64)`
+   and `analysis(action="set_gp", gp="0x80002000")` remain available).
+3. `ida_sreg_set(start="0x80000000", reg="GP", value="0x80002000", risk_ack=true)`
+   → configures segment registers where applicable (or use `analysis(action="set_gp")`
+   on the legacy surface to repoint GP-relative data references).
+4. `ida_add_entry(address="0x80000020", name="reset", risk_ack=true)` →
+   promote a bootstrapped reset-vector / ISR candidate to a real entry point.
+5. `ida_create_data(address="0x80000008", item_type="array", count=4, risk_ack=true)`
+   and `ida_create_strlit(address="0x800000c5", size=6, strtype="c", risk_ack=true)`
    → lay pointer arrays and string literals over the raw bytes so the blob
    becomes analyzable without redeclaring types.
-7. `ida_disassemble` / `ida_decompile` on the seeded functions; `ida_r2_*`
-   triage ops when the embedded disassembler needs a second opinion.
+6. `ida_disassemble` / `ida_decompile` on the seeded functions; `ida_r2_*`
+   triage ops (`ida_r2_bininfo`, `ida_r2_load_hints`, `ida_r2_disassemble_hypothesis`)
+   when the disassembler needs a second opinion.
 
 ## Architecture inference on a raw blob
 
@@ -66,12 +67,12 @@ points) are present so the agent does not trust the guess blindly.
 The fixture's trap vector table at offset `0x08` holds six LE u32 absolute VAs
 into the 0x80000000-linked image (`0x80000020`, `0x80000078`, `0x80000094`,
 `0x80000058`, `0`, `0`).  These are the exact pointers
-`ida_analysis(action="...")`'s entry bootstrap (`_bootstrap_raw_entry_points`)
-and the sreg/data authoring ops consume:
+the entry bootstrap (`_bootstrap_raw_entry_points`)
+and the sreg/data authoring operations consume:
 
-- `add_entry` promotes a candidate to a real IDA entry (`ida_entry.add_entry`).
-- `create_data(item_type="array")` lays 4 dwords over the table.
-- `set_gp` / `sreg_set GP` make the GP-relative `lw`/`ld` in the ISRs resolve.
+- `ida_add_entry` promotes a candidate to a real IDA entry (`ida_entry.add_entry`).
+- `ida_create_data(item_type="array")` lays 4 dwords over the table.
+- `ida_sreg_set` with GP (or `set_gp` on the legacy surface) makes the GP-relative `lw`/`ld` in the ISRs resolve.
 
 ## Working pattern, step by step
 
@@ -111,27 +112,38 @@ entrypoints_note:   no entry points detected (raw blob / no vector table) ...
 `file_type` in `{raw, unknown, bin, binary, obj}` or `file_type_id` in
 `{0, 2, 17}`.
 
-### 3. Set the architecture explicitly
+### 3. Open or configure the architecture explicitly
+
+Pass the processor, bitness, and base address directly to `ida_open_binary`:
 
 ```
-ida_analysis(action="set_architecture", processor="riscv", bitness=64, endian="little")
+ida_open_binary(binary_path="/path/to/fw.bin", processor="riscv", bitness=64, baseaddr="0x80000000")
 ```
 
-Returns `{ok, applied: {processor: {value: riscv, previous: metapc, result: true},
+For legacy surface callers, `analysis(action="set_architecture", processor="riscv", bitness=64, endian="little")`
+switches the processor on an existing session and returns `{ok, applied: {processor: {value: riscv, previous: metapc, result: true},
 bitness: 64, arch_hints: {ptr_size: 8, riscv_note: "RISC-V: GP (x3) unresolved?
-run analysis(action='set_gp', gp=...) ..."}}}`.  The `riscv_note` is the 
-wiki-recipe breadcrumb: set GP next.
+run analysis(action='set_gp', gp=...) ..."}}}`. The `riscv_note` is the
+wiki-recipe breadcrumb: configure GP next.
 
 ### 4. Set the global pointer (GP, x3)
 
+On the legacy surface:
+
 ```
-ida_analysis(action="set_gp", gp="0x80002000")
+analysis(action="set_gp", gp="0x80002000")
+```
+
+Or configure via the segment-register seam where supported:
+
+```
+ida_sreg_set(start="0x80000000", reg="GP", value="0x80002000", risk_ack=true)
 ```
 
 `set_gp` is RISC-V-only; on a non-RISC-V target it returns
-`INVALID_ARGS`/`only valid for RISC-V`.  On success it persists the value in
+`INVALID_ARGS`/`only valid for RISC-V`. On success it persists the value in
 a netnode so it survives IDB reload (reanalysis is queued only on the
-GUI-directive path — see below).  The `_APPLIED_RISCV_GP` cache means a
+GUI-directive path — see below). The `_APPLIED_RISCV_GP` cache means a
 re-apply is skipped after the first successful set this session.
 
 **Headless behavior (verified live on 9.3 and 9.4, 2026-08-12):**
@@ -142,22 +154,22 @@ Instead the tool **re-points the GP-relative data refs itself**: IDA decodes
 GP-relative loads/stores as `o_displ` operands whose base is x3/GP and
 creates data refs against an implicit GP of 0 — the raw sign-extended
 displacement (e.g. `ld a3, -7FFFFFE0h` gains a ref to `0xffffffff80000020`
-instead of `0x40`).  `set_gp` scans the segments, computes
+instead of `0x40`). `set_gp` scans the segments, computes
 `target = GP + disp` masked to the XLEN, and re-points each stale ref
 (`ida_xref.del_dref` + `add_dref`, `dr_R` for loads / `dr_W` for stores).
 Unmapped targets are skipped; existing correct refs (GUI-style resolution)
 are left alone; changing GP cleans up the refs created for the previous
-value.  The response reports `refs_fixed` / `refs_skipped`, and
-`xrefs_to` / `ida_calc` then resolve correctly in headless sessions.
+value. The response reports `refs_fixed` / `refs_skipped`, and
+`ida_xrefs_to` / `ida_calc_offset` then resolve correctly in headless sessions.
 
 > **No sreg seam exists for GP** (verified live on 9.3/9.4): RISC-V
 > registers zero segment registers (`ida_idp.get_sreg_names()` empty;
 > `split_sreg_range`/`set_default_sreg_value_ea` reject x3 as "wrong
-> segment register number"), so `ida_segments(action="sreg_set", reg="GP")
-> ` errors out — the ARM-Thumb-style `T` seam does not apply to GP.  Use
+> segment register number"), so `ida_sreg_set(reg="GP", ...)`
+> errors out on pure RISC-V targets — the ARM-Thumb-style `T` seam does not apply to GP. Use
 > `set_gp` (above) instead.
 
-`sreg_get` on an untouched register returns `value: BADSEL` (-1); `sreg_set`
+`ida_sreg_get` on an untouched register returns `value: BADSEL` (-1); `ida_sreg_set`
 on an unmapped address is rejected with `ADDRESS_NOT_MAPPED`.
 
 ### 5. Bootstrap entry points
@@ -165,7 +177,7 @@ on an unmapped address is rejected with `ADDRESS_NOT_MAPPED`.
 For raw blobs with no entry points, `_bootstrap_raw_entry_points` scans the
 image head: the reset-vector `j`/`jal` branch at offset 0 (or the
 `auipc`+`jalr` long branch), then LE u32, BE u32, and LE u16 (compressed c.j)
-ISR pointer tables.  On the fixture this seeds the reset handler
+ISR pointer tables. On the fixture this seeds the reset handler
 (`0x80000020`) plus the vector-table ISR targets (`0x80000078`,
 `0x80000094`, `0x80000058`) as code, wraps them in functions, and registers
 them via `ida_entry.add_entry`.
@@ -173,22 +185,22 @@ them via `ida_entry.add_entry`.
 Promote one to a named entry:
 
 ```
-ida_analysis(action="add_entry", addr="0x80000020", ordinal=1, name="reset")
+ida_add_entry(address="0x80000020", name="reset", risk_ack=true)
 ```
 
 ### 6. Author data over the raw bytes
 
 ```
-ida_modify(action="create_data", addr="0x80000008", item_type="array", count=4)
+ida_create_data(address="0x80000008", item_type="array", count=4, risk_ack=true)
 # -> {ok, item_type: array, count: 4, size: 16, end: 0x80000018}
 
-ida_modify(action="create_strlit", addr="0x800000c5", size=6, strtype="c")
+ida_create_strlit(address="0x800000c5", size=6, strtype="c", risk_ack=true)
 # -> {ok, size: 6, length: 6}
 ```
 
 `create_data` item types: `byte|word|dword|qword|pointer|array` (`array` lays
-`count` dword elements — ideal for a vector/MMIO table).  `create_strlit`
-covers `[addr, addr+size)` with `strtype` `c|c16|c32`.  Unknown `item_type` /
+`count` dword elements — ideal for a vector/MMIO table). `create_strlit`
+covers `[addr, addr+size)` with `strtype` `c|c16|c32`. Unknown `item_type` /
 missing `size` return `INVALID_ARGS`.
 
 ### 7. Triage with r2/rz when needed

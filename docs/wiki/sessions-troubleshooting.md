@@ -51,7 +51,10 @@ lease cleanup; verify the ownership report first.
 
 Responses may include `_continue`. Call `ida_continue` with the returned token
 and fields rather than repeating the original operation. Repeating can redo
-expensive analysis and may produce a different state after an edit.
+expensive analysis and may produce a different state after an edit. Continuation
+tokens have a 1-hour sliding TTL refreshed on every continuation call, retain up
+to 500 active tokens in the host store, and support in-flight search via
+`pattern="..."` without retrieving all chunks.
 
 ## A semantic search is unavailable
 
