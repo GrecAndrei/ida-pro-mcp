@@ -721,17 +721,25 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
 
             rationale_by_call = {
                 "idb.overview": "Establishes binary orientation and high-signal context before deep tooling.",
+                "ida_overview": "Establishes binary orientation and high-signal context before deep tooling.",
                 "idb.meta": "Captures format/arch/base metadata used by downstream interpretation.",
                 "data.functions": "Builds a function inventory for navigation and prioritization.",
+                "ida_list_functions": "Builds a function inventory for navigation and prioritization.",
                 "data.imports": "Highlights external capability surface and potential behavior anchors.",
+                "ida_list_imports": "Highlights external capability surface and potential behavior anchors.",
                 "gadgets.rop": "Maps exploit-relevant gadget surface for memory corruption risk analysis.",
                 "search.vulnerable": "Finds dangerous API/use patterns tied to common vulnerability classes.",
+                "ida_mark_dangerous": "Finds dangerous API/use patterns tied to common vulnerability classes.",
                 "search.structured": "Uses schema-guided retrieval to find semantically constrained candidates.",
+                "ida_search_query_lang": "Uses schema-guided retrieval to find semantically constrained candidates.",
                 "llm_helpers.focus_area": "Identifies the most interesting area to analyze next.",
                 "code.disasm": "Gets opcode-level view at target address for patch semantics.",
+                "ida_disassemble": "Gets opcode-level view at target address for patch semantics.",
                 "code.xrefs_to": "Shows inbound dependency impact into the patch location.",
+                "ida_xrefs_to": "Shows inbound dependency impact into the patch location.",
                 "code.xrefs_from": "Shows outbound behavior impact from patched block.",
                 "graph.dependency_graph": "Summarizes near-neighbor call/data dependencies around patch.",
+                "ida_callgraph": "Summarizes near-neighbor call/data dependencies around patch.",
             }
             explained_steps = []
             for idx, call in enumerate(calls):
@@ -740,7 +748,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 name = str(call.get("name") or "").strip()
                 args_obj = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
                 action_name = str((args_obj or {}).get("action") or "").strip()
-                key = f"{name}.{action_name}"
+                key = f"{name}.{action_name}" if action_name else name
                 explained_steps.append(
                     {
                         "index": idx,
@@ -749,7 +757,10 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                         "call": key,
                         "rationale": rationale_by_call.get(
                             key,
-                            "Included by workflow profile as a high-value analysis step.",
+                            rationale_by_call.get(
+                                name,
+                                "Included by workflow profile as a high-value analysis step.",
+                            ),
                         ),
                     }
                 )

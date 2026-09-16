@@ -928,9 +928,14 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 unique_actions.add(key)
                 tool_action_counts[key] = tool_action_counts.get(key, 0) + 1
 
-            # Calculate completion indicators
-            functions_decompiled = tool_action_counts.get("code.decompile", 0) + tool_action_counts.get("code.semantic_decompile", 0)
-            searches_performed = sum(v for k, v in tool_action_counts.items() if k.startswith(("search.", "data.")))
+            # Calculate completion indicators across both agent and legacy surfaces
+            functions_decompiled = sum(
+                v for k, v in tool_action_counts.items() if "decompile" in k
+            )
+            searches_performed = sum(
+                v for k, v in tool_action_counts.items()
+                if k.startswith(("search.", "data.", "ida_find", "ida_search")) or "search" in k
+            )
             xrefs_traced = sum(v for k, v in tool_action_counts.items() if "xref" in k)
 
             return {

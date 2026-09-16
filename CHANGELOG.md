@@ -4,6 +4,7 @@
 - Fixed session resolution for continuation: unscoped tokens and tokens from previously active sessions now resolve cleanly without fail-closed rejection due to ambient session switching.
 - Enhanced `ida_continue`: added support for in-flight search via `pattern`, `is_regex`, and `case_sensitive`, structural breakdowns via `summary=True`, metadata inspection via `peek=True`, and explicit session scoping via optional `idb`.
 - Synchronized complete documentation across `docs/wiki/` and internal session skill phases to fully cover all 109 public `ida_*` catalog operations, eliminating obsolete legacy/dot-notation references and adding `test_wiki_covers_every_public_operation()`.
+- Added public `ida_*` operation mappings to workflow step rationales and session skill dashboard activity indicators.
 
 ## 2026-09-12 — Honor authored release notes in the alpha release workflow
 
