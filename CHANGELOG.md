@@ -1,3 +1,11 @@
+## 2026-09-20 — Add alpha-release promotion assets
+
+- Added a reusable launch graphic and factual promotion kit for the v1.0.0a3
+  campaign.
+- Improved the README's above-the-fold presentation with the launch graphic
+  and a concise summary of the deterministic surface, local-first runtime,
+  evidence workspace, policy gates, and client coverage.
+
 ## 2026-09-16 — Overhaul truncation pagination and sync full agent operation documentation
 
 - Fixed premature and inconvenient truncation token expiration: extended default token TTL to 1 hour with sliding-window refresh on access, expanded in-memory store capacity to 500 with LRU eviction, and added `has_more` and `done` pagination indicators.
