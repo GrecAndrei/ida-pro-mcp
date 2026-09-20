@@ -12,7 +12,7 @@ context windows small. The IDA-side tool modules live in ``ida_mcp/tools/``
   stack_analysis, annotation, blackboard, governance, knowledge, batch,
   analysis, calc, firmware
 
-Host-side session/batch/workflow/r2 tools are defined in the ``host`` package.
+Host-side session/batch/workflow tools are defined in the ``host`` package.
 Shared helpers live in ``ida_mcp/tools/_common.py`` and ``ida_mcp/support/``;
 the sync/cache/rpc/error-handling infrastructure in this package is what the
 IDA plugin runtime uses.

@@ -4,7 +4,7 @@ Where the catalog smoke proves *every* operation answers correctly with its
 documented example, this suite proves the operations do the *right thing*:
 exact decompile/disassembly shapes, calc semantics, type round-trips,
 findings lifecycle, mutation→verify→restore round-trips, session management,
-batch bindings, the r2 sidecar, firmware heuristics, and the python tool.
+batch bindings, firmware heuristics, and the python tool.
 
 One module-scoped session over a deterministic fixture; mutations restore
 themselves so the shared session stays coherent. Opt-in like the other live
@@ -652,42 +652,6 @@ class TestPythonTool:
         payload = ctx.call("ida_python", {"code": "raise RuntimeError('boom')", "risk_ack": True})
         assert payload.get("error") is True
         assert isinstance(payload.get("code"), str), payload
-
-
-# ---------------------------------------------------------------------------
-# r2 sidecar (availability-dependent)
-# ---------------------------------------------------------------------------
-
-class TestR2Sidecar:
-    def _r2_available(self, ctx: BehaviorContext) -> bool:
-        payload = ctx.call("ida_r2_status", {})
-        return payload.get("ok") is True and payload.get("error") is not True
-
-    def test_r2_status_reports(self, ctx: BehaviorContext):
-        payload = ctx.call("ida_r2_status", {})
-        assert payload.get("error") is not True or isinstance(payload.get("code"), str), payload
-
-    def test_r2_bininfo_when_available(self, ctx: BehaviorContext):
-        if not self._r2_available(ctx):
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.ok("ida_r2_bininfo", {})
-        assert payload.get("arch") or payload.get("bits") or payload.get("entry"), payload
-
-    def test_r2_load_hints_when_available(self, ctx: BehaviorContext):
-        if not self._r2_available(ctx):
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.ok("ida_r2_load_hints", {})
-        assert isinstance(payload.get("hints"), list) or payload.get("ok") is True, payload
-
-    def test_r2_disassemble_at_file_offset(self, ctx: BehaviorContext):
-        if not self._r2_available(ctx):
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.ok("ida_r2_disassemble_hypothesis", {"address": "0x0", "count": 8})
-        hypotheses = payload.get("hypotheses") or []
-        assert hypotheses, payload
-        for hypothesis in hypotheses:
-            assert "instructions" in hypothesis, payload
-            assert "arch" in hypothesis, payload
 
 
 # ---------------------------------------------------------------------------

@@ -454,52 +454,6 @@ def _bounded_int(
     return v
 
 
-# ---------------------------------------------------------------------------
-# Optional radare2/Rizin subprocess engine (Architecture A, Phase 1)
-#
-# Default-off host-side triage co-processor. Every op is a per-call stateless
-# one-shot over the raw binary path — it never writes the IDB and runs whether
-# or not IDA is alive (including during safe_mode). ``IDA_MCP_R2_BIN`` selects
-# the engine executable (Rizin's ``rz`` preferred, then radare2's ``r2``);
-# ``IDA_MCP_R2_BININFO_BIN`` selects the metadata sibling (``rz-bin`` then
-# ``rabin2``). ``R2_TIMEOUT_SECONDS`` is the per-subprocess wall-clock cap.
-# ``R2_ESIL_MAX_STEPS`` is reserved for the Phase-3 emulation ops and is a
-# no-op today. ``R2_PRE_ANALYSIS`` (default on) gates host-side load_hints
-# computation; it degrades gracefully when the binary is missing.
-# ---------------------------------------------------------------------------
-def _resolve_r2_bin() -> str:
-    override = os.environ.get("IDA_MCP_R2_BIN")
-    if override:
-        return str(override).strip() or "r2"
-    rz = shutil.which("rz")
-    if rz:
-        return rz
-    r2 = shutil.which("r2")
-    if r2:
-        return r2
-    return "r2"  # last-resort name; status() reports unavailable if missing
-
-
-def _resolve_r2_bininfo_bin() -> str:
-    override = os.environ.get("IDA_MCP_R2_BININFO_BIN")
-    if override:
-        return str(override).strip() or "rabin2"
-    rzbin = shutil.which("rz-bin")
-    if rzbin:
-        return rzbin
-    rabin2 = shutil.which("rabin2")
-    if rabin2:
-        return rabin2
-    return "rabin2"
-
-
-R2_BIN = _resolve_r2_bin()
-R2_BININFO_BIN = _resolve_r2_bininfo_bin()
-R2_TIMEOUT_SECONDS = _env_float("IDA_MCP_R2_TIMEOUT_SEC", 30.0, min_value=1.0)
-R2_ESIL_MAX_STEPS = _env_int("IDA_MCP_R2_ESIL_MAX_STEPS", 0, min_value=0)
-R2_PRE_ANALYSIS = _env_bool("IDA_MCP_R2_PRE_ANALYSIS", True)
-
-
 def _parse_str_list(value: Any) -> list[str]:
     from .intelligence.helpers import parse_str_list
     return parse_str_list(value)

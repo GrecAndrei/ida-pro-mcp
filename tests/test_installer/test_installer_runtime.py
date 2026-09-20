@@ -22,7 +22,6 @@ from ida_pro_mcp.installer.runtime import (
     find_idalib_python_dir,
     get_install_root,
     kill_ida_processes,
-    resolve_r2_binary,
     run_checked,
     stage_sigs,
 )
@@ -104,22 +103,6 @@ def test_run_checked_success_and_failure() -> None:
 def test_kill_ida_processes() -> None:
     ok = kill_ida_processes(binary_path=None)
     assert isinstance(ok, bool)
-
-
-def test_resolve_r2_binary(tmp_path: Path) -> None:
-    fake_rz = tmp_path / ("rz.exe" if sys.platform == "win32" else "rz")
-    fake_rz.write_bytes(b"")
-    fake_rz.chmod(0o755)
-
-    with patch("shutil.which", return_value=str(fake_rz)), patch(
-        "subprocess.run",
-        return_value=subprocess.CompletedProcess(
-            args=[str(fake_rz), "-v"], returncode=0, stdout="rizin 0.7.0"
-        ),
-    ):
-        bin_path, ver = resolve_r2_binary()
-        assert bin_path == str(fake_rz)
-        assert ver == "rizin 0.7.0"
 
 
 def test_stage_sigs(tmp_path: Path) -> None:

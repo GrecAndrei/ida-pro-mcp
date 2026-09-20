@@ -129,13 +129,6 @@ def test_safe_mode_allows_manual_small_area_operations(tmp_path, server):
         ("intelligence", "intelligence_status"),
         ("session", "status"),
         ("blackboard", "write"),
-        # r2 raw-binary sidecar: subprocess-only, never touches the IDB, so it
-        # must stay available while IDA auto-analysis is still running.
-        ("r2", "status"),
-        ("r2", "bininfo"),
-        ("r2", "load_hints"),
-        ("r2", "disassemble_hypothesis"),
-        ("r2", "vxrefs"),
     ]
     for tool, action in allowed:
         assert server._safe_mode_gate(sid, tool, action) is None, (

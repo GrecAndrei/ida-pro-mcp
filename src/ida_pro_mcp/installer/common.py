@@ -191,11 +191,6 @@ class InstallerOptions:
     # whl + activation on the chosen 9.3+ install). Written into the client
     # config env as IDA_MCP_RUNTIME.
     ida_runtime: str = "idat"  # idat | idalib
-    # r2/Rizin engine (paper §8.2 item 11) — Phase 1 locates an existing
-    # rz/r2 on PATH and records it as IDA_MCP_R2_BIN in the generated client
-    # config; it does NOT download a pinned release (documented follow-up,
-    # mirroring the llama.cpp pin discipline).
-    with_r2: bool = False  # --with-r2: resolve + record rz/r2 into the client config
     with_corpus: bool = False  # --with-corpus: download/build the optional threat corpus
     # Signature-pack staging (paper §10.2 item 5e) — copies *.sig / *.sig.gz
     # from a source dir into <IDADIR>/sig, closing "nothing installs a RISC-V

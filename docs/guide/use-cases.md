@@ -134,9 +134,6 @@ shaped. The raw path is:
 
 - Open the blob as raw bytes: `ida_open_binary(binary_path=..., input_format='bin')`
   (or `ida_open_background(...)` for large blobs).
-- `ida_r2_bininfo(binary_path=...)` / `ida_r2_load_hints(...)` to get
-  architecture, bits, entry, and suggested load-base hypotheses before an IDB
-  exists — the r2 sidecar engine is default-off and runs as a subprocess.
 - `ida_fw_detect_vector_table(start=..., end=...)` to find a Cortex-M
   reset/ISR vector table, `ida_fw_detect_load_base(...)` to infer the load
   address, and `ida_fw_detect_mmio(...)` / `ida_fw_rtos_scan(...)` for
@@ -145,7 +142,7 @@ shaped. The raw path is:
   code/data region into an analyzable range.
 - `ida_search_data_value(value=..., endian=..., size=...)` to locate raw
   pointer-word or string values across the mapped bytes when IDA xrefs do not
-  exist yet; `ida_r2_vxrefs(value=...)` does the same pre-IDA.
+  exist yet.
 - `ida_create_data(address=..., type='dword', count=...)` /
   `ida_create_strlit(address=..., size=...)` to lay down data items so the
   blob becomes analyzable without redeclaring types.

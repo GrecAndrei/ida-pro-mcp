@@ -646,7 +646,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "imports_deep",
     "symbols",
     "hooks",
-    "r2",
 }
 _TOOL_CATEGORY_SECURITY = {
     "deobfuscate",

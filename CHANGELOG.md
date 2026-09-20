@@ -1,3 +1,21 @@
+## 2026-09-20 — Remove obsolete Rizin/radare2 sidecar integration
+
+- Removed the obsolete, default-off R2/Rizin subprocess sidecar engine and its
+  public operations (`ida_r2_status`, `ida_r2_bininfo`, `ida_r2_load_hints`,
+  `ida_r2_disassemble_hypothesis`, `ida_r2_vxrefs`) and legacy `r2` tool namespace.
+- Removed host-side engine handlers, config settings (`IDA_MCP_R2_BIN`,
+  `IDA_MCP_R2_BININFO_BIN`, `IDA_MCP_R2_TIMEOUT_SEC`), policy classifications,
+  error codes (`R2_ENGINE_START_FAILED`, `R2_TIMEOUT`, `R2_PROCESS_DIED`,
+  `R2_BINARY_NOT_FOUND`), installer flags (`--with-r2`), and CI runner jobs.
+- Preserved deterministic IDA-native firmware shaping, vector table detection,
+  and raw memory search capabilities.
+
+## 2026-09-20 — Remove unused R2 future knobs
+
+- Removed the undocumented runtime constants and documentation for the
+  no-op `IDA_MCP_R2_ESIL_MAX_STEPS` and `IDA_MCP_R2_PRE_ANALYSIS` settings;
+  the implemented R2 surface now exposes only active configuration.
+
 ## 2026-09-20 — Harden truncation continuation coverage
 
 - Added regression coverage for invalid truncation environment settings,

@@ -108,10 +108,6 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
 
     ("workflow", "execute_plan"),
     ("workflow", "plan"),
-    # r2 — raw-binary sidecar engine: whole-file word scans + windowed
-    # multi-arch disassembly can exceed the default RPC recv timeout.
-    ("r2", "vxrefs"),
-    ("r2", "disassemble_hypothesis"),
 }
 
 # (tool, action) pairs blocked while a session is in safe mode (IDA
@@ -2165,13 +2161,6 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "No active session. Open a binary before starting semantic indexing.",
                         )
                     return self._submit_semantic_index(args, idb_ref)
-
-            if tool_name == "r2":
-                # Host-side raw-binary sidecar engine (Architecture A, Phase 1):
-                # subprocess-only, never touches the IDB, works during safe_mode
-                # and when IDA is down. Mandatory branch — without it the r2 tool
-                # would forward to IDA, which has no r2 backend.
-                return self._handle_r2(args)
 
             ip = args.pop(
                 "idb", self.current_session.idb_path if self.current_session else None

@@ -12,7 +12,7 @@ behavior:
 - docs/guide/architecture.md scopes the Tier A/B/C model to the legacy surface and
   describes the default agent catalog;
 - docs/guide/use-cases.md documents the opaque raw-blob / RISC-V path with real
-  operations (fw shaping + r2 sidecar + raw value scan + GP sreg fix);
+  operations (fw shaping + raw value scan + GP sreg fix);
 - the local Claude Code allow-list names only tools that exist in ``TOOLS``.
 
 Host-only: reads repo files and queries host-side registries
@@ -124,7 +124,7 @@ def test_arch_tiering_is_scoped_to_legacy_surface():
 def test_use_cases_document_opaque_raw_blob_riscv_path():
     """Opaque raw-blob / RISC-V scenario: a headerless blob has no symbols and
     no IDA xrefs, so the doc must route through the raw path — fw shaping,
-    the default-off r2 sidecar, a raw pointer-word/value scan, and the RISC-V
+    a raw pointer-word/value scan, and the RISC-V
     GP segment-register fix — using only real operation names."""
     text = _doc_text("docs/guide/use-cases.md")
     names = _operation_names()
@@ -138,8 +138,6 @@ def test_use_cases_document_opaque_raw_blob_riscv_path():
     # Opening a headerless blob as raw bytes.
     require({"ida_open_binary", "ida_open_background"})
     assert "input_format='bin'" in text
-    # Pre-IDA r2 sidecar (subprocess, default-off).
-    require({"ida_r2_bininfo", "ida_r2_load_hints", "ida_r2_vxrefs"})
     # Firmware shaping of the carved region.
     require({"ida_fw_detect_vector_table", "ida_fw_detect_load_base", "ida_fw_carve"})
     # Raw pointer-word/value scan where IDA xrefs do not exist yet.

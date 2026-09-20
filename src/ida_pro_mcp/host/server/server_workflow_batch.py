@@ -53,7 +53,6 @@ _BATCH_FAST_PATH_EXCLUDED_TOOLS = frozenset({
     "workflow",
     "misc",
     "intelligence",
-    "r2",
 })
 
 

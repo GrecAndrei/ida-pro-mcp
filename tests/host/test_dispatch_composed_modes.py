@@ -70,10 +70,6 @@ class _InnerHost(ServerArgsMixin, ServerDispatchMixin):
         self.routes.append(("semantic_index", args, idb_ref))
         return {"ok": True, "route": "semantic_index"}
 
-    def _handle_r2(self, args):
-        self.routes.append(("r2", args))
-        return {"ok": True, "route": "r2"}
-
     def call_tool(self, tool_name, idb_path, **kwargs):
         self.routes.append(("rpc", tool_name, idb_path, kwargs))
         return {"ok": True, "route": "rpc"}
@@ -99,7 +95,6 @@ def test_execute_tool_inner_routes_host_and_rpc_modes(monkeypatch):
     assert host._execute_tool_inner("truncation", "truncation", {"action": "peek", "token": "t"})["route"] == "truncation"
     assert host._execute_tool_inner("multi_session", "multi_session", {"action": "list"})["route"] == "multi_session"
     assert host._execute_tool_inner("intelligence", "intelligence", {"action": "index_fast", "_background": True})["route"] == "semantic_index"
-    assert host._execute_tool_inner("r2", "r2", {"action": "strings"})["route"] == "r2"
     assert host._execute_tool_inner("code", "code", {"action": "disasm", "idb": "/tmp/sample.i64"})["route"] == "rpc"
 
 

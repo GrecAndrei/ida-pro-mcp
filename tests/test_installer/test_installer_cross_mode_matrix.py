@@ -138,7 +138,6 @@ def test_run_install_composes_runtime_corpus_r2_sigs_and_clients(tmp_path, monke
     monkeypatch.setattr(installer, "backup_file", lambda *_a, **_k: None)
     monkeypatch.setattr(installer, "write_install_state", lambda *_a, **_k: None)
     monkeypatch.setattr(installer, "kill_ida_processes", lambda **_k: None)
-    monkeypatch.setattr(installer, "resolve_r2_binary", lambda: ("/usr/bin/rz", "rz 0.9"))
     monkeypatch.setattr(installer, "find_ida_sig_dir", lambda _path: sig_dir)
     monkeypatch.setattr(
         installer,
@@ -150,7 +149,6 @@ def test_run_install_composes_runtime_corpus_r2_sigs_and_clients(tmp_path, monke
     monkeypatch.setattr(installer, "build_stdio_config", lambda *_a, **_k: {"command": "python"})
     monkeypatch.setattr(installer, "configure_clients", lambda **_k: configured.append("client") or configured)
     monkeypatch.setattr(installer, "install_bashrc_cli", lambda *_a, **_k: None)
-    monkeypatch.setattr(installer, "resolve_r2_binary", lambda: ("/usr/bin/rz", "rz 0.9"))
     monkeypatch.setattr(
         "ida_pro_mcp.installer.bron_corpus.download_bron_corpus",
         lambda **_k: {"built": True, "counts": {"cwe": 2}, "downloads": {"one": {}}},
@@ -164,7 +162,6 @@ def test_run_install_composes_runtime_corpus_r2_sigs_and_clients(tmp_path, monke
         source_root=source,
         yes=True,
         kill_ida=True,
-        with_r2=True,
         with_corpus=True,
         sigs_dir=str(tmp_path / "sig-source"),
         embed_model_path=str(model),

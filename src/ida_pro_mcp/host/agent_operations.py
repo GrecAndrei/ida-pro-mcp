@@ -2368,85 +2368,6 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="query_lang",
     ),
     # ------------------------------------------------------------------ #
-    # Rizin/radare2 sidecar engine (default-off)                         #
-    # ------------------------------------------------------------------ #
-    AgentOperation(
-        name="ida_r2_status",
-        description="Check availability of the r2 sidecar engine for a binary.",
-        category="discovery",
-        input_schema=_schema(
-            {"binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."}, "idb": IDB}
-        ),
-        example={},
-        backend_tool="r2",
-        backend_action="status",
-    ),
-    AgentOperation(
-        name="ida_r2_bininfo",
-        description="Get r2 file metadata (arch/bits/entry/imports) for a binary without an IDB.",
-        category="discovery",
-        input_schema=_schema(
-            {
-                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
-                "addr": {"type": "string", "description": "Optional address/offset to resolve into the binary."},
-                "idb": IDB,
-            }
-        ),
-        example={},
-        backend_tool="r2",
-        backend_action="bininfo",
-    ),
-    AgentOperation(
-        name="ida_r2_load_hints",
-        description="Get r2-suggested load addresses for a raw binary (base/entry hypotheses).",
-        category="discovery",
-        input_schema=_schema(
-            {
-                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
-                "addr": {"type": "string", "description": "Optional address/offset to frame the hints."},
-                "idb": IDB,
-            }
-        ),
-        example={},
-        backend_tool="r2",
-        backend_action="load_hints",
-    ),
-    AgentOperation(
-        name="ida_r2_disassemble_hypothesis",
-        description="Disassemble at an address/offset with r2, without an IDB — useful to test a load-base or instruction-boundary hypothesis.",
-        category="discovery",
-        input_schema=_schema(
-            {
-                "address": {"type": "string", "description": "Address or file offset to disassemble at."},
-                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
-                "count": {"type": "integer", "description": "Max instructions to disassemble."},
-                "idb": IDB,
-            },
-            ["address"],
-        ),
-        example={"address": "0x1000", "count": 16},
-        backend_tool="r2",
-        backend_action="disassemble_hypothesis",
-        argument_map={"address": "addr"},
-    ),
-    AgentOperation(
-        name="ida_r2_vxrefs",
-        description="Find raw pointer-word references to a value with r2 (no IDB cross-references needed).",
-        category="discovery",
-        input_schema=_schema(
-            {
-                "value": {"type": "string", "description": "Target value to find pointer-word references to."},
-                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
-                "limit": LIMIT,
-                "idb": IDB,
-            },
-            ["value"],
-        ),
-        example={"value": "0x20000000", "limit": 20},
-        backend_tool="r2",
-        backend_action="vxrefs",
-    ),
-    # ------------------------------------------------------------------ #
     # Dangerous-API marking                                              #
     # ------------------------------------------------------------------ #
     AgentOperation(
@@ -2659,7 +2580,7 @@ _LEGACY_ACTION_CALL = re.compile(
 )
 _LEGACY_REFERENCE = re.compile(
     r"\b[A-Za-z_]\w*\(\s*action\s*=|\b(?:funcs|code|data|search|session|misc|"
-    r"intelligence|truncation|analysis|calc|r2|firmware)\.[A-Za-z_]\w*|\baction\s*=\s*"
+    r"intelligence|truncation|analysis|calc|firmware)\.[A-Za-z_]\w*|\baction\s*=\s*"
 )
 
 

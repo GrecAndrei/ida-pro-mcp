@@ -130,7 +130,7 @@ def calc(
     **kwargs
 ) -> dict:
     """
-    Address calculation and number conversion utilities (r2-style).
+    Address calculation and number conversion utilities.
 
     ACTIONS:
 

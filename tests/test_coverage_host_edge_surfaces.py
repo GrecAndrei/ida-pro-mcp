@@ -13,32 +13,12 @@ from ida_pro_mcp.host.response_enrichment import digest_decompiled, patch_addres
 from ida_pro_mcp.host.stores.symbol_db import SymbolDB, _confine_db_path
 
 
-def test_config_runtime_and_r2_fallbacks_are_deterministic(monkeypatch, tmp_path):
+def test_config_runtime_and_integer_parsing_are_deterministic(monkeypatch, tmp_path):
     monkeypatch.delenv("IDA_MCP_CACHE_DIR", raising=False)
     monkeypatch.delenv("IDA_MCP_DATA_DIR", raising=False)
     fallback = tmp_path / "fallback"
     monkeypatch.setattr(config, "_default_runtime_dir", lambda: str(fallback))
     assert config._resolve_runtime_dir() == str(fallback)
-
-    monkeypatch.setenv("IDA_MCP_R2_BIN", "   ")
-    assert config._resolve_r2_bin() == "r2"
-    monkeypatch.delenv("IDA_MCP_R2_BIN")
-    monkeypatch.setattr(config.shutil, "which", lambda name: "/bin/rz" if name == "rz" else None)
-    assert config._resolve_r2_bin() == "/bin/rz"
-    monkeypatch.setattr(config.shutil, "which", lambda name: "/bin/r2" if name == "r2" else None)
-    assert config._resolve_r2_bin() == "/bin/r2"
-    monkeypatch.setattr(config.shutil, "which", lambda _name: None)
-    assert config._resolve_r2_bin() == "r2"
-
-    monkeypatch.setenv("IDA_MCP_R2_BININFO_BIN", "   ")
-    assert config._resolve_r2_bininfo_bin() == "rabin2"
-    monkeypatch.delenv("IDA_MCP_R2_BININFO_BIN")
-    monkeypatch.setattr(config.shutil, "which", lambda name: "/bin/rz-bin" if name == "rz-bin" else None)
-    assert config._resolve_r2_bininfo_bin() == "/bin/rz-bin"
-    monkeypatch.setattr(config.shutil, "which", lambda name: "/bin/rabin2" if name == "rabin2" else None)
-    assert config._resolve_r2_bininfo_bin() == "/bin/rabin2"
-    monkeypatch.setattr(config.shutil, "which", lambda _name: None)
-    assert config._resolve_r2_bininfo_bin() == "rabin2"
 
     assert config._parse_int(None) is None
     assert config._parse_int(True) is None

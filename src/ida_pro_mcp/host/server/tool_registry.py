@@ -92,14 +92,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local",
         "create_data", "create_strlit", "undo_begin", "undo_end",
     ],
-    "r2": [
-        "status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs",
-    ],
-
-
-
-
-
 
     "search": [
         "nl", "behavior", "find", "api",

@@ -884,45 +884,6 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
     return ""
 
 
-def _r2_version(bin_path: str) -> str:
-    """Probe an rz/r2 binary for its version string.
-
-    ``rz --version`` (Rizin) and ``r2 -v`` (radare2) both print a one-line
-    banner; try them in that order and return the first non-empty first line.
-    Returns "" when the binary cannot be probed (missing, non-executable, or
-    it hangs — a 10 s cap keeps a wedged engine from stalling the installer).
-    """
-    for flag in ("--version", "-v"):
-        try:
-            result = subprocess.run(
-                [bin_path, flag], capture_output=True, text=True, timeout=10
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode == 0:
-            first = (result.stdout or result.stderr or "").strip().splitlines()
-            if first and first[0].strip():
-                return first[0].strip()
-    return ""
-
-
-def resolve_r2_binary() -> tuple[str, str]:
-    """Locate the rz (Rizin) or r2 (radare2) engine binary on PATH.
-
-    Paper §8.2 item 11 / Architecture A Phase 1: the installer only *records*
-    an engine the user already has.  Returns ``(bin_path, version)`` with
-    version "" when the binary exists but cannot be probed, and ``("", "")``
-    when neither rz nor r2 is on PATH — the caller then prints install
-    instructions instead of downloading a pinned release (a documented
-    follow-up that mirrors the llama.cpp pin discipline).
-    """
-    for name in ("rz", "r2"):
-        found = shutil.which(name)
-        if found:
-            return found, _r2_version(found)
-    return "", ""
-
-
 def stage_sigs(
     source: Path,
     sig_dir: Path,
@@ -1808,7 +1769,6 @@ def build_stdio_config(
     ida_install: object | None = None,
     disable_policy: bool = False,
     rerank_disabled: bool = False,
-    r2_bin: str = "",
     ida_runtime: str = "",
 ) -> dict:
     """Build the stdio MCP server config for a specific IDA install.
@@ -1891,11 +1851,6 @@ def build_stdio_config(
             env["GOOGLE_CLOUD_PROJECT"] = gemini_vertex_project
         if gemini_vertex_location:
             env["VERTEX_AI_LOCATION"] = gemini_vertex_location
-    if r2_bin:
-        # The host r2/Rizin engine (default-off) reads IDA_MCP_R2_BIN to
-        # spawn rz/r2 as a subprocess.  --with-r2 records the resolved binary
-        # here so the generated client config enables the engine.
-        env["IDA_MCP_R2_BIN"] = r2_bin
     if ida_runtime and str(ida_runtime).strip().lower() == "idalib":
         # In-process idalib backend (experimental): the host spawns
         # `python -m ida_pro_mcp.idalib_worker` instead of idat per session.

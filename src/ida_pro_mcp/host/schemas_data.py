@@ -74,8 +74,6 @@ TOOLS = [
     # --- Cross-session symbol KB ---
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
-    # --- Raw-binary sidecar engines (default-off) ---
-    "r2",
     "firmware",
     # --- New: struct recovery, emulation, binary diffing, multi-session ---
     "multi_session",
@@ -139,9 +137,6 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     "misc": [
         "python", "idc", "health", "cache_stats", "plugin_list", "read_file", "write_file",
         # reload is dev-only; still callable, not advertised in compact enum
-    ],
-    "r2": [
-        "status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs",
     ],
     "firmware": [
         "detect_vector_table", "detect_load_base", "detect_mmio",
@@ -223,7 +218,6 @@ TOOL_DESCRIPTIONS = {
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram.",
     "misc": "Utility grab-bag: run scripts (python/idc), load/list/apply signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, list_sigs, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload.",
     "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, patch bytes/assembly, create data items/string literals, bracket edits in undo_begin/undo_end, and rename local variables in a decompiled function. All actions run a governance pre-check by default (governed=True); patch_asm/patch_bytes into executable segments are blocked unless explicitly acknowledged. Actions: rename, comment, set_type, patch_bytes, patch_asm, rename_local, create_data, create_strlit, undo_begin, undo_end.",
-    "r2": "Rizin/radare2 sidecar engine (default-off) for pre-IDA and complementary triage on raw binaries. status: engine availability. bininfo: file metadata (arch/bits/entry/imports). load_hints: suggested load addresses. disassemble_hypothesis: disassemble at an address without an IDB. vxrefs: find raw pointer-word references to a value. Actions: status, bininfo, load_hints, disassemble_hypothesis, vxrefs.",
 
 
     "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like) — pass kind='strings' for a dedicated string-literal search, kind='names' for symbols only. Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. data_value: locate raw byte/word values or ASCII strings in memory. query_lang: structured query-language search over names/strings/imports (lenient grammar — free text falls back to unified find). Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze, data_value, query_lang.",
@@ -596,14 +590,6 @@ TOOL_ARG_SCHEMAS = {
         "value": {"type": "string", "description": "Raw value to locate for data_value (e.g. '0xDEADBEEF' or ASCII string)"},
         "endian": {"type": "string", "enum": ["little", "big"], "description": "Byte order for data_value scan (default: binary endianness)"},
         "size": {"type": "integer", "description": "Byte width for data_value scans (1/2/4/8; default: auto-detect)"},
-    },
-    "r2": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["r2"]},
-        "binary_path": {"type": "string", "description": "Absolute path to the raw binary for r2 sidecar operations (defaults to the current session binary)"},
-        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or file offset for disassemble_hypothesis / load_hints"},
-        "value": {"type": "string", "description": "Raw value whose pointer-word references to locate (for vxrefs)"},
-        "count": {"type": "integer", "description": "Max instructions to disassemble (disassemble_hypothesis)"},
-        "limit": {"type": "integer", "description": "Max results to return (vxrefs)"},
     },
     "firmware": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["firmware"]},

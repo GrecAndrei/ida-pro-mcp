@@ -12,8 +12,8 @@ Covers the host policy classification fixes:
   - Dead tool names (crypto_id/entropy/protocol/hooks) are gone from the sets.
   - p01 registration additions: struct/enum member editing, TIL carry, sreg_*,
     idb events/registers, search data_value/query_lang, firmware detect_* probes,
-    and the r2 sidecar query family are tiered correctly (WRITE_IDB /
-    FILESYSTEM_WRITE / FILESYSTEM_READ / READ / DESTRUCTIVE / NETWORK_OR_PROCESS).
+    and firmware probe actions are tiered correctly (WRITE_IDB /
+    FILESYSTEM_WRITE / FILESYSTEM_READ / READ / DESTRUCTIVE).
 """
 
 from ida_pro_mcp.host.policy import (
@@ -108,19 +108,6 @@ def test_til_delete_requires_ack_not_read():
     assert result.requires_ack is True
 
 
-def test_r2_process_lifecycle_is_network_or_process():
-    # Forward-declared for when the r2 engine lands start/attach. The registered
-    # r2 query ops must NOT fall into this tier.
-    for action in ("start", "attach"):
-        tier = classify_tool_action("r2", action)
-        assert tier == RiskTier.NETWORK_OR_PROCESS, f"r2/{action} was {tier}"
-        result = evaluate_policy("r2", action, purpose="oss_audit")
-        assert result.risk == RiskTier.NETWORK_OR_PROCESS
-        assert result.requires_ack is True
-    for action in ("status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs"):
-        assert classify_tool_action("r2", action) == RiskTier.READ, f"r2/{action}"
-
-
 def test_provably_read_only_pairs_are_read_tier():
     read_pairs = [
         ("search", "comment"),
@@ -164,11 +151,6 @@ def test_provably_read_only_pairs_are_read_tier():
         ("firmware", "detect_load_base"),
         ("firmware", "detect_mmio"),
         ("firmware", "rtos_scan"),
-        ("r2", "status"),
-        ("r2", "bininfo"),
-        ("r2", "load_hints"),
-        ("r2", "disassemble_hypothesis"),
-        ("r2", "vxrefs"),
     ]
     for tool, action in read_pairs:
         tier = classify_tool_action(tool, action)

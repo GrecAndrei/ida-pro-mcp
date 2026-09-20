@@ -412,28 +412,6 @@ def test_model_and_server_discovery_handles_state_and_managed_profile_errors(tmp
     assert runtime.find_rerank_model(tmp_path) == ""
 
 
-def test_r2_version_probe_retries_and_resolve_handles_missing(monkeypatch):
-    calls = []
-
-    def run(command, **_kwargs):
-        calls.append(command)
-        if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 1, stdout="", stderr="no")
-        return subprocess.CompletedProcess(command, 0, stdout="\n banner \n", stderr="")
-
-    monkeypatch.setattr(runtime.subprocess, "run", run)
-    assert runtime._r2_version("rz") == "banner"
-    assert calls == [["rz", "--version"], ["rz", "-v"]]
-
-    def unavailable(*_args, **_kwargs):
-        raise OSError("missing")
-
-    monkeypatch.setattr(runtime.subprocess, "run", unavailable)
-    assert runtime._r2_version("r2") == ""
-    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
-    assert runtime.resolve_r2_binary() == ("", "")
-
-
 def test_stage_sigs_supports_single_files_dry_run_and_skips_symlinks(tmp_path):
     source = tmp_path / "one.sig"
     source.write_bytes(b"sig")
@@ -625,7 +603,6 @@ def test_idalib_activation_and_runtime_config_cover_success_failure_and_all_envs
         gemini_vertex_project="project",
         gemini_vertex_location="europe",
         disable_policy=True,
-        r2_bin="rz",
         ida_runtime="idalib",
     )
     env = config["env"]
@@ -636,7 +613,6 @@ def test_idalib_activation_and_runtime_config_cover_success_failure_and_all_envs
     assert env["GOOGLE_CLOUD_PROJECT"] == "project"
     assert env["VERTEX_AI_LOCATION"] == "europe"
     assert env["IDA_MCP_RUNTIME"] == "idalib"
-    assert env["IDA_MCP_R2_BIN"] == "rz"
 
 
 def test_build_stdio_config_uses_detected_ida_and_optional_pip_is_nonfatal(tmp_path, monkeypatch):

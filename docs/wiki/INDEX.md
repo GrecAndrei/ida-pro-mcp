@@ -23,7 +23,7 @@ findings, and make reviewed IDB changes.
 
 ## Tool Reference Manuals
 
-- [Discovery](tools/discovery.md) — 31 operations: reconnaissance, structured search, semantic retrieval, firmware analysis (`ida_fw_*`), and r2/rizin sidecar (`ida_r2_*`).
+- [Discovery](tools/discovery.md) — 26 operations: reconnaissance, structured search, semantic retrieval, and firmware analysis (`ida_fw_*`).
 - [Code](tools/code.md) — 11 operations: decompilation, disassembly, call graphs, cross-session function diffing, whole-binary diff triage, and emulation.
 - [Edit](tools/edit.md) — 33 operations: names, comments, function boundaries, patching, type/segment edits, snapshots, and transactions.
 - [Types](tools/types.md) — Struct, enum, and typedef declarations, struct/enum member edits, and TIL import/export.

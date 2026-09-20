@@ -794,26 +794,6 @@ class TestFirmwareAndIndex:
 
 
 # ---------------------------------------------------------------------------
-# r2
-# ---------------------------------------------------------------------------
-
-class TestR2More:
-    def test_r2_vxrefs_when_available(self, ctx: ExtendedContext):
-        status = ctx.call("ida_r2_status", {})
-        if status.get("ok") is not True:
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.call("ida_r2_vxrefs", {"value": ctx.main_addr})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
-    def test_r2_bininfo_arch_bits(self, ctx: ExtendedContext):
-        status = ctx.call("ida_r2_status", {})
-        if status.get("ok") is not True:
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.ok("ida_r2_bininfo", {})
-        assert payload.get("bits") in (16, 32, 64, "16", "32", "64", None) or payload.get("arch"), payload
-
-
-# ---------------------------------------------------------------------------
 # save / auto-wait
 # ---------------------------------------------------------------------------
 
@@ -1225,17 +1205,6 @@ class TestMoreSessionBatchFw:
     def test_list_sigs_has_total(self, ctx: ExtendedContext):
         payload = ctx.ok("ida_list_sigs", {})
         assert "total" in payload or "available" in payload or "sigs" in payload, payload
-
-    def test_r2_status_is_coded_or_ok(self, ctx: ExtendedContext):
-        payload = ctx.call("ida_r2_status", {})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
-    def test_r2_load_hints_when_available(self, ctx: ExtendedContext):
-        status = ctx.call("ida_r2_status", {})
-        if status.get("ok") is not True:
-            pytest.skip("r2 sidecar not available")
-        payload = ctx.call("ida_r2_load_hints", {})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
 
     def test_publish_findings_answers(self, ctx: ExtendedContext):
         payload = ctx.call("ida_publish_findings", {"dry_run": True})

@@ -152,7 +152,6 @@ def test_parse_args_covers_setup_embedder_and_all_explicit_options(tmp_path, mon
             "--with-corpus",
             "--verify-corpus",
             "--no-embed-auto",
-            "--with-r2",
             "--sigs",
             "signatures",
             "--only",

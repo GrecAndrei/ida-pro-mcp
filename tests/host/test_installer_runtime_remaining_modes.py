@@ -306,7 +306,7 @@ def test_stdio_config_explicit_local_and_rerank_opt_out(tmp_path):
     assert "IDA_MCP_GEMINI_VERTEX" not in env
 
 
-def test_idalib_path_safety_and_r2_empty_probe(tmp_path, monkeypatch):
+def test_idalib_path_safety(tmp_path):
     ida = tmp_path / "ida"
     python_dir = ida / "idalib" / "python"
     (python_dir / "idapro").mkdir(parents=True)
@@ -314,12 +314,3 @@ def test_idalib_path_safety_and_r2_empty_probe(tmp_path, monkeypatch):
     script.write_text("activate", encoding="utf-8")
     script.unlink()
     assert runtime.activate_idalib(str(ida)) == (False, f"no py-activate-idalib.py under {ida}")
-
-    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(
-        runtime.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, stdout="\n", stderr=""),
-    )
-    assert runtime._r2_version("rz") == ""
-    assert runtime.resolve_r2_binary() == ("", "")

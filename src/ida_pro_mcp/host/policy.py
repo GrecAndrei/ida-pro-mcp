@@ -254,13 +254,7 @@ FILESYSTEM_READ_ACTIONS = {
 }
 
 # Actions that start or attach an external process (or open a network channel).
-# The r2 sidecar engine spawns a rizin subprocess; start/attach are the
-# process-lifecycle operations. Forward-declared for when the engine lands
-# them — they must never fall through to READ.
-NETWORK_OR_PROCESS_ACTIONS: set[tuple[str, str]] = {
-    ("r2", "start"),
-    ("r2", "attach"),
-}
+NETWORK_OR_PROCESS_ACTIONS: set[tuple[str, str]] = set()
 
 READ_ONLY_ACTIONS = {
     ("funcs", "info"),
@@ -324,14 +318,6 @@ READ_ONLY_ACTIONS = {
     ("firmware", "detect_load_base"),
     ("firmware", "detect_mmio"),
     ("firmware", "rtos_scan"),
-    # r2 sidecar queries are read-only triage (they spawn a local rizin to read
-    # the file, but never mutate the IDB). r2 start/attach, when the engine
-    # lands them, are classified by NETWORK_OR_PROCESS_ACTIONS instead.
-    ("r2", "status"),
-    ("r2", "bininfo"),
-    ("r2", "load_hints"),
-    ("r2", "disassemble_hypothesis"),
-    ("r2", "vxrefs"),
     ("gadgets", "rop"),
     ("gadgets", "jop"),
     ("gadgets", "cop"),

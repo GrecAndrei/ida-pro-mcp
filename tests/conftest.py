@@ -337,8 +337,6 @@ def _configure_offline_environment() -> None:
         "IDA_MCP_EMBED_MODEL",
         "IDA_MCP_EMBED_SERVER_BIN",
         "IDA_MCP_RERANK_MODEL",
-        "IDA_MCP_R2_BIN",
-        "IDA_MCP_R2_BININFO_BIN",
     ):
         os.environ.pop(name, None)
 

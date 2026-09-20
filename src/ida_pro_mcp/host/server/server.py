@@ -65,7 +65,6 @@ from .server_client_state import (  # noqa: E402
 )
 from .server_dispatch import ServerDispatchMixin  # noqa: E402
 from .server_multi_session import ServerMultiSessionMixin  # noqa: E402
-from .server_r2 import ServerR2Mixin  # noqa: E402
 from .server_response import ServerResponseMixin  # noqa: E402
 from .server_runtime import ServerRuntimeMixin  # noqa: E402
 from .server_semantic import ServerSemanticMixin  # noqa: E402
@@ -88,7 +87,6 @@ class IDAMCPServer(
     ServerMultiSessionMixin,
     ServerRuntimeMixin,
     ServerSessionMixin,
-    ServerR2Mixin,
     ServerDispatchMixin,
     BackgroundMixin,
     ServerClientStateMixin,

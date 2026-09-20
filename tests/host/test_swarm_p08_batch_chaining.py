@@ -14,15 +14,12 @@ step executor in server_workflow_batch.py:
   refs (precedence: literal > bindings > step refs);
 - a chained batch skips the single-list-RPC fast path (its results must
   accumulate step-by-step); plain batches still try it;
-- ``r2`` is excluded from the batch fast path so host-side r2 calls take the
-  per-call loop;
 - workflow ``execute_plan`` runs through the same shared step executor, so
   plans chain and honor bindings too (with execute_plan's tool admission
   semantics preserved).
 
 Tests are hermetic: a ``ServerWorkflowMixin`` fake with stubbed IO, no live
-IDA, and no ``IDAMCPServer`` import (which would pull in the concurrently
-in-flight r2 engine). An opaque raw-blob / RISC-V firmware scenario is used to
+IDA, and no ``IDAMCPServer`` import. An opaque raw-blob / RISC-V firmware scenario is used to
 exercise the find→read→disassemble pipeline on low blob offsets.
 """
 
@@ -30,10 +27,7 @@ from __future__ import annotations
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server_workflow import ServerWorkflowMixin
-from ida_pro_mcp.host.server.server_workflow_batch import (
-    _BATCH_FAST_PATH_EXCLUDED_TOOLS,
-    _NON_ARG_ANNOTATION_KEYS,
-)
+from ida_pro_mcp.host.server.server_workflow_batch import _NON_ARG_ANNOTATION_KEYS
 
 
 class _FakeBatchHost(ServerWorkflowMixin):
@@ -108,7 +102,7 @@ def _chained_batch(calls, **extra):
 
 def test_batch_step2_addr_binds_from_step1_first_result_addr():
     """step2's addr = step1's first-result addr via step1.result.matches.0.addr
-    (the r2-style find→deref→follow primitive)."""
+    (the find→deref→follow primitive)."""
     host, result = _chained_batch(
         [
             {"name": "search", "arguments": {"action": "find", "query": "main"}},
@@ -319,7 +313,7 @@ def test_batch_non_dict_bindings_errors():
 
 
 # ---------------------------------------------------------------------------
-# fast path interaction + r2 exclusion
+# fast path interaction
 # ---------------------------------------------------------------------------
 
 
@@ -347,12 +341,6 @@ def test_plain_batch_still_tries_fast_path():
     )
     assert host.fast_path_attempts == 1
     assert len(host.calls) == 1
-
-
-def test_r2_excluded_from_batch_fast_path():
-    """Host-side r2 calls must take the per-call loop (the engine runs as a
-    subprocess per call, never in a list-shaped RPC)."""
-    assert "r2" in _BATCH_FAST_PATH_EXCLUDED_TOOLS
 
 
 # ---------------------------------------------------------------------------

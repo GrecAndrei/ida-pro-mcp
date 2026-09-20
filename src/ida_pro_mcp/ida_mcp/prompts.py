@@ -113,13 +113,9 @@ QUICKREF_TEXT = """\
 - Bare all-digit addresses (e.g. `80000000`) parse as HEX when they map inside the
   image — pass an explicit `0x` prefix for values outside the image.
 
-## Raw Firmware Triage (headerless / default-off sidecar engines)
-For headerless blobs, prefer the r2 sidecar and firmware-shaping ops before IDA
+## Raw Firmware Triage (headerless blobs)
+For headerless blobs, use the deterministic firmware-shaping operations before IDA
 commits to an architecture/load base:
-- `ida_r2_bininfo()` - File metadata (arch/bits/entry/imports) without an IDB
-- `ida_r2_load_hints()` - Suggested load addresses / entry hypotheses
-- `ida_r2_disassemble_hypothesis(address=..., count=...)` - Test an instruction-boundary
-  or load-base guess without touching the IDB
 - `ida_fw_detect_vector_table(start=..., end=...)` - Cortex-M reset/ISR vector table
 - `ida_fw_detect_load_base()` - Preferred load base inference
 - `ida_fw_detect_mmio()` / `ida_fw_rtos_scan()` - Peripheral regions / RTOS kernels

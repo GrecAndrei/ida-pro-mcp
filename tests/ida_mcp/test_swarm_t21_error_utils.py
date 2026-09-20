@@ -92,11 +92,8 @@ class TestPromptsNoDeadToolCalls(unittest.TestCase):
 
     def test_quickref_includes_raw_firmware_triage_guidance(self):
         text = self.mod.QUICKREF_TEXT
-        # p01 registration: the quickref must steer headerless-blob work to the
-        # r2 sidecar + firmware-shaping ops that replaced the dead tool surface.
+        # Headerless-blob work uses deterministic firmware-shaping operations.
         self.assertIn("Raw Firmware Triage", text)
-        self.assertIn("ida_r2_bininfo", text)
-        self.assertIn("ida_r2_load_hints", text)
         self.assertIn("ida_fw_detect_vector_table", text)
         self.assertIn('search(action="data_value"', text)
         self.assertIn("ida_fw_carve", text)
@@ -255,7 +252,7 @@ class TestErrorHandlingMakeError(unittest.TestCase):
 class TestVestigialHintSurface(unittest.TestCase):
     """The DEBUGGER_*/BOOKMARK_* codes are vestigial: no public debugger or
     bookmark-mutation op exists, so their hints must state the honest path
-    (misc(action='python') / ida_dbg, or the host ida_r2_* namespace) and must
+    (misc(action='python') / ida_dbg) and must
     not claim an absent tool. The EMULATION_* codes are kept and used by the
     public ``emulate`` tool, so their hints point at ``emulate(action=...)``
     rather than a vestigial path."""

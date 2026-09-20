@@ -85,11 +85,6 @@ GRACEFUL: dict[str, str | None] = {
     "ida_enum_member_rename": "TYPE_ERROR",
     "ida_enum_member_revalue": "TYPE_ERROR",
     "ida_apply_sig": "NOT_FOUND",                 # catalog remaps to a missing stem
-    "ida_r2_status": None,                       # r2 sidecar may be absent
-    "ida_r2_bininfo": None,
-    "ida_r2_load_hints": None,
-    "ida_r2_disassemble_hypothesis": None,
-    "ida_r2_vxrefs": None,
 }
 
 # Operations NOT exercised by the catalog smoke: they are lifecycle entry
@@ -206,10 +201,6 @@ def _map_arguments(op_name: str, args: dict, ctx: CatalogContext) -> dict:
     if op_name == "ida_fw_carve":
         out["start"] = "0x100"
         out["end"] = "0x200"
-    if op_name == "ida_r2_disassemble_hypothesis":
-        out["address"] = "0x0"  # file offset, not a virtual address
-    if op_name == "ida_r2_vxrefs":
-        out["value"] = ctx.main_addr
     if op_name == "ida_calc_deref":
         out["address"] = ctx.main_addr
     if op_name == "ida_calc_chain":

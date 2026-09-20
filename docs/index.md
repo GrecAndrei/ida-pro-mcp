@@ -26,7 +26,6 @@ versioning, and releases.
 
 - [OpenCode setup](operations/opencode-setup.md) — OpenCode-specific configuration
 - [Live IDA testing](operations/live-ida-testing.md) — live IDA matrix and idat/idalib runner
-- [Rizin integration](operations/rizin-integration.md) — Rizin / r2 cross-validation
 - [Promotion kit](operations/promotion-kit.md) — reusable factual launch copy and positioning guardrails
 - [Benchmarks](../benchmarks/README.md) — latency and throughput benchmarks
 - [Research notes](research/) — historical and migration research

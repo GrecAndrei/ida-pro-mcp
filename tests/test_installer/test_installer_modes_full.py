@@ -91,7 +91,6 @@ def test_run_install_dry_run_phases_without_ida(tmp_path, monkeypatch):
     source.mkdir()
     calls = []
     monkeypatch.setattr(installer, "setup_runtime_environment", lambda **kwargs: calls.append("runtime") or tmp_path / "python")
-    monkeypatch.setattr(installer, "resolve_r2_binary", lambda: ("/usr/bin/rz", "rz 1"))
     monkeypatch.setattr(installer, "install_bashrc_cli", lambda *args, **kwargs: calls.append("shell"))
     opts = InstallerOptions(
         dry_run=True,
@@ -99,7 +98,6 @@ def test_run_install_dry_run_phases_without_ida(tmp_path, monkeypatch):
         install_root=tmp_path / "install",
         source_root=source,
         only={"runtime", "shell"},
-        with_r2=False,
         install_cli_shim=True,
     )
     assert installer.run_install(opts, installer.UI()) == 0

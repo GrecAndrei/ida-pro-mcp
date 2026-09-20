@@ -213,19 +213,6 @@ def test_main_run_install_sigs_without_ida(tmp_path):
     assert rc == 1
 
 
-def test_main_run_install_r2_missing_binary(tmp_path, monkeypatch):
-    opts = InstallerOptions(
-        install_root=tmp_path / "root",
-        with_r2=True,
-        only={"clients"},
-        dry_run=True,
-    )
-    monkeypatch.setattr(installer_main, "resolve_r2_binary", lambda: ("", ""))
-    monkeypatch.setattr(installer_main, "detect_ida_installs", list)
-    rc = installer_main.run_install(opts, installer_main.UI())
-    assert rc == 0
-
-
 def test_runtime_kill_ida_processes_oserror_and_returncodes(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     mock_run = MagicMock()
@@ -332,24 +319,12 @@ def test_run_install_boundary_guards(tmp_path, monkeypatch):
     rc = installer_main.run_install(opts, ui)
     assert rc == 1
 
-    # 1442: with_r2 requires clients phase
-    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: None)
-    opts_r2 = InstallerOptions(install_root=tmp_path / "r2", yes=True, with_r2=True, only={"plugins"})
-    rc2 = installer_main.run_install(opts_r2, ui)
-    assert rc2 == 1
 
-
-def test_run_install_r2_dry_run_and_sigs_branches(tmp_path, monkeypatch):
+def test_run_install_sigs_branches(tmp_path, monkeypatch):
     ui = installer_main.UI()
     inst = _make_install(tmp_path / "ida")
     monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
     monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: inst)
-    monkeypatch.setattr(installer_main, "resolve_r2_binary", lambda: ("/bin/rz", "1.0.0"))
-
-    # 1609: with_r2 in dry-run mode
-    opts = InstallerOptions(install_root=tmp_path / "r3", yes=True, with_r2=True, dry_run=True)
-    assert installer_main.run_install(opts, ui) == 0
-
     # 1653: sigs_dir requires IDA install
     opts_no_ida = InstallerOptions(install_root=tmp_path / "r4", yes=True, sigs_dir=tmp_path / "sigs")
     monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: None)

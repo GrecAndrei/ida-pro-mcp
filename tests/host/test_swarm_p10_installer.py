@@ -1,20 +1,7 @@
-"""Regression tests for WO-INST installer additions (paper §8.2 item 11, §10.2 item 5e).
-
-Files under test:
-* installer/main.py    -- ``--with-r2`` flag + ``--sigs <dir>`` staging phase
-* installer/runtime.py -- ``resolve_r2_binary``, ``stage_sigs``, ``IDA_MCP_R2_BIN``
-* installer/common.py  -- ``with_r2``/``sigs_dir`` options, ``find_ida_sig_dir``, ``SigsManifest``
-
-These tests are hermetic: no live IDA, no real rz/r2.  The r2 tests drive a fake
-``rz`` on PATH; the sig tests stage packs into throwaway temp sig dirs.  A
-RISC-V sig-pack scenario (the "nothing installs a RISC-V .sig pack" gap) is
-covered with opaque raw-blob signature payloads.
-"""
+"""Hermetic installer tests for FLIRT signature-pack staging."""
 
 from __future__ import annotations
 
-import os
-import stat
 from pathlib import Path
 
 import pytest
@@ -43,47 +30,6 @@ def _fake_ida_install(install_dir: Path):
     )
 
 
-def _write_rz_fake(bin_dir: Path, name: str = "rz") -> Path:
-    """Write an executable fake ``rz``/``r2`` that answers --version/-v.
-
-    A binary named ``r2`` reports the radare2 banner for both probes; ``rz``
-    reports the rizin banner (mirroring the real tools' banners).
-    """
-    script = bin_dir / name
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os, sys\n"
-        "NAME = os.path.basename(sys.argv[0])\n"
-        'BANNER = "radare2 5.9.0 fake (test)" if NAME == "r2" else "rizin 0.7.4 fake (test)"\n'
-        'if "--version" in sys.argv or "-v" in sys.argv:\n'
-        "    print(BANNER)\n"
-        "else:\n"
-        '    print("unknown")\n',
-        encoding="utf-8",
-    )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return script
-
-
-def _prepend_path(monkeypatch: pytest.MonkeyPatch, bin_dir: Path) -> None:
-    monkeypatch.setenv(
-        "PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
-    )
-
-
-# ---------------------------------------------------------------------------
-# installer.main: flag-parse smoke tests
-# ---------------------------------------------------------------------------
-
-
-def test_parse_args_with_r2_flag():
-    from ida_pro_mcp.installer.main import parse_args
-
-    assert parse_args(["--with-r2"]).with_r2 is True
-    assert parse_args(["--yes", "--with-r2"]).with_r2 is True
-    assert parse_args([]).with_r2 is False
-
-
 def test_parse_args_sigs_dir_flag(tmp_path):
     from ida_pro_mcp.installer.main import parse_args
 
@@ -91,16 +37,6 @@ def test_parse_args_sigs_dir_flag(tmp_path):
     opts = parse_args(["--sigs", str(pack)])
     assert opts.sigs_dir == str(pack)
     assert parse_args([]).sigs_dir == ""
-
-
-def test_parse_args_only_accepts_r2_and_sigs_phases():
-    """--only must accept the new r2/sigs phases without SystemExit."""
-    from ida_pro_mcp.installer.main import parse_args
-
-    assert parse_args(["--only", "r2"]).only == {"r2"}
-    assert parse_args(["--only", "sigs"]).only == {"sigs"}
-    assert parse_args(["--only", "r2", "--only", "sigs"]).only == {"r2", "sigs"}
-    assert parse_args(["--only", "clients"]).only == {"clients"}
 
 
 # ---------------------------------------------------------------------------
@@ -331,56 +267,6 @@ def test_stage_riscv_sig_pack_into_ida_sig_dir(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# installer.runtime: resolve_r2_binary + IDA_MCP_R2_BIN
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_r2_binary_finds_fake_rz_on_path(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer.runtime import resolve_r2_binary
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_rz = _write_rz_fake(bin_dir, "rz")
-    _prepend_path(monkeypatch, bin_dir)
-
-    bin_path, version = resolve_r2_binary()
-
-    assert bin_path == str(fake_rz)
-    assert "rizin 0.7.4 fake" in version
-
-
-def test_resolve_r2_binary_falls_back_to_r2(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer.runtime import resolve_r2_binary
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_r2 = _write_rz_fake(bin_dir, "r2")
-    _prepend_path(monkeypatch, bin_dir)
-
-    bin_path, version = resolve_r2_binary()
-
-    assert bin_path == str(fake_r2)
-    assert "radare2 5.9.0 fake" in version
-
-
-def test_resolve_r2_binary_returns_empty_when_absent(monkeypatch):
-    import ida_pro_mcp.installer.runtime as runtime_mod
-
-    monkeypatch.setattr(runtime_mod.shutil, "which", lambda name: None)
-    assert runtime_mod.resolve_r2_binary() == ("", "")
-
-
-def test_build_stdio_config_records_r2_bin(tmp_path):
-    from ida_pro_mcp.installer.runtime import build_stdio_config
-
-    cfg = build_stdio_config(tmp_path / "python", tmp_path, r2_bin="/usr/bin/rz")
-    assert cfg["env"].get("IDA_MCP_R2_BIN") == "/usr/bin/rz"
-
-    cfg2 = build_stdio_config(tmp_path / "python", tmp_path)
-    assert "IDA_MCP_R2_BIN" not in cfg2["env"]
-
-
-# ---------------------------------------------------------------------------
 # installer.main: run_install integration (hermetic, no live IDA)
 # ---------------------------------------------------------------------------
 
@@ -454,54 +340,6 @@ def test_run_install_fails_when_sig_source_has_no_signature_files(tmp_path, monk
     monkeypatch.setattr(main_mod, "detect_ida_installs", lambda: [_fake_ida_install(install_dir)])
 
     assert main_mod.run_install(opts, main_mod.UI()) == 1
-
-
-def test_with_r2_requires_clients_phase(tmp_path):
-    from ida_pro_mcp.installer import main as main_mod
-    from ida_pro_mcp.installer.common import InstallerOptions
-
-    opts = InstallerOptions(
-        interactive=False,
-        only={"runtime"},
-        install_root=tmp_path / "install-root",
-        with_r2=True,
-    )
-
-    assert main_mod.run_install(opts, main_mod.UI()) == 1
-
-
-def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatch):
-    """`--only clients --with-r2` records the resolved rz/r2 as IDA_MCP_R2_BIN
-    in the generated client config."""
-    from ida_pro_mcp.installer import main as main_mod
-    from ida_pro_mcp.installer.common import InstallerOptions
-
-    install_root = tmp_path / "install-root"
-    install_root.mkdir()
-    install_dir = tmp_path / "ida-pro-9.3"
-    install_dir.mkdir()
-
-    opts = InstallerOptions(
-        interactive=False,
-        only={"clients"},
-        install_root=install_root,
-        with_r2=True,
-        no_ida_prompt=True,
-    )
-    fake_rz = str(tmp_path / "rz")
-    monkeypatch.setattr(main_mod, "detect_ida_installs", lambda: [_fake_ida_install(install_dir)])
-    monkeypatch.setattr(main_mod, "resolve_r2_binary", lambda: (fake_rz, "rizin 0.7.4 fake"))
-    captured: dict = {}
-
-    def _fake_configure(**kwargs):
-        captured["server_cfg"] = kwargs.get("server_cfg")
-        return []
-
-    monkeypatch.setattr(main_mod, "configure_clients", _fake_configure)
-
-    assert main_mod.run_install(opts, main_mod.UI()) == 0
-
-    assert captured["server_cfg"]["env"].get("IDA_MCP_R2_BIN") == fake_rz
 
 
 def test_run_install_passes_explicit_corpus_verification_to_downloader(tmp_path, monkeypatch):

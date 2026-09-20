@@ -64,11 +64,6 @@ class MCPError:
     CONFLICT = "CONFLICT"
     # Experimental feature gated behind an opt-in environment flag.
     FEATURE_DISABLED = "FEATURE_DISABLED"
-    # Optional radare2/Rizin subprocess engine (Architecture A, Phase 1)
-    R2_ENGINE_START_FAILED = "R2_ENGINE_START_FAILED"
-    R2_TIMEOUT = "R2_TIMEOUT"
-    R2_PROCESS_DIED = "R2_PROCESS_DIED"
-    R2_BINARY_NOT_FOUND = "R2_BINARY_NOT_FOUND"
     INTERNAL = "INTERNAL"
 
 
@@ -110,10 +105,6 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.STUCK_LOOP: ErrorCategory.RUNTIME,
     MCPError.CONFLICT: ErrorCategory.RUNTIME,
     MCPError.FEATURE_DISABLED: ErrorCategory.USER,
-    MCPError.R2_ENGINE_START_FAILED: ErrorCategory.RUNTIME,
-    MCPError.R2_TIMEOUT: ErrorCategory.RUNTIME,
-    MCPError.R2_PROCESS_DIED: ErrorCategory.RUNTIME,
-    MCPError.R2_BINARY_NOT_FOUND: ErrorCategory.USER,
 }
 
 
@@ -152,10 +143,6 @@ _HOST_ERROR_HINTS = {
     MCPError.STUCK_LOOP: "Repeated identical analysis steps detected. Change approach before continuing.",
     MCPError.CONFLICT: "The underlying session state changed during the operation. Retry against the current state.",
     MCPError.FEATURE_DISABLED: "This experimental feature is disabled by default. Set the documented environment flag to enable it.",
-    MCPError.R2_ENGINE_START_FAILED: "The radare2/Rizin engine failed to start. Verify the binary is installed and executable, then retry.",
-    MCPError.R2_TIMEOUT: "The r2 engine subprocess exceeded its wall-clock cap. Increase IDA_MCP_R2_TIMEOUT_SEC or reduce the request size.",
-    MCPError.R2_PROCESS_DIED: "The r2 engine subprocess died before returning a result. Check the engine binary and retry.",
-    MCPError.R2_BINARY_NOT_FOUND: "The r2 target binary was not found, or no engine binary (rz/r2) is installed. Set IDA_MCP_R2_BIN or install the engine with the installer --with-r2 flag.",
 }
 
 # Recovery actions: suggested public operations the LLM can auto-execute when this error occurs.

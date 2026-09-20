@@ -9,13 +9,13 @@ engine:
   - ``to_backend_call()`` keeps public arg names on the wire (address, type,
     query) and maps only host-only keys (risk_ack→_risk_ack).
   - ``prepare_rpc_args`` (the pure arg filter) admits every translated backend
-    arg for the newly-schema'd tools (modify/types/annotation/r2/firmware) and
+    arg for the newly-schema'd tools (modify/types/annotation/firmware) and
     rejects unknown keys — the previously-open tools are now closed.
   - Policy tiers classify the new read/write/filesystem/process ops correctly.
-  - ``classify_tool_category`` groups ``r2`` (advanced) and ``firmware``
-    (analysis); the legacy 17-tool ADVERTISED_TOOLS cap is preserved.
-  - ``adapt_agent_error_payload`` rewrites legacy ``r2(...)``/``firmware(...)``
-    references to the public ``ida_r2_*`` / ``ida_fw_*`` names.
+  - ``classify_tool_category`` groups ``firmware`` (analysis); the legacy
+    17-tool ADVERTISED_TOOLS cap is preserved.
+  - ``adapt_agent_error_payload`` rewrites legacy ``firmware(...)``
+    references to the public ``ida_fw_*`` names.
 
 All assertions run against the pure host seam modules — no IDA runtime, no
 server, no live binary.
@@ -68,11 +68,6 @@ NEW_OPERATION_NAMES = [
     "ida_registers",
     "ida_search_data_value",
     "ida_search_query_lang",
-    "ida_r2_status",
-    "ida_r2_bininfo",
-    "ida_r2_load_hints",
-    "ida_r2_disassemble_hypothesis",
-    "ida_r2_vxrefs",
     "ida_mark_dangerous",
     "ida_fw_detect_vector_table",
     "ida_fw_detect_load_base",
@@ -139,7 +134,7 @@ class TestNewOperationRegistration(unittest.TestCase):
 
     def test_operation_count_includes_session_diff(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 109, "catalog includes whole-session binary diff triage")
+        self.assertEqual(len(names), 104, "catalog includes whole-session binary diff triage")
         self.assertIn("ida_diff_sessions", names)
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
@@ -191,20 +186,13 @@ class TestBackendTranslation(unittest.TestCase):
         self.assertIs(args["_risk_ack"], True)
         self.assertNotIn("risk_ack", args)
 
-    def test_sreg_set_and_r2_hypothesis_translate(self):
+    def test_sreg_set_translates(self):
         tool, args = _OPERATIONS_BY_NAME["ida_sreg_set"].to_backend_call(
             {"start": "0x401000", "reg": "ds", "value": 0x30, "risk_ack": True}
         )
         self.assertEqual(tool, "segments")
         self.assertEqual(args["action"], "sreg_set")
         self.assertEqual(args["value"], 0x30)
-
-        tool, args = _OPERATIONS_BY_NAME["ida_r2_disassemble_hypothesis"].to_backend_call(
-            {"address": "0x1000", "count": 16}
-        )
-        self.assertEqual(tool, "r2")
-        self.assertEqual(args["action"], "disassemble_hypothesis")
-        self.assertEqual(args["address"], "0x1000")
 
     def test_til_export_maps_name_filter(self):
         tool, args = _OPERATIONS_BY_NAME["ida_til_export"].to_backend_call(
@@ -256,11 +244,7 @@ class TestArgFilterAdmission(unittest.TestCase):
         )
         self.assertTrue(admitted.get("error"))
 
-    def test_r2_and_firmware_schemas_admit_their_params(self):
-        admitted = prepare_rpc_args(
-            "r2", {"action": "bininfo", "binary_path": "/tmp/x.bin"}, TOOL_ARG_SCHEMAS
-        )
-        self.assertFalse(admitted.get("error"))
+    def test_firmware_schema_admits_params(self):
         admitted = prepare_rpc_args(
             "firmware",
             {"action": "carve", "start": "0x0", "end": "0x1000"},
@@ -309,11 +293,6 @@ class TestPolicyTiers(unittest.TestCase):
             ("search", "query_lang"),
             ("firmware", "detect_vector_table"),
             ("firmware", "rtos_scan"),
-            ("r2", "status"),
-            ("r2", "bininfo"),
-            ("r2", "load_hints"),
-            ("r2", "disassemble_hypothesis"),
-            ("r2", "vxrefs"),
             ("emulate", "info"),
             ("emulate", "backend"),
             ("emulate", "state"),
@@ -329,40 +308,21 @@ class TestPolicyTiers(unittest.TestCase):
         self.assertEqual(classify_tool_action("types", "til_export"), RiskTier.FILESYSTEM_WRITE)
         self.assertEqual(classify_tool_action("types", "til_import"), RiskTier.FILESYSTEM_READ)
 
-    def test_r2_process_lifecycle_forward_declared(self):
-        # Not yet registered actions; must never fall through to READ.
-        for action in ("start", "attach"):
-            self.assertEqual(
-                classify_tool_action("r2", action), RiskTier.NETWORK_OR_PROCESS, action
-            )
-
 
 class TestCategoryAndAdvertisedSurface(unittest.TestCase):
-    def test_r2_and_firmware_categories(self):
-        self.assertEqual(classify_tool_category("r2"), "advanced")
+    def test_firmware_category(self):
         self.assertEqual(classify_tool_category("firmware"), "analysis")
 
     def test_advertised_tools_cap_is_preserved(self):
         # test_rpc_args_contract.py caps ADVERTISED_TOOLS at 17; the raw-binary
         # sidecars stay callable by name but off the legacy tools/list surface.
         self.assertLessEqual(len(ADVERTISED_TOOLS), 17)
-        self.assertNotIn("r2", ADVERTISED_TOOLS)
         self.assertNotIn("firmware", ADVERTISED_TOOLS)
         self.assertNotIn("emulate", ADVERTISED_TOOLS)
 
 
 class TestErrorPayloadAdaptation(unittest.TestCase):
-    """Legacy r2(...)/firmware(...) references are rewritten to public names."""
-
-    def test_r2_action_call_rewrites_to_public_operation(self):
-        payload = {
-            "error": True,
-            "code": "r2_engine_start_failed",
-            "message": "Use r2(action='bininfo') to inspect the file",
-        }
-        adapted = adapt_agent_error_payload(payload, "ida_r2_bininfo")
-        self.assertIn("ida_r2_bininfo", adapted["message"])
-        self.assertNotIn("r2(action=", adapted["message"])
+    """Legacy firmware(...) references are rewritten to public names."""
 
     def test_firmware_action_call_rewrites_to_public_operation(self):
         payload = {
@@ -378,10 +338,10 @@ class TestErrorPayloadAdaptation(unittest.TestCase):
         payload = {
             "error": True,
             "code": "x",
-            "message": "Use r2.bininfo on the sidecar",
+            "message": "Use firmware.carve on the binary",
         }
-        adapted = adapt_agent_error_payload(payload, "ida_r2_bininfo")
-        self.assertIn("Use ida_help(topic='ida_r2_bininfo')", adapted["message"])
+        adapted = adapt_agent_error_payload(payload, "ida_fw_carve")
+        self.assertIn("Use ida_help(topic='ida_fw_carve')", adapted["message"])
 
 
 if __name__ == "__main__":

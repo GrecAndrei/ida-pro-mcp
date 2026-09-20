@@ -49,7 +49,6 @@ from .runtime import (
     get_install_root,
     install_optional_packages,
     kill_ida_processes,
-    resolve_r2_binary,
     setup_runtime_environment,
     stage_sigs,
 )
@@ -833,13 +832,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument(
-        "--with-r2",
-        action="store_true",
-        help="locate rz (Rizin) / r2 (radare2) on PATH, record the resolved binary as "
-        "IDA_MCP_R2_BIN in the generated MCP client config, and print its version. "
-        "Does NOT download a pinned engine release in this phase.",
-    )
-    parser.add_argument(
         "--sigs",
         default="",
         metavar="DIR",
@@ -848,7 +840,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         ".sig/.sig.gz file or a directory (walked recursively, subpaths preserved).",
     )
 
-    parser.add_argument("--only", action="append", choices=["runtime", "clients", "shell", "r2", "sigs"], default=[], help="run only selected install phases")
+    parser.add_argument("--only", action="append", choices=["runtime", "clients", "shell", "sigs"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
         "--ida-runtime",
@@ -912,7 +904,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
 
         only=set(args.only),
         disable_policy=args.disable_policy,
-        with_r2=args.with_r2,
         with_corpus=args.with_corpus,
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
@@ -1235,10 +1226,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 "--ida-runtime idalib requires the clients phase so its activation "
                 "and runtime setting are applied"
             )
-        if opts.with_r2 and not _phase_enabled(opts, "clients"):
-            raise RuntimeError(
-                "--with-r2 requires the clients phase so IDA_MCP_R2_BIN can be recorded"
-            )
         # Validate user-supplied paths before any client config is touched.
         # The wizard already validates model paths, but CLI/API callers do not
         # go through those prompts.  A disabled reranker is intentionally not
@@ -1393,52 +1380,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             )
             report.add_step("corpus", "skipped", detail)
 
-        # ── r2/Rizin engine (paper §8.2 item 11) ────────────────────────
-        # Resolve an existing rz/r2 on PATH and record it as IDA_MCP_R2_BIN
-        # in the generated client config so the default-off host engine can
-        # find it.  Phase 1 never downloads a pinned engine release.
-        r2_bin = ""
-        r2_ver = ""
-        if opts.with_r2:
-            r2_bin, r2_ver = resolve_r2_binary()
-            if r2_bin:
-                if opts.dry_run:
-                    ui.info(
-                        f"Rizin/radare2 engine binary would be recorded: {r2_bin} "
-                        f"({r2_ver or 'version unknown'})"
-                    )
-                else:
-                    ui.ok(
-                        f"Rizin/radare2 engine binary: {r2_bin} "
-                        f"({r2_ver or 'version unknown'})"
-                    )
-                    ui.info(
-                        "The resolved binary is recorded as IDA_MCP_R2_BIN in the "
-                        "generated MCP client config."
-                    )
-            else:
-                msg = (
-                    "rz/r2 not found on PATH. Install Rizin (or radare2) to enable the r2 "
-                    "engine: Debian/Ubuntu `sudo apt install rizin`, macOS `brew install "
-                    "rizin`, or https://rizin.re. The engine stays disabled (default-off) "
-                    "until a binary is available; Phase 1 does not download a pinned release."
-                )
-                ui.warn(msg)
-                report.add_warning(msg)
-            report.add_step(
-                "r2",
-                "dry-run" if opts.dry_run and r2_bin else ("ok" if r2_bin else "warn"),
-                (
-                    f"would record {r2_bin} {r2_ver or ''}".strip()
-                    if opts.dry_run and r2_bin
-                    else f"{r2_bin} {r2_ver or ''}".strip()
-                    if r2_bin
-                    else "rz/r2 not found on PATH"
-                ),
-            )
-        elif _phase_enabled(opts, "r2"):
-            report.add_step("r2", "skipped", "not requested (pass --with-r2)")
-
         # ── Signature-pack staging (paper §10.2 item 5e) ────────────────
         # Copy *.sig / *.sig.gz from --sigs <dir> into <IDADIR>/sig so
         # ida_list_sigs surfaces them — closes "nothing installs a RISC-V
@@ -1545,7 +1486,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
-                    r2_bin=r2_bin,
                     ida_runtime=opts.ida_runtime,
                 )
                 configured = configure_clients(
@@ -1660,7 +1600,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
-                    r2_bin=r2_bin,
                     ida_runtime=opts.ida_runtime,
                 )
                 configured = configure_clients(

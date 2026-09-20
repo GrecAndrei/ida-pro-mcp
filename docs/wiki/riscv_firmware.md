@@ -30,9 +30,8 @@ each returns on the fixture so you know what "sane" looks like.
    and `ida_create_strlit(address="0x800000c5", size=6, strtype="c", risk_ack=true)`
    → lay pointer arrays and string literals over the raw bytes so the blob
    becomes analyzable without redeclaring types.
-6. `ida_disassemble` / `ida_decompile` on the seeded functions; `ida_r2_*`
-   triage ops (`ida_r2_bininfo`, `ida_r2_load_hints`, `ida_r2_disassemble_hypothesis`)
-   when the disassembler needs a second opinion.
+6. `ida_disassemble` / `ida_decompile` on the seeded functions and use the
+   deterministic firmware/search operations for additional raw-blob triage.
 
 ## Architecture inference on a raw blob
 
@@ -203,20 +202,12 @@ ida_create_strlit(address="0x800000c5", size=6, strtype="c", risk_ack=true)
 covers `[addr, addr+size)` with `strtype` `c|c16|c32`. Unknown `item_type` /
 missing `size` return `INVALID_ARGS`.
 
-### 7. Triage with r2/rz when needed
-
-For headerless blobs the `ida_r2_*` ops (bininfo, load hints) give a second
-opinion on the base/size.  `bin.rawstr=true` and a forced base
-(`-B 0x80000000`) make radare2 report the mapping the same way the arch
-profile infers it.
-
 ## Fixture provenance
 
 `tests/fixtures/riscv_blob.bin` is a **300-byte** RV64IMAC firmware slice
 assembled with LLVM's integrated assembler.  It is the regression fixture for
 the opaque-blob tests (`tests/ida_mcp/raw_blob_fake.py`,
-`tests/ida_mcp/test_swarm_p11_opaque_raw.py`,
-`tests/host/test_swarm_p12_opaque_raw.py`); a byte change invalidates those
+`tests/ida_mcp/test_swarm_p11_opaque_raw.py`); a byte change invalidates those
 tests' offset constants and inference-confidence assertions.
 
 Layout (loaded at 0x80000000):

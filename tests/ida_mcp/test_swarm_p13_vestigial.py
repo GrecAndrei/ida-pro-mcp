@@ -8,8 +8,7 @@ operations.  This file pins the honest rebuild:
 
 - Every DEBUGGER_*/BOOKMARK_* hint states the real path: no public op exists;
   drive the underlying capability through ``misc(action='python')`` (``ida_dbg``
-  helpers) if code execution is authorized, or the host ``ida_r2_*`` triage
-  namespace once enabled.
+  helpers) if code execution is authorized.
 - The EMULATION_* hints point at the now-public ``emulate`` tool
   (``emulate(action='info')`` for the backend/state overview) and are not
   marked vestigial.
@@ -104,13 +103,12 @@ class TestVestigialHintsHonest(unittest.TestCase):
 
     def test_emulation_hints_point_to_public_emulate_tool(self):
         # Emulation became a public op (the ``emulate`` tool); the EMULATION_*
-        # hints must not point at the vestigial misc(action='python') path or a
-        # claimed-but-absent ida_r2_* engine, and the error hint must name the
+        # hints must not point at the vestigial misc(action='python') path, and
+        # the error hint must name the
         # public tool for recovery.
         for code in EMULATION_CODES:
             hint = self.hints[code]
             self.assertNotIn("misc(action=", hint, code)
-            self.assertNotIn("ida_r2_", hint, code)
         self.assertIn("emulate(action=", self.hints["EMULATION_ERROR"])
 
     def test_bookmark_hints_state_honest_path(self):

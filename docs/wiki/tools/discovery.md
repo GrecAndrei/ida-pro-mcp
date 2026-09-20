@@ -1,8 +1,7 @@
 # Discovery
 
 Finding your way around the binary: metadata, names, strings, imports, functions,
-structured queries, semantic intelligence, architecture registers, firmware scanning,
-and sidecar hypotheses.
+structured queries, semantic intelligence, architecture registers, and firmware scanning.
 
 All discovery operations are read-only and require no `risk_ack`. Every operation takes
 an optional `idb` parameter to target a specific open session instead of the active one.
@@ -76,17 +75,3 @@ For headerless ROM dumps, bootloaders, and embedded binaries:
 | `ida_fw_detect_mmio(start=..., end=...)` | Locate memory-mapped peripheral register access clusters. | Pinpoints hardware peripheral interfaces. |
 | `ida_fw_rtos_scan(start=..., end=...)` | Heuristically detect RTOS kernel signatures and OS data structures. | Identifies FreeRTOS, Zephyr, ThreadX, etc. |
 | `ida_fw_carve(start=..., end=...)` | Extract a code/data region of a raw firmware blob into a bounded range. | Carves distinct payloads or embedded files. |
-
----
-
-## 7. Radare2 / Rizin Sidecar (`ida_r2_*`)
-
-Independent second opinion using the optional local radare2/rizin engine:
-
-| Operation | Purpose | Notes |
-| --- | --- | --- |
-| `ida_r2_status` | Check availability and version of the local r2/rizin sidecar. | Reports whether `r2` / `rz` is installed. |
-| `ida_r2_bininfo` | Extract binary headers, architecture, and bits without an IDB. | Useful pre-IDA triage for unfamiliar binaries. |
-| `ida_r2_load_hints` | Get r2-suggested load base and segment hypotheses for raw binaries. | Independent validation of load base. |
-| `ida_r2_disassemble_hypothesis(address=...)` | Disassemble at an address/offset with r2 without an IDB. | Tests disassembly hypotheses and opcode interpretations. |
-| `ida_r2_vxrefs(address=...)` | Find raw pointer-word references to a value with r2. | Recovers references before IDA has formed xrefs. |
