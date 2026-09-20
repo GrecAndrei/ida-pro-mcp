@@ -12,7 +12,7 @@ behavior:
 - docs/guide/architecture.md scopes the Tier A/B/C model to the legacy surface and
   describes the default agent catalog;
 - docs/guide/use-cases.md documents the opaque raw-blob / RISC-V path with real
-  operations (fw shaping + raw value scan + GP sreg fix);
+  operations (raw-byte inspection + explicit mapping + GP sreg fix);
 - the local Claude Code allow-list names only tools that exist in ``TOOLS``.
 
 Host-only: reads repo files and queries host-side registries
@@ -138,10 +138,9 @@ def test_use_cases_document_opaque_raw_blob_riscv_path():
     # Opening a headerless blob as raw bytes.
     require({"ida_open_binary", "ida_open_background"})
     assert "input_format='bin'" in text
-    # Firmware shaping of the carved region.
-    require({"ida_fw_detect_vector_table", "ida_fw_detect_load_base", "ida_fw_carve"})
-    # Raw pointer-word/value scan where IDA xrefs do not exist yet.
-    require({"ida_search_data_value", "ida_create_data"})
+    # Raw-byte inspection and explicit mapping where IDA xrefs do not exist yet.
+    require({"ida_overview", "ida_list_segments", "ida_read_bytes", "ida_search_data_value"})
+    require({"ida_add_segment", "ida_set_segment_attrs", "ida_create_data"})
     # RISC-V GP-relative xref resolution via the segment-register seam.
     require({"ida_sreg_set", "ida_sreg_get"})
     # Reversibility primitives for experiment-driven shaping.

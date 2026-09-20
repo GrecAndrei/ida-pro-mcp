@@ -114,13 +114,13 @@ QUICKREF_TEXT = """\
   image — pass an explicit `0x` prefix for values outside the image.
 
 ## Raw Firmware Triage (headerless blobs)
-For headerless blobs, use the deterministic firmware-shaping operations before IDA
-commits to an architecture/load base:
-- `ida_fw_detect_vector_table(start=..., end=...)` - Cortex-M reset/ISR vector table
-- `ida_fw_detect_load_base()` - Preferred load base inference
-- `ida_fw_detect_mmio()` / `ida_fw_rtos_scan()` - Peripheral regions / RTOS kernels
-- `search(action="data_value", value="0xDEADBEEF")` - Locate raw values/magic strings
-- `ida_fw_carve(start=..., end=..., risk_ack=true)` - Bound a code/data region before IDA analysis
+For headerless blobs, inspect the mapped image before making architecture or
+load-base changes:
+- `idb(action="summary")` / `segments(action="list")` - Review format, bounds, and permissions
+- `data(action="read_bytes", addr="0x1000", size=64)` - Inspect bounded raw bytes
+- `search(action="data_value", value="0xDEADBEEF")` - Locate raw values or magic strings
+- `code(action="disasm", addr="0x1000")` - Compare IDA's processor-module decoding
+- Use explicit architecture/segment operations only after review; mutations remain policy-gated
 
 ## Security Analysis
 - `search(action="vulnerable")` - Scan for dangerous patterns and APIs

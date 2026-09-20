@@ -62,8 +62,8 @@ Embedded and firmware projects often involve vendor blobs, board support package
 
 Example workflows:
 
-- `ida_fw_detect_vector_table(start=..., end=...)` to identify reset handlers and interrupt tables
-- `ida_fw_detect_mmio(...)` / `ida_fw_detect_load_base(...)` to locate hardware register access and infer load bases
+- `ida_overview()` and `ida_list_segments()` to inspect mapped regions and permissions
+- `ida_read_bytes(address=..., size=...)` and `ida_search_data_value(value=...)` to inspect raw images before xrefs exist
 - `ida_add_segment(start=..., end=..., name=...)` and `ida_set_segment_attrs(...)` to annotate MMIO regions and peripheral usage
 - `ida_find(query=...)` and `ida_xrefs_to(address=...)` to find protocol handlers and parsing paths
 - `ida_write_finding(...)` to document vendor-supplied components used by OSS firmware projects
@@ -134,18 +134,17 @@ shaped. The raw path is:
 
 - Open the blob as raw bytes: `ida_open_binary(binary_path=..., input_format='bin')`
   (or `ida_open_background(...)` for large blobs).
-- `ida_fw_detect_vector_table(start=..., end=...)` to find a Cortex-M
-  reset/ISR vector table, `ida_fw_detect_load_base(...)` to infer the load
-  address, and `ida_fw_detect_mmio(...)` / `ida_fw_rtos_scan(...)` for
-  peripherals and RTOS kernels.
-- `ida_fw_carve(start=..., end=..., risk_ack=true)` to extract a bounded
-  code/data region into an analyzable range.
-- `ida_search_data_value(value=..., endian=..., size=...)` to locate raw
-  pointer-word or string values across the mapped bytes when IDA xrefs do not
-  exist yet.
-- `ida_create_data(address=..., type='dword', count=...)` /
-  `ida_create_strlit(address=..., size=...)` to lay down data items so the
-  blob becomes analyzable without redeclaring types.
+- `ida_overview()` / `ida_list_segments()` to inspect the mapped image and
+  permissions before making architecture or load-base decisions.
+- `ida_read_bytes(address=..., size=...)` and
+  `ida_search_data_value(value=..., endian=..., size=...)` to inspect raw
+  pointer-word or string values when IDA xrefs do not exist yet.
+- `ida_add_segment(start=..., end=..., name=..., risk_ack=true)` /
+  `ida_set_segment_attrs(address=..., attr=..., value=..., risk_ack=true)` to
+  make an explicitly chosen mapping visible to IDA.
+- `ida_create_data(address=..., type='dword', count=..., risk_ack=true)` /
+  `ida_create_strlit(address=..., size=..., risk_ack=true)` to lay down data
+  items so the blob becomes analyzable without redeclaring types.
 - `ida_sreg_set(start=..., reg='gp', value=..., risk_ack=true)` /
   `ida_sreg_get(start=..., reg='gp')` to fix the RISC-V GP register so
   GP-relative xrefs resolve (x86-16 `cs`/`ds` segmented mode works the same

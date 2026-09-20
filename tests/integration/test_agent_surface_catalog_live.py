@@ -194,13 +194,6 @@ def _map_arguments(op_name: str, args: dict, ctx: CatalogContext) -> dict:
         out["end"] = "0x60001000"
     if op_name == "ida_set_segment_attrs":
         out["address"] = "0x60000000"  # the segment added by ida_add_segment
-    if op_name in ("ida_fw_detect_vector_table", "ida_fw_detect_mmio",
-                   "ida_fw_rtos_scan", "ida_fw_detect_load_base"):
-        out["start"] = "0x0"
-        out["end"] = "0x400"
-    if op_name == "ida_fw_carve":
-        out["start"] = "0x100"
-        out["end"] = "0x200"
     if op_name == "ida_calc_deref":
         out["address"] = ctx.main_addr
     if op_name == "ida_calc_chain":

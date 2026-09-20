@@ -8,8 +8,8 @@ unavailable external runtimes.
 
 This is an MCP server for deterministic IDA Pro analysis. The host runs
 outside IDA, validates and routes MCP calls, and communicates over a local
-bridge with an IDA-side runtime that calls the IDA SDK. Embedding, reranking,
-and Rizin are optional helpers; embedding/reranking are local unless the
+bridge with an IDA-side runtime that calls the IDA SDK. Embedding and reranking
+are optional helpers; embedding/reranking are local unless the
 explicit cloud backend is selected. There is no hidden LLM service in the
 analysis path.
 
@@ -26,7 +26,7 @@ analysis path.
 - `tests/`: host/contract tests, fake-IDA tests, installer tests, and opt-in live tests.
 - `docs/guide/`: maintained architectural and safety guides;
   `docs/releases/`: release notes by version (`docs/releases/TEMPLATE.md`);
-  `docs/operations/`: live testing, Rizin, and OpenCode workflows;
+  `docs/operations/`: live testing and OpenCode workflows;
   `docs/reference/`: technical and policy specifications;
   `docs/wiki/`: offline mirror for the in-tool wiki (public wiki at
   `https://github.com/GrecAndrei/ida-pro-mcp/wiki`); `docs/research/`: historical context.

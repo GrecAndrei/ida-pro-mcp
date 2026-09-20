@@ -873,10 +873,6 @@ def test_live_read_only_operation_matrix_reaches_real_handlers(live_context: Liv
         "ida_registers": {"addr": "fixture_entry"},
         "ida_search_data_value": {"value": "0xDEADBEEF", "limit": 5},
         "ida_search_query_lang": {"query": "functions with size > 10 LIMIT 5"},
-        "ida_fw_detect_vector_table": {"start": "0x0", "end": "0x400"},
-        "ida_fw_detect_load_base": {},
-        "ida_fw_detect_mmio": {},
-        "ida_fw_rtos_scan": {},
         "ida_emulate": {"action": "info"},
     }
     read_only = {

@@ -645,7 +645,7 @@ def test_services_still_exports_the_store(tmp_path):
     try:
         import ida_pro_mcp.services as services
     except ModuleNotFoundError as exc:
-        # services.py pulls in host/server -> server_r2 -> host/r2_engine.
+        # services.py pulls in the host/server import graph.
         # Keep the skip as a safety net: if that import graph ever breaks
         # again, this contract test skips instead of failing for an
         # unrelated reason.

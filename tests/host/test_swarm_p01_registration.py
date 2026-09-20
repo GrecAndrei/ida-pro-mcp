@@ -14,8 +14,8 @@ engine:
   - Policy tiers classify the new read/write/filesystem/process ops correctly.
   - ``classify_tool_category`` groups ``firmware`` (analysis); the legacy
     17-tool ADVERTISED_TOOLS cap is preserved.
-  - ``adapt_agent_error_payload`` rewrites legacy ``firmware(...)``
-    references to the public ``ida_fw_*`` names.
+  - the legacy ``firmware`` tool remains schema-validated without creating
+    unused public agent aliases.
 
 All assertions run against the pure host seam modules — no IDA runtime, no
 server, no live binary.
@@ -27,7 +27,6 @@ import unittest
 
 from ida_pro_mcp.host.agent_operations import (
     _OPERATIONS_BY_NAME,
-    adapt_agent_error_payload,
     list_agent_operations,
 )
 from ida_pro_mcp.host.policy import (
@@ -41,7 +40,7 @@ from ida_pro_mcp.host.schemas_data import ADVERTISED_TOOLS
 from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.tool_registry import tool_actions
 
-# The 36 operations this registration wave adds on top of the previous 67.
+# The registration-wave operations added on top of the earlier catalog.
 NEW_OPERATION_NAMES = [
     "ida_sreg_get",
     "ida_sreg_set",
@@ -69,12 +68,15 @@ NEW_OPERATION_NAMES = [
     "ida_search_data_value",
     "ida_search_query_lang",
     "ida_mark_dangerous",
+]
+
+REMOVED_AGENT_OPERATION_NAMES = {
     "ida_fw_detect_vector_table",
     "ida_fw_detect_load_base",
     "ida_fw_detect_mmio",
     "ida_fw_rtos_scan",
     "ida_fw_carve",
-]
+}
 
 # Ops whose public contract requires risk_ack (every mutating op).
 RISK_ACK_OPERATIONS = {
@@ -97,7 +99,6 @@ RISK_ACK_OPERATIONS = {
     "ida_til_export",
     "ida_til_import",
     "ida_mark_dangerous",
-    "ida_fw_carve",
 }
 
 
@@ -134,10 +135,11 @@ class TestNewOperationRegistration(unittest.TestCase):
 
     def test_operation_count_includes_session_diff(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 104, "catalog includes whole-session binary diff triage")
+        self.assertEqual(len(names), 99, "catalog includes whole-session binary diff triage")
         self.assertIn("ida_diff_sessions", names)
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
+        self.assertTrue(REMOVED_AGENT_OPERATION_NAMES.isdisjoint(names))
 
     def test_every_new_op_backend_is_registered(self):
         for name in NEW_OPERATION_NAMES:
@@ -217,8 +219,8 @@ class TestArgFilterAdmission(unittest.TestCase):
     """prepare_rpc_args admits every translated backend arg for the new tools.
 
     The wave added TOOL_ARG_SCHEMAS entries for the previously-open tools
-    (modify/types/annotation) and the new r2/firmware tools, so the translated
-    args must survive the filter and unknown keys must now be rejected.
+    (modify/types/annotation) and the legacy firmware tool, so translated args
+    must survive the filter and unknown keys must now be rejected.
     """
 
     def test_all_new_ops_pass_through_arg_filter(self):
@@ -319,29 +321,6 @@ class TestCategoryAndAdvertisedSurface(unittest.TestCase):
         self.assertLessEqual(len(ADVERTISED_TOOLS), 17)
         self.assertNotIn("firmware", ADVERTISED_TOOLS)
         self.assertNotIn("emulate", ADVERTISED_TOOLS)
-
-
-class TestErrorPayloadAdaptation(unittest.TestCase):
-    """Legacy firmware(...) references are rewritten to public names."""
-
-    def test_firmware_action_call_rewrites_to_public_operation(self):
-        payload = {
-            "error": True,
-            "code": "x",
-            "message": "Call firmware(action='carve') with start/end first",
-        }
-        adapted = adapt_agent_error_payload(payload, "ida_fw_carve")
-        self.assertIn("ida_fw_carve", adapted["message"])
-        self.assertNotIn("firmware(action=", adapted["message"])
-
-    def test_legacy_dot_reference_triggers_public_surface_note(self):
-        payload = {
-            "error": True,
-            "code": "x",
-            "message": "Use firmware.carve on the binary",
-        }
-        adapted = adapt_agent_error_payload(payload, "ida_fw_carve")
-        self.assertIn("Use ida_help(topic='ida_fw_carve')", adapted["message"])
 
 
 if __name__ == "__main__":

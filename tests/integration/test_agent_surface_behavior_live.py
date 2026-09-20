@@ -4,7 +4,7 @@ Where the catalog smoke proves *every* operation answers correctly with its
 documented example, this suite proves the operations do the *right thing*:
 exact decompile/disassembly shapes, calc semantics, type round-trips,
 findings lifecycle, mutation→verify→restore round-trips, session management,
-batch bindings, firmware heuristics, and the python tool.
+batch bindings, and the python tool.
 
 One module-scoped session over a deterministic fixture; mutations restore
 themselves so the shared session stays coherent. Opt-in like the other live
@@ -652,28 +652,6 @@ class TestPythonTool:
         payload = ctx.call("ida_python", {"code": "raise RuntimeError('boom')", "risk_ack": True})
         assert payload.get("error") is True
         assert isinstance(payload.get("code"), str), payload
-
-
-# ---------------------------------------------------------------------------
-# firmware heuristics (ELF fixture)
-# ---------------------------------------------------------------------------
-
-class TestFirmwareHeuristics:
-    def test_vector_table_detect_answers(self, ctx: BehaviorContext):
-        payload = ctx.ok("ida_fw_detect_vector_table", {"start": "0x0", "end": "0x400"})
-        assert payload.get("ok") is True
-
-    def test_load_base_detect_answers(self, ctx: BehaviorContext):
-        payload = ctx.ok("ida_fw_detect_load_base", {})
-        assert payload.get("ok") is True
-
-    def test_mmio_detect_answers(self, ctx: BehaviorContext):
-        payload = ctx.ok("ida_fw_detect_mmio", {"limit": 10})
-        assert payload.get("ok") is True
-
-    def test_rtos_scan_answers(self, ctx: BehaviorContext):
-        payload = ctx.ok("ida_fw_rtos_scan", {"limit": 10})
-        assert payload.get("ok") is True
 
 
 # ---------------------------------------------------------------------------

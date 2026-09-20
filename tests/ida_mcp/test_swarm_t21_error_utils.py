@@ -92,11 +92,13 @@ class TestPromptsNoDeadToolCalls(unittest.TestCase):
 
     def test_quickref_includes_raw_firmware_triage_guidance(self):
         text = self.mod.QUICKREF_TEXT
-        # Headerless-blob work uses deterministic firmware-shaping operations.
+        # Headerless-blob work uses bounded raw-byte inspection and explicit
+        # architecture/mapping decisions rather than a dead public heuristic set.
         self.assertIn("Raw Firmware Triage", text)
-        self.assertIn("ida_fw_detect_vector_table", text)
+        self.assertIn('segments(action="list"', text)
+        self.assertIn('data(action="read_bytes"', text)
         self.assertIn('search(action="data_value"', text)
-        self.assertIn("ida_fw_carve", text)
+        self.assertNotIn("ida_fw_", text)
 
     def test_triage_workflow_uses_batch_template_not_dead_agent_tool(self):
         text = self.mod.WORKFLOW_TRIAGE

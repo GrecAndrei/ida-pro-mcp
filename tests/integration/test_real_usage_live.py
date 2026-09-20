@@ -383,7 +383,6 @@ def test_real_user_optional_backends_return_status_instead_of_transport_failures
     client = real_live_context.client
     for name, arguments in (
         ("ida_reranker_status", {}),
-        ("ida_fw_detect_load_base", {}),
         ("ida_function_families", {"query": "fixture", "limit": 5}),
     ):
         payload = client.call(name, arguments)

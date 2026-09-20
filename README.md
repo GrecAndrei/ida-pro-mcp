@@ -10,7 +10,7 @@ for each session by default.
 
 ## Why this implementation
 
-- **Deterministic agent surface:** 104 strict-schema `ida_*` operations with
+- **Deterministic agent surface:** 99 strict-schema `ida_*` operations with
   live discovery through `tools/list` and `ida_help`.
 - **Local-first architecture:** the host and IDA runtime communicate over a
   token-protected loopback bridge; no hidden LLM service sits in the analysis
@@ -24,7 +24,7 @@ for each session by default.
 
 The current version is `1.0.0a3`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
-stable 1.0.0 release. The default client surface contains 104 exact-schema operations.
+stable 1.0.0 release. The default client surface contains 99 exact-schema operations.
 Use live discovery for the complete contract: `tools/list` enumerates every
 operation with its schema, and `ida_help(topic="...")` returns the exact
 arguments and example for one operation.
@@ -206,7 +206,7 @@ complete schemas and examples are available live via `tools/list` and
 | Group | Operations |
 |---|---|
 | **Session** | `open_binary`, `open_background`, `session_state`, `session_status`, `session_health`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch` |
-| **Discovery** | `overview`, `find`, `semantic_search`, `reranker_status`, `function_families`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
+| **Discovery** | `overview`, `find`, `semantic_search`, `reranker_status`, `function_families`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang` |
 | **Code** | `decompile`, `disassemble`, `compare_functions`, `diff_sessions`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `get_type`, `callgraph`, `emulate` |
 | **Findings** | `write_finding`, `mark_examined`, `list_findings`, `search_findings`, `update_finding`, `export_findings`, `publish_findings`, `import_annotations`, `analysis_brief`, `next_target` |
 | **Edit** | `create_function`, `change_function`, `rename`, `comment`, `patch_bytes`, `save_idb`, `make_code`, `undefine`, `rename_local`, `declare_type`, `apply_type`, `add_segment`, `set_segment_attrs`, `apply_sig`, `sreg_set`, `create_data`, `create_strlit`, `undo_begin`, `undo_end`, `add_entry`, `idb_snapshot`, `idb_restore_snapshot`, `struct_member_add`, `struct_member_del`, `struct_member_rename`, `struct_member_set_type`, `enum_member_add`, `enum_member_rename`, `enum_member_revalue`, `til_delete`, `til_export`, `til_import`, `mark_dangerous` |

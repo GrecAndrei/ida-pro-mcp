@@ -1,7 +1,7 @@
 # Discovery
 
 Finding your way around the binary: metadata, names, strings, imports, functions,
-structured queries, semantic intelligence, architecture registers, and firmware scanning.
+structured queries, semantic intelligence, architecture registers, and raw-byte inspection.
 
 All discovery operations are read-only and require no `risk_ack`. Every operation takes
 an optional `idb` parameter to target a specific open session instead of the active one.
@@ -64,14 +64,10 @@ an optional `idb` parameter to target a specific open session instead of the act
 
 ---
 
-## 6. Firmware Analysis & Shaping (`ida_fw_*`)
+## 6. Raw-byte inspection
 
-For headerless ROM dumps, bootloaders, and embedded binaries:
-
-| Operation | Purpose | Notes |
-| --- | --- | --- |
-| `ida_fw_detect_vector_table(start=..., end=...)` | Scan raw image for interrupt and reset vector tables (e.g. Cortex-M). | Recovers reset handler and ISR entry points. |
-| `ida_fw_detect_load_base(start=..., end=...)` | Infer preferred load base from pointer clusters and code offsets. | Determines mapping base for raw binaries. |
-| `ida_fw_detect_mmio(start=..., end=...)` | Locate memory-mapped peripheral register access clusters. | Pinpoints hardware peripheral interfaces. |
-| `ida_fw_rtos_scan(start=..., end=...)` | Heuristically detect RTOS kernel signatures and OS data structures. | Identifies FreeRTOS, Zephyr, ThreadX, etc. |
-| `ida_fw_carve(start=..., end=...)` | Extract a code/data region of a raw firmware blob into a bounded range. | Carves distinct payloads or embedded files. |
+For headerless ROM dumps, bootloaders, and embedded binaries, use
+`ida_overview`, `ida_list_segments`, `ida_read_bytes`, and
+`ida_search_data_value` to inspect the mapped image. Architecture and load-base
+changes remain explicit IDA operations rather than agent-surface heuristics;
+use snapshots and the existing mutation policy before changing an IDB.

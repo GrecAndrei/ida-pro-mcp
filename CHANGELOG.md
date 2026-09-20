@@ -1,3 +1,12 @@
+## 2026-09-20 — Remove unused firmware agent operations
+
+- Removed the five unused `ida_fw_*` operations from the strict-schema agent
+  catalog and live-operation documentation: vector-table, load-base, MMIO,
+  RTOS-scan, and carve helpers.
+- Headerless-blob guidance now uses bounded byte/segment inspection and
+  explicit IDA mapping operations. The legacy `firmware` compatibility tool
+  remains available only on the legacy surface.
+
 ## 2026-09-20 — Remove obsolete Rizin/radare2 sidecar integration
 
 - Removed the obsolete, default-off R2/Rizin subprocess sidecar engine and its

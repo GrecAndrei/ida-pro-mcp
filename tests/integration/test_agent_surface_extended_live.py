@@ -738,27 +738,10 @@ class TestPythonIdaApi:
 
 
 # ---------------------------------------------------------------------------
-# firmware + index helpers
+# index helpers
 # ---------------------------------------------------------------------------
 
-class TestFirmwareAndIndex:
-    def test_fw_carve_mapped_window(self, ctx: ExtendedContext):
-        start = ctx.main_addr
-        end = hex(int(start, 16) + 0x40)
-        payload = ctx.call("ida_fw_carve", {"start": start, "end": end, "risk_ack": True})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
-    def test_fw_vector_table_has_candidates_or_empty(self, ctx: ExtendedContext):
-        payload = ctx.ok("ida_fw_detect_vector_table", {"start": "0x0", "end": "0x200", "limit": 8})
-        cands = payload.get("candidates")
-        assert cands is None or isinstance(cands, list), payload
-
-    def test_fw_mmio_limit(self, ctx: ExtendedContext):
-        payload = ctx.ok("ida_fw_detect_mmio", {"limit": 3})
-        items = payload.get("regions") or payload.get("candidates") or payload.get("hits") or []
-        if isinstance(items, list):
-            assert len(items) <= 3 or payload.get("count", 0) <= 3 or True
-
+class TestIndexHelpers:
     def test_index_status_without_task(self, ctx: ExtendedContext):
         payload = ctx.call("ida_index_status", {})
         assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
@@ -1163,18 +1146,6 @@ class TestMoreSessionBatchFw:
         payload = ctx.call("ida_python", {"code": "definitely_not_defined_zzz", "risk_ack": True})
         assert payload.get("error") is True
         assert isinstance(payload.get("code"), str), payload
-
-    def test_fw_rtos_scan_answers(self, ctx: ExtendedContext):
-        payload = ctx.call("ida_fw_rtos_scan", {"limit": 5})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
-    def test_fw_detect_load_base_answers(self, ctx: ExtendedContext):
-        payload = ctx.call("ida_fw_detect_load_base", {})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
-    def test_fw_carve_without_ack_rejected(self, ctx: ExtendedContext):
-        payload = ctx.call("ida_fw_carve", {"start": ctx.main_addr, "end": ctx.main_addr})
-        assert payload.get("error") is True, payload
 
     def test_add_segment_without_ack_rejected(self, ctx: ExtendedContext):
         payload = ctx.call("ida_add_segment", {
