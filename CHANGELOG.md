@@ -1,3 +1,9 @@
+## 2026-09-20 — Harden truncation continuation coverage
+
+- Added regression coverage for invalid truncation environment settings,
+  session adoption, and owner-mismatch handling so the standalone changed-line
+  coverage gate exercises every executable addition.
+
 ## 2026-09-20 — Add alpha-release promotion assets
 
 - Added a reusable launch graphic and factual promotion kit for the v1.0.0a3

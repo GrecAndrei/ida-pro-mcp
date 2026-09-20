@@ -197,6 +197,24 @@ class _DispatchHarness:
         return True
 
 
+class _AdoptingDispatchHarness(_DispatchHarness):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adopted_sessions = []
+
+    def _ensure_client_owns_session(self, _sid):
+        return None
+
+    def _client_owns_session(self, _sid):
+        return False
+
+    def _session_ownership_report(self, _sid):
+        return {}
+
+    def _client_adopt_session(self, sid):
+        self.adopted_sessions.append(sid)
+
+
 def test_handle_truncation_unscoped_token_with_active_session():
     # Token minted unscoped (no session, no owner)
     token = _store_truncation(
@@ -226,6 +244,36 @@ def test_handle_truncation_cross_session_without_explicit_idb():
     res = harness._handle_truncation({"action": "continue", "token": token})
     assert res.get("ok") is True
     assert res["items"] == [10, 20]
+
+
+def test_handle_truncation_adopts_unlocked_token_session():
+    token = _store_truncation(
+        {"items": [10, 20, 30]},
+        {"items": {"type": "list", "total": 3, "chunk_size": 2, "next_offset": 0}},
+        session_id="session_1",
+        owner_id="conn_1",
+    )
+
+    harness = _AdoptingDispatchHarness(active_sid="session_2", owner="conn_1")
+    result = harness._handle_truncation({"action": "continue", "token": token})
+
+    assert result.get("ok") is True
+    assert result["items"] == [10, 20]
+    assert harness.adopted_sessions == ["session_1"]
+
+
+def test_handle_truncation_uses_caller_owner_on_owner_mismatch():
+    token = _store_truncation(
+        {"items": [1, 2]},
+        {"items": {"type": "list", "total": 2, "chunk_size": 1, "next_offset": 0}},
+        session_id="session_1",
+        owner_id="conn_1",
+    )
+
+    harness = _DispatchHarness(active_sid="session_1", owner="conn_2")
+    result = harness._handle_truncation({"action": "continue", "token": token})
+
+    assert result.get("error") is True
 
 
 def test_handle_truncation_pattern_search_and_summary():
