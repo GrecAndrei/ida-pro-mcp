@@ -279,4 +279,5 @@ def test_bootstrap_raw_entry_points_covers_size_and_instruction_fallbacks(monkey
     monkeypatch.setattr(ida_funcs, "add_func", lambda *args: added.append(args) or False, raising=False)
     result = analysis._bootstrap_raw_entry_points(0x1000, 0x1100)
     assert result["seeded_entries"] == 0
-    assert added
+    assert not added
+    assert "delegated to IDA" in result["note"]

@@ -1,4 +1,4 @@
-"""Shared embedding-first semantic helpers for tool-side fuzzy matching."""
+"""Shared deterministic lexical helpers for tool-side fuzzy matching."""
 
 from __future__ import annotations
 
@@ -21,12 +21,12 @@ _EMBEDDER = None
 _EMB_CACHE: dict[str, list[float]] = {}
 _EMB_CACHE_MAX = 1024
 
-# Deterministic scores at/above this are treated as decisive: native
-# embedding rescoring cannot add meaningful signal, so it is skipped to keep
-# CPU latency bounded on shared machines.
+# Deterministic scores at/above this are treated as decisive and avoid any
+# optional extension work, keeping CPU latency bounded on shared machines.
 _DECISIVE_SCORE = 105.0
 # Deterministic scores below this mean the texts are essentially unrelated.
-# Embedding runs when the cheap score lands in the ambiguous band
+# An optional explicitly supplied vector extension may run when the cheap
+# score lands in the ambiguous band
 # [30, 105): either because one side looks like a phrase (token overlap is a
 # poor proxy for meaning there) or because the cheap score itself is already
 # inside the band, even for short identifier-like text.
@@ -37,8 +37,8 @@ _MIN_PHRASE_LEN = 24
 # applies, so unrelated short names do not accumulate spurious scores.
 _EDIT_SIM_FLOOR = 0.5
 
-# Two-phase rescoring pool cap: at most this many candidates get batched
-# embeddings per query; everything else keeps its deterministic score.
+# Two-phase extension pool cap: at most this many candidates are handed to an
+# explicitly supplied vector extension; everything else stays deterministic.
 DEFAULT_RESCORE_TOP_N = 64
 # When the deterministic top score clears this bar and beats the runner-up by
 # at least this much, the winner is decisive and embedding rescoring is
@@ -50,16 +50,24 @@ _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def _get_embedder():
-    global _EMBEDDER
+    """Return only an explicitly declared embedding-capable provider.
+
+    Jev is a typed-question provider, so deterministic token matching remains
+    the fallback.  Legacy local/Gemini/native model construction is never
+    implicit here.
+    """
     if _EMBEDDER is not None:
         return _EMBEDDER
-    if BgeCodeEmbedder is None:
-        return None
     try:
-        _EMBEDDER = BgeCodeEmbedder()
+        from ida_pro_mcp.host.intelligence.providers.registry import resolve_provider
+
+        provider = resolve_provider()
+        if not getattr(provider.capabilities, "embeddings", False):
+            return None
     except Exception:
-        _EMBEDDER = None
-    return _EMBEDDER
+        return None
+    # Typed-question providers do not implement the vector protocol yet.
+    return None
 
 
 def _cache_key(text: str) -> str:
@@ -67,10 +75,10 @@ def _cache_key(text: str) -> str:
 
 
 def _embed_batch(texts: Sequence[str]) -> dict[str, list[float]]:
-    """Embed texts with one batched call, returning {key: vector} successes.
+    """Use an explicitly injected vector extension when one is available.
 
-    Reuses the process-wide ``_EMB_CACHE`` so repeated queries and candidates
-    never trigger a second native inference.
+    The default Jev/custom providers do not implement this protocol, so the
+    normal result is an empty mapping and callers retain lexical scores.
     """
     embedder = _get_embedder()
     if embedder is None:
@@ -160,13 +168,10 @@ def semantic_score(
     include_fuzzy: bool = True,
     return_detail: bool = False,
 ) -> float:
-    """Compute semantic similarity score (higher is better, 0..120 scale).
+    """Compute deterministic similarity (higher is better, 0..120 scale).
 
-    Deterministic scoring runs first.  Native embedding is consulted when the
-    cheap score lands in the ambiguous band (neither decisive nor clearly
-    unrelated): for phrase-like text, or when the cheap score itself is high
-    enough (>= ``_EMBED_FLOOR``) that a short identifier/action could still
-    benefit from embedding.
+    An explicitly injected vector extension may be consulted in an ambiguous
+    band; Jev/custom typed-question providers are not vector providers.
     """
     if not query or not candidate:
         return {"score": 0.0, "method": "exact"} if return_detail else 0.0
@@ -178,15 +183,13 @@ def semantic_score(
     if q == c:
         return {"score": 120.0, "method": "exact"} if return_detail else 120.0
 
-    cheap = semantic_score_cheap(
-        query, candidate, substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
-    )
+    cheap = semantic_score_cheap(query, candidate, substring_bonus=substring_bonus, include_fuzzy=include_fuzzy)
     phrase_like = _phrase_like(q) or _phrase_like(c)
     if cheap < _DECISIVE_SCORE and (phrase_like or cheap >= _EMBED_FLOOR):
         emb = _embedding_score(q, c)
         if emb is not None:
             return {"score": emb, "method": "embedding"} if return_detail else emb
-    return {"score": cheap, "method": "tfidf_fallback"} if return_detail else cheap
+    return {"score": cheap, "method": "lexical"} if return_detail else cheap
 
 
 def semantic_score_cheap(
@@ -262,12 +265,7 @@ def semantic_scores(
         return []
     q = (query or "").strip().lower()
     q_orig = (query or "").strip()
-    cheap = [
-        semantic_score_cheap(
-            q_orig, str(c or ""), substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
-        )
-        for c in candidates
-    ]
+    cheap = [semantic_score_cheap(q_orig, str(c or ""), substring_bonus=substring_bonus, include_fuzzy=include_fuzzy) for c in candidates]
     if not q or (not force_embed and not _phrase_like(q)):
         return cheap
     embedder = _get_embedder()
@@ -331,7 +329,7 @@ def _winner_decisive(scores: Sequence[float]) -> bool:
 def _ngram_tokens(text: str) -> list[str]:
     words = _subword_tokens(text)
     toks = list(words)
-    toks.extend([" ".join(words[i:i + 2]) for i in range(max(0, len(words) - 1))])
+    toks.extend([" ".join(words[i : i + 2]) for i in range(max(0, len(words) - 1))])
     return toks
 
 
@@ -347,11 +345,13 @@ def _edit_similarity(a: str, b: str) -> float:
     for i, ca in enumerate(a, start=1):
         cur = [i]
         for j, cb in enumerate(b, start=1):
-            cur.append(min(
-                prev[j] + 1,
-                cur[j - 1] + 1,
-                prev[j - 1] + (ca != cb),
-            ))
+            cur.append(
+                min(
+                    prev[j] + 1,
+                    cur[j - 1] + 1,
+                    prev[j - 1] + (ca != cb),
+                )
+            )
         prev = cur
     return 1.0 - (prev[-1] / max(1, len(a)))
 

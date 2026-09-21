@@ -452,7 +452,7 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
 
 
 def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, limit, include_items, timeout_ms=0, **kwargs):
-    """Search decompiled pseudocode using the embedding index for ranking.
+    """Search decompiled pseudocode using the deterministic signature index for ranking.
 
     Requires a prior intelligence(action='index_fast') or index_batch call.
     The index narrows the search to the most relevant functions before decompiling.
@@ -470,7 +470,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
         )
 
-    # Check embedding index — optional accelerator, not required
+    # Check signature index — optional accelerator, not required
     asm, idx, _idb_path = _get_intelligence_index()
     index_available = idx is not None and idx.size > 0
 
@@ -721,13 +721,13 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         result["items"] = items
 
     if not index_available:
-        result["note"] = "No embedding index — used brute-force scan. Run intelligence(action='index_fast') for better ranking."
+        result["note"] = "No signature index — used brute-force scan. Run intelligence(action='index_fast') for better ranking."
 
     return result
 
 
 def search_structured(constraints, pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=0):
-    """Structured function search using the embedding index.
+    """Structured function search using the deterministic signature index.
 
     Supports structural constraints (size, bb_count, loops, api_count, segment)
     and optional semantic query for ranking. Requires a prior
@@ -787,7 +787,7 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
     if "apis" in c:
         query_constraints["apis"] = c["apis"]
 
-    # Get embedding index
+    # Get signature index
     asm, idx, _idb_path = _get_intelligence_index()
     if idx is None or idx.size == 0:
         return make_error(
@@ -795,10 +795,10 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             "No functions indexed yet.",
             hint="Index your functions first:\n"
                  "  index_fast:  seconds, disassembly-based (quick triage)\n"
-                 "  index_batch: minutes, decompile-based (best quality embeddings)",
+                 "  index_batch: bounded signature refresh with optional decompilation context",
         )
 
-    # Use embedding index structured search
+    # Use signature index structured search
     query = pattern if pattern else None
     rows = idx.search_structured(query_constraints, query=query, top_k=limit + offset)
 
@@ -834,7 +834,7 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
     result = build_response(
         results, offset, limit, matched_total, matched_total > offset + len(rows),
         action="structured", constraints=constraints,
-        note=f"Structured search via embedding index ({'semantic ranking' if query else 'structural only'}).",
+        note=f"Structured search via signature index ({'lexical ranking' if query else 'structural only'}).",
         index_used=True,
     )
     result["items"] = items

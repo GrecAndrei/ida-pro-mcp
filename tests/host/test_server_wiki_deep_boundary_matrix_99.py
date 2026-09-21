@@ -98,51 +98,6 @@ def test_wiki_root_resolution_and_index_file_boundaries(tmp_path, monkeypatch):
     assert not any(page["topic"] == "broken" for page in rebuilt["pages"])
 
 
-def test_wiki_embedding_cache_waiter_failures_and_eviction(monkeypatch):
-    host = _WikiHost()
-    assert host._wiki_embed_text("") is None
-    event = threading.Event()
-    event.set()
-    host._wiki_embed_inflight = {"waiting": event}
-    assert host._wiki_embed_text("waiting") is None
-
-    core = importlib.import_module("ida_pro_mcp.host.intelligence.core")
-    monkeypatch.setattr(
-        core,
-        "BgeCodeEmbedder",
-        lambda: (_ for _ in ()).throw(RuntimeError("backend unavailable")),
-    )
-    assert host._wiki_embed_text("failed") is None
-
-    class _BadPop(dict):
-        def pop(self, *_args, **_kwargs):
-            raise RuntimeError("eviction race")
-
-    host._wiki_embed_cache = _BadPop({"old": [0.0]})
-    host._wiki_embed_cache_max = 1
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _GoodEmbedder)
-    assert host._wiki_embed_text("new") == [1.0, 0.0]
-    assert host._wiki_embed_cache["new"] == [1.0, 0.0]
-
-    class _RacingEmbedder:
-        def embed_vector(self, _text):
-            host._wiki_embed_cache["same"] = [9.0]
-            return [1.0]
-
-    host._wiki_embed_cache = {}
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _RacingEmbedder)
-    assert host._wiki_embed_text("same") == [9.0]
-
-
-class _GoodEmbedder:
-    def embed_vector(self, _text):
-        return [1.0, 0.0]
-
-    @staticmethod
-    def cosine(_left, _right):
-        return 0.4
-
-
 def test_wiki_argument_normalization_and_topic_resolution(monkeypatch):
     host = _WikiHost()
     assert host._normalize_wiki_args({"action": 4}) == {"action": 4}
@@ -225,36 +180,9 @@ def test_wiki_generated_docs_categories_snippets_and_scores(monkeypatch):
     )[0].get("semantic_hits") is None
     assert host._wiki_related_topics("tools/query", [page, _page("tools/other"), _page("guides/x")], 1) == ["tools/other"]
 
-    monkeypatch.setattr(wiki_module, "EMBEDDING_FIRST_MODE", True)
-    core = importlib.import_module("ida_pro_mcp.host.intelligence.core")
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _GoodEmbedder)
     score, reasons = host._wiki_score_page(page, "query", ["query"], fuzzy=True)
     assert score > 0
-    assert "embedding_title" in reasons
-
-    class _LowSimilarityEmbedder:
-        def embed_vector(self, _text):
-            return [1.0]
-
-        @staticmethod
-        def cosine(_left, _right):
-            return 0.1
-
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _LowSimilarityEmbedder)
-    low_score, low_reasons = host._wiki_score_page(page, "zzzz", ["zzzz"], fuzzy=True)
-    assert low_score == 100 and "lexical_similarity" not in low_reasons
-
-    class _ExplodingEmbedder:
-        def embed_vector(self, _text):
-            return [1.0]
-
-        @staticmethod
-        def cosine(*_args):
-            raise RuntimeError("bad vector")
-
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _ExplodingEmbedder)
-    fallback_score, _ = host._wiki_score_page(page, "query", ["query"], fuzzy=False)
-    assert fallback_score > 0
+    assert "token_overlap" in reasons
 
     monkeypatch.setattr(wiki_module, "TOOL_ACTIONS", {"fake": []})
     monkeypatch.setattr(wiki_module, "TOOLS", ("fake",))

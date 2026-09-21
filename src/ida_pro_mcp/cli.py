@@ -35,6 +35,8 @@ _INTELLIGENCE_ACTIONS = frozenset(
         "intelligence_status",
         "embedder_status",
         "reranker_status",
+        "usage_status",
+        "usage_report",
         "anchor_status",
         "refresh_anchors",
         "classify_text",

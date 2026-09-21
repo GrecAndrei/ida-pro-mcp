@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from ..config import (
-    EMBEDDING_FIRST_MODE,
     MAX_WIKI_RESULTS,
     WIKI_SEMANTIC_GROUPS,
     _bounded_int,
@@ -22,6 +21,10 @@ from ..errors import MCPError, make_error
 from ..schemas import TOOL_ACTIONS, TOOL_ARG_SCHEMAS, TOOL_DESCRIPTIONS, TOOLS
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Compatibility marker for older callers; the embedding-first wiki path was
+# removed.  This is always false and does not select a provider.
+EMBEDDING_FIRST_MODE = False
 
 
 class ServerWikiMixin:
@@ -66,6 +69,41 @@ class ServerWikiMixin:
                 headers.append({"level": level, "text": text, "line": idx})
         return headers
 
+    def _wiki_embed_text(self, text: str):
+        """Compatibility seam for an explicitly injected vector provider.
+
+        The production provider contract is typed-question/lexical-only, so
+        this returns ``None`` unless a caller deliberately enables the legacy
+        test seam and supplies an object with ``embed_vector``.  No model is
+        discovered or downloaded here.
+        """
+        if not EMBEDDING_FIRST_MODE:
+            return None
+        normalized = str(text or "").strip().lower()[:2048]
+        if not normalized:
+            return None
+        cache = getattr(self, "_wiki_embed_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._wiki_embed_cache = cache
+        if normalized in cache:
+            return cache[normalized]
+        try:
+            from ..intelligence.core import BgeCodeEmbedder
+
+            embedder = BgeCodeEmbedder()
+            vector = embedder.embed_vector(normalized)
+            if vector is None:
+                return None
+            vector = list(vector)
+            cache[normalized] = vector
+            limit = max(1, int(getattr(self, "_wiki_embed_cache_max", 64)))
+            while len(cache) > limit:
+                cache.pop(next(iter(cache)))
+            return vector
+        except Exception:
+            return None
+
     def _wiki_tokenize(self, text: str) -> list[str]:
         if not text:
             return []
@@ -83,63 +121,6 @@ class ServerWikiMixin:
                     stem += "e"
                 return stem
         return t
-
-    def _wiki_embed_text(self, text: str) -> list[float] | None:
-        txt = (text or "").strip()
-        if not txt:
-            return None
-        key = txt[:2048].lower()
-        with self._wiki_cache_lock:
-            cached = self._wiki_embed_cache.get(key)
-            if cached is not None:
-                return list(cached)
-            inflight = getattr(self, "_wiki_embed_inflight", None)
-            if not isinstance(inflight, dict):
-                inflight = {}
-                self._wiki_embed_inflight = inflight
-            done = inflight.get(key)
-            owner = done is None
-            if owner:
-                done = threading.Event()
-                inflight[key] = done
-
-        if not owner:
-            # Share one expensive model call among concurrent wiki requests.
-            # A timeout prevents a wedged backend from wedging every waiter;
-            # the in-flight marker remains until the owner finishes, avoiding
-            # a second model call while the first one is still running.
-            done.wait(timeout=120.0)
-            with self._wiki_cache_lock:
-                cached = self._wiki_embed_cache.get(key)
-                return list(cached) if cached is not None else None
-
-        vec: list[float] | None = None
-        try:
-            from ..intelligence.core import BgeCodeEmbedder
-            embedder = BgeCodeEmbedder()
-            vec = embedder.embed_vector(key)
-        except Exception:
-            vec = None
-        finally:
-            with self._wiki_cache_lock:
-                # Do not poison the cache with a miss: the native/cloud
-                # backend may become available later in the same host life.
-                if vec is not None:
-                    cached = self._wiki_embed_cache.get(key)
-                    if cached is None:
-                        if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
-                            try:
-                                self._wiki_embed_cache.pop(
-                                    next(iter(self._wiki_embed_cache))
-                                )
-                            except Exception:
-                                self._wiki_embed_cache.clear()
-                        self._wiki_embed_cache[key] = list(vec)
-                inflight.pop(key, None)
-                done.set()
-                cached = self._wiki_embed_cache.get(key)
-                vec = list(cached) if cached is not None else None
-        return vec
 
     def _wiki_expand_semantic_terms(self, query_tokens: list[str]) -> set[str]:
         raw = {self._wiki_stem_token(t) for t in query_tokens if t}
@@ -168,16 +149,12 @@ class ServerWikiMixin:
             if not self._wiki_match_category(page["topic"], category_filter):
                 continue
 
-            base_score, reasons = self._wiki_score_page(
-                page, query_lower, query_tokens, fuzzy=True
-            )
+            base_score, reasons = self._wiki_score_page(page, query_lower, query_tokens, fuzzy=True)
             page_tokens = page.get("stemmed_tokens")
             # Defensive fallback: keeps semantic search working if an older cache entry
             # (without stemmed_tokens) is present during rolling updates/tests.
             if not isinstance(page_tokens, set):
-                page_tokens = {
-                    self._wiki_stem_token(t) for t in page.get("tokens", set())
-                }
+                page_tokens = {self._wiki_stem_token(t) for t in page.get("tokens", set())}
             semantic_hits = sorted(expanded_terms.intersection(page_tokens))
             if semantic_hits:
                 base_score += (len(semantic_hits) * 14) + 20
@@ -196,13 +173,9 @@ class ServerWikiMixin:
             if semantic_hits:
                 entry["semantic_hits"] = semantic_hits[:10]
             if include_snippets:
-                snippet_terms = (
-                    " ".join(sorted(semantic_hits[:4])).strip() or query_lower
-                )
+                snippet_terms = " ".join(sorted(semantic_hits[:4])).strip() or query_lower
                 snippet_tokens = self._wiki_tokenize(snippet_terms)
-                entry["matches"] = self._wiki_extract_snippets(
-                    page["text"], snippet_terms, snippet_tokens, context_lines
-                )
+                entry["matches"] = self._wiki_extract_snippets(page["text"], snippet_terms, snippet_tokens, context_lines)
             scored.append(entry)
         scored.sort(key=lambda x: (-x["score"], x["topic"]))
         return scored[:max_results]
@@ -211,11 +184,7 @@ class ServerWikiMixin:
         now = time.time()
         with self._wiki_cache_lock:
             cache = self._wiki_cache
-            if (
-                not force
-                and cache.get("root") == wiki_root
-                and now < float(cache.get("expires", 0.0))
-            ):
+            if not force and cache.get("root") == wiki_root and now < float(cache.get("expires", 0.0)):
                 return cache
 
         # Only one request scans the wiki on a cold/expired cache. The second
@@ -230,11 +199,7 @@ class ServerWikiMixin:
             now = time.time()
             with self._wiki_cache_lock:
                 cache = self._wiki_cache
-                if (
-                    not force
-                    and cache.get("root") == wiki_root
-                    and now < float(cache.get("expires", 0.0))
-                ):
+                if not force and cache.get("root") == wiki_root and now < float(cache.get("expires", 0.0)):
                     return cache
 
             topics: dict[str, list[str]] = {}
@@ -248,16 +213,12 @@ class ServerWikiMixin:
                             continue
                         full_path = os.path.join(root, filename)
                         try:
-                            with open(
-                                full_path, encoding="utf-8", errors="ignore"
-                            ) as f:
+                            with open(full_path, encoding="utf-8", errors="ignore") as f:
                                 text = f.read()
                         except OSError:
                             continue
                         page_name = filename[:-3]
-                        topic = (
-                            page_name if category == "root" else f"{category}/{page_name}"
-                        )
+                        topic = page_name if category == "root" else f"{category}/{page_name}"
                         lines = text.splitlines()
                         headers = self._wiki_parse_headers([line + "\n" for line in lines])
                         title = headers[0]["text"] if headers else page_name
@@ -280,9 +241,7 @@ class ServerWikiMixin:
                                 "text_lower": text.lower(),
                                 "line_count": len(lines),
                                 "tokens": set(raw_tokens),
-                                "stemmed_tokens": {
-                                    self._wiki_stem_token(t) for t in raw_tokens
-                                },
+                                "stemmed_tokens": {self._wiki_stem_token(t) for t in raw_tokens},
                                 "semantic_title_text": f"{topic} {title} {header_text}".strip(),
                                 "semantic_body_text": text[:4000],
                             }
@@ -304,16 +263,12 @@ class ServerWikiMixin:
                 self._wiki_cache = snapshot
                 return snapshot
 
-    def _wiki_normalize_topic(
-        self, topic_name: Any
-    ) -> tuple[str | None, dict | None]:
+    def _wiki_normalize_topic(self, topic_name: Any) -> tuple[str | None, dict | None]:
         normalized = str(topic_name or "").strip().replace("\\", "/")
         if not normalized:
             return None, make_error(MCPError.INVALID_ARGS, "topic required")
         if os.path.isabs(normalized):
-            return None, make_error(
-                MCPError.INVALID_ARGS, "Absolute topic paths are not allowed"
-            )
+            return None, make_error(MCPError.INVALID_ARGS, "Absolute topic paths are not allowed")
         if normalized.startswith("/"):
             normalized = normalized.lstrip("/")
         if normalized.endswith(".md"):
@@ -368,11 +323,7 @@ class ServerWikiMixin:
                         out[key] = val
                 else:
                     rng_start, rng_end = _parse_line_range(token)
-                    if (
-                        base in ("read", "sections")
-                        and (rng_start is not None or rng_end is not None)
-                        and not out.get("lines")
-                    ):
+                    if base in ("read", "sections") and (rng_start is not None or rng_end is not None) and not out.get("lines"):
                         out["lines"] = token
                     else:
                         positional.append(token)
@@ -390,13 +341,7 @@ class ServerWikiMixin:
             maybe_topic = out.get("idb")
             if isinstance(maybe_topic, str):
                 candidate = maybe_topic.strip()
-                if (
-                    candidate
-                    and not os.path.isabs(candidate)
-                    and not re.search(
-                        r"\.(i64|idb|exe|dll|so|dylib|bin)$", candidate, re.IGNORECASE
-                    )
-                ):
+                if candidate and not os.path.isabs(candidate) and not re.search(r"\.(i64|idb|exe|dll|so|dylib|bin)$", candidate, re.IGNORECASE):
                     out["topic"] = candidate
         return out
 
@@ -461,9 +406,7 @@ class ServerWikiMixin:
         if not category_filter:
             return True
         if isinstance(category_filter, str):
-            categories = [
-                c.strip().strip("/").lower() for c in category_filter.split(",")
-            ]
+            categories = [c.strip().strip("/").lower() for c in category_filter.split(",")]
         elif isinstance(category_filter, list):
             categories = [str(c).strip().strip("/").lower() for c in category_filter]
         else:
@@ -517,39 +460,8 @@ class ServerWikiMixin:
         fuzzy: bool,
     ) -> tuple[int, list[str]]:
         reasons: list[str] = []
-        qvec = self._wiki_embed_text(query_lower) if EMBEDDING_FIRST_MODE else None
-        title_text = str(page.get("semantic_title_text") or "").strip()
-        body_text = str(page.get("semantic_body_text") or "").strip()
-        title_vec = self._wiki_embed_text(title_text) if qvec is not None else None
-        body_vec = self._wiki_embed_text(body_text) if qvec is not None else None
-        if qvec is not None and title_vec is not None:
-            try:
-                from ..intelligence.core import BgeCodeEmbedder
-                s_title = float(BgeCodeEmbedder.cosine(qvec, title_vec))
-                s_body = float(BgeCodeEmbedder.cosine(qvec, body_vec)) if body_vec is not None else 0.0
-                sim = (0.7 * s_title) + (0.3 * s_body)
-                if fuzzy and len(query_lower) >= 3 and sim < 0.2:
-                    topic_lower = str(page.get("topic_lower") or "")
-                    title_lower = str(page.get("title_lower") or "")
-                    base_lower = str(page.get("topic_basename") or "")
-                    from ..intelligence.helpers import similarity_ratio
-                    ratio = max(
-                        similarity_ratio(query_lower, topic_lower),
-                        similarity_ratio(query_lower, title_lower),
-                        similarity_ratio(query_lower, base_lower),
-                    )
-                    if ratio >= 0.7:
-                        sim = max(sim, ratio * 0.5)
-                        reasons.append("lexical_similarity")
-                if s_title > 0.25:
-                    reasons.append("embedding_title")
-                if s_body > 0.2:
-                    reasons.append("embedding_body")
-                return int(round(max(0.0, min(1.0, sim)) * 1000.0)), reasons
-            except Exception:
-                pass
-
-        # Deterministic non-heuristic fallback: token Jaccard similarity.
+        # Wiki search is intentionally lexical. Typed-question providers do not
+        # expose vectors, and no local model is constructed as a fallback.
         page_tokens = page.get("tokens", set())
         q_tokens = set(query_tokens)
         inter = len(page_tokens.intersection(q_tokens)) if isinstance(page_tokens, set) else 0
@@ -562,6 +474,7 @@ class ServerWikiMixin:
             title_lower = str(page.get("title_lower") or "")
             base_lower = str(page.get("topic_basename") or "")
             from ..intelligence.helpers import similarity_ratio
+
             ratio = max(
                 similarity_ratio(query_lower, topic_lower),
                 similarity_ratio(query_lower, title_lower),
@@ -589,9 +502,7 @@ class ServerWikiMixin:
         for page in pages:
             if not self._wiki_match_category(page["topic"], category_filter):
                 continue
-            score, reasons = self._wiki_score_page(
-                page, query_lower, query_tokens, fuzzy
-            )
+            score, reasons = self._wiki_score_page(page, query_lower, query_tokens, fuzzy)
             if score <= 0:
                 continue
             entry = {
@@ -602,16 +513,12 @@ class ServerWikiMixin:
                 "matched_on": reasons[:4],
             }
             if include_snippets:
-                entry["matches"] = self._wiki_extract_snippets(
-                    page["text"], query_lower, query_tokens, context_lines
-                )
+                entry["matches"] = self._wiki_extract_snippets(page["text"], query_lower, query_tokens, context_lines)
             scored.append(entry)
         scored.sort(key=lambda x: (-x["score"], x["topic"]))
         return scored[:max_results]
 
-    def _wiki_related_topics(
-        self, current_topic: str, pages: list[dict], max_items: int = 6
-    ) -> list[str]:
+    def _wiki_related_topics(self, current_topic: str, pages: list[dict], max_items: int = 6) -> list[str]:
         current = current_topic.lower()
         current_page = None
         for page in pages:
@@ -628,9 +535,7 @@ class ServerWikiMixin:
                 related.append(page["topic"])
         return related[:max_items]
 
-    def _wiki_resolve_topic(
-        self, normalized_topic: str, pages: list[dict], strict: bool = False
-    ) -> dict | None:
+    def _wiki_resolve_topic(self, normalized_topic: str, pages: list[dict], strict: bool = False) -> dict | None:
         if not pages:
             return None
         wanted = normalized_topic.lower()
@@ -670,10 +575,7 @@ class ServerWikiMixin:
             return make_error(
                 MCPError.INVALID_ARGS,
                 "Malformed wiki action: unbalanced quotes or invalid syntax.",
-                hint=(
-                    "Pass action as a plain action name with key=value pairs, "
-                    "e.g. wiki(action='read', topic='tools/query')."
-                ),
+                hint=("Pass action as a plain action name with key=value pairs, e.g. wiki(action='read', topic='tools/query')."),
             )
         action = args.get("action")
         if action not in TOOL_ACTIONS["wiki"]:
@@ -694,9 +596,7 @@ class ServerWikiMixin:
         pages: list[dict] = wiki_index.get("pages", [])
 
         verbose = _coerce_bool(args.get("verbose"), False)
-        default_limit = (
-            self.default_wiki_read_limit if action == "read" and not verbose else 0
-        )
+        default_limit = self.default_wiki_read_limit if action == "read" and not verbose else 0
         q_limit = _bounded_int(
             args.get("limit", default_limit),
             default_limit,
@@ -704,9 +604,7 @@ class ServerWikiMixin:
             max_value=2000,
         )
         q_offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=200000)
-        context_lines = _bounded_int(
-            args.get("context_lines", 2), 2, min_value=0, max_value=10
-        )
+        context_lines = _bounded_int(args.get("context_lines", 2), 2, min_value=0, max_value=10)
         include_snippets = _coerce_bool(args.get("include_snippets"), False)
         category_filter = args.get("category")
         max_results = _bounded_int(
@@ -856,9 +754,7 @@ class ServerWikiMixin:
         if topic_err:
             return topic_err
 
-        resolved_page = self._wiki_resolve_topic(
-            topic_name or "", pages, strict=strict_topic
-        )
+        resolved_page = self._wiki_resolve_topic(topic_name or "", pages, strict=strict_topic)
         content: str | None = None
         source = "generated"
         resolved_topic = topic_name
@@ -876,14 +772,8 @@ class ServerWikiMixin:
                 content = fallback
                 source = "generated"
                 normalized_tool = (topic_name or "").split("/")[-1].lower()
-                resolved_topic = (
-                    f"tools/{normalized_tool}" if normalized_tool else topic_name
-                )
-                title = (
-                    f"{normalized_tool.upper()} Tool Manual"
-                    if normalized_tool
-                    else "Generated Tool Manual"
-                )
+                resolved_topic = f"tools/{normalized_tool}" if normalized_tool else topic_name
+                title = f"{normalized_tool.upper()} Tool Manual" if normalized_tool else "Generated Tool Manual"
                 category = "tools"
             else:
                 suggestions: list[str] = []
@@ -948,9 +838,7 @@ class ServerWikiMixin:
         section_start_line = 1
         if section:
             target_header = None
-            if isinstance(section, int) or (
-                isinstance(section, str) and str(section).strip().isdigit()
-            ):
+            if isinstance(section, int) or (isinstance(section, str) and str(section).strip().isdigit()):
                 section_idx = int(section) - 1
                 if 0 <= section_idx < len(headers):
                     target_header = headers[section_idx]
@@ -970,6 +858,7 @@ class ServerWikiMixin:
                     best_header = None
                     for header in headers:
                         from ..intelligence.helpers import similarity_ratio
+
                         ratio = similarity_ratio(section_lower, header["text"].strip().lower())
                         if ratio > best_ratio:
                             best_ratio = ratio
@@ -978,15 +867,7 @@ class ServerWikiMixin:
                         target_header = best_header
 
             if target_header is None:
-                details_payload = (
-                    {"available_sections": available_sections[:50]}
-                    if verbose
-                    else {
-                        "available_sections": [
-                            s["title"] for s in available_sections[:20]
-                        ]
-                    }
-                )
+                details_payload = {"available_sections": available_sections[:50]} if verbose else {"available_sections": [s["title"] for s in available_sections[:20]]}
                 return make_error(
                     MCPError.INVALID_ARGS,
                     f"Section '{section}' not found",
@@ -1007,13 +888,9 @@ class ServerWikiMixin:
 
         line_sel_start, line_sel_end = _parse_line_range(args.get("lines"))
         if args.get("line_start") is not None:
-            line_sel_start = _bounded_int(
-                args.get("line_start"), 1, min_value=1, max_value=2_000_000
-            )
+            line_sel_start = _bounded_int(args.get("line_start"), 1, min_value=1, max_value=2_000_000)
         if args.get("line_end") is not None:
-            line_sel_end = _bounded_int(
-                args.get("line_end"), 1, min_value=1, max_value=2_000_000
-            )
+            line_sel_end = _bounded_int(args.get("line_end"), 1, min_value=1, max_value=2_000_000)
         has_line_window = (line_sel_start is not None) or (line_sel_end is not None)
 
         total_lines = len(content_lines)
@@ -1021,9 +898,7 @@ class ServerWikiMixin:
             section_abs_start = section_start_line
             section_abs_end = section_start_line + max(0, total_lines - 1)
 
-            abs_start_req = (
-                line_sel_start if line_sel_start is not None else section_abs_start
-            )
+            abs_start_req = line_sel_start if line_sel_start is not None else section_abs_start
             abs_end_req = line_sel_end if line_sel_end is not None else section_abs_end
             if abs_end_req < abs_start_req:
                 abs_start_req, abs_end_req = abs_end_req, abs_start_req
@@ -1046,9 +921,7 @@ class ServerWikiMixin:
             end = total_lines if q_limit <= 0 else min(total_lines, start + q_limit)
             slice_lines = content_lines[start:end]
             absolute_start = section_start_line + start
-            absolute_end = (
-                absolute_start + len(slice_lines) - 1 if slice_lines else absolute_start
-            )
+            absolute_end = absolute_start + len(slice_lines) - 1 if slice_lines else absolute_start
         result = {
             "ok": True,
             "topic": topic_name,
@@ -1075,7 +948,5 @@ class ServerWikiMixin:
             result["_truncated"] = True
             result["next_offset"] = end
             result["lines_remaining"] = total_lines - end
-            result["hint"] = (
-                "Use wiki(action='read', topic='...', offset=next_offset, limit=...)"
-            )
+            result["hint"] = "Use wiki(action='read', topic='...', offset=next_offset, limit=...)"
         return result

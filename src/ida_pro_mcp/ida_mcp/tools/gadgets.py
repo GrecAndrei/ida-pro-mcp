@@ -1265,85 +1265,45 @@ def gadgets(
         return handle_error(e)
 
 
+def _provider_gadget_classification(signature: str, *, operation: str) -> list[dict] | dict:
+    """Ask the explicit provider about a bounded gadget signature only."""
+    try:
+        from ida_pro_mcp.host.intelligence.advisory import ask_behavior
+        from ida_pro_mcp.host.intelligence.core import _extract_signature
+
+        return ask_behavior(
+            {"signature": _extract_signature(signature[:4096])[:2048]},
+            operation=operation,
+        )
+    except Exception:
+        return {"error": True, "code": "PROVIDER_ERROR", "message": "gadget advisory unavailable"}
+
+
 def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
-    """
-    Use BehaviorClassifier to score the exploit potential of a gadget set.
-    Builds a pseudo-pseudocode description of what the gadgets collectively do,
-    then classifies it against exploit-relevant anchors.
-    """
+    """Return an advisory provider classification for a bounded gadget set."""
+    del action
     if not gadgets:
         return None
-    try:
-        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
-    except ImportError:
-        try:
-            from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
-        except ImportError:
-            return None
-    try:
-        # Build a compact description of the gadget set for embedding
-        insn_text = " ".join(
-            g.get("gadget") or g.get("insns") or ""
-            for g in gadgets[:20]
-        )
-        if not insn_text.strip():
-            return None
-
-        # Exploit-specific anchors not in the default BehaviorClassifier
-        _EXPLOIT_ANCHORS = {
-            "rop_chain": "pop rdi pop rsi pop rdx ret gadget_chain stack_pivot xchg rsp",
-            "write_what_where": "mov [reg] reg str reg [reg] arbitrary_write controlled_write",
-            "code_exec": "jmp reg call reg shellcode_exec mprotect mmap rwx VirtualProtect",
-            "stack_pivot": "xchg rsp mov rsp leave ret pivot_gadget",
-        }
-
-        embedder = BgeCodeEmbedder()
-        classifier = BehaviorClassifier.instance(embedder)
-
-        # Temporarily add exploit anchors to the classifier
-        orig_anchors = dict(classifier.ANCHORS)
-        classifier.ANCHORS.update(_EXPLOIT_ANCHORS)
-        classifier.clear_cache()
-
-        try:
-            hits = classifier.classify(insn_text, threshold=0.0, top_k=6, block=True)
-            if hits:
-                vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
-                q50 = vals[len(vals) // 2]
-                q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
-                gate = q50 + max(0.0, q75 - q50)
-                hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
-        finally:
-            # Restore original anchors
-            classifier.ANCHORS.clear()
-            classifier.ANCHORS.update(orig_anchors)
-            classifier.clear_cache()
-
-        if not hits:
-            return None
-
-        return {
-            "classifications": hits,
-            "top_primitive": hits[0]["behavior"] if hits else None,
-            "confidence": hits[0]["confidence"] if hits else 0.0,
-            "note": f"Semantic exploit primitive analysis of {len(gadgets)} gadgets",
-        }
-    except Exception:
+    insn_text = " ".join(
+        str(g.get("gadget") or g.get("insns") or "") for g in gadgets[:20]
+    )
+    if not insn_text.strip():
         return None
+    result = _provider_gadget_classification(insn_text, operation="classify_gadgets")
+    if not isinstance(result, list) or not result:
+        return None
+    return {
+        "classifications": result,
+        "top_primitive": result[0].get("behavior"),
+        "confidence": result[0].get("confidence", 0.0),
+        "note": f"Provider advisory analysis of {len(gadgets)} gadgets",
+        "backend": "provider_advisory",
+    }
 
 
 def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool = False) -> dict:
-    """
-    Full exploit chain classification: collect all gadget types, embed the
-    combined chain, and return a structured exploit primitive assessment.
-    """
-    try:
-        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
-    except ImportError:
-        try:
-            from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
-        except ImportError:
-            return make_error(MCPError.IDA_ERROR, "intelligence.py not available")
+    """Classify a bounded gadget chain with provider advisory metadata."""
+    del auto_blackboard
 
     # Collect gadgets from all primitive types
     all_gadgets = {}
@@ -1365,31 +1325,8 @@ def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool 
             g.get("gadget") or g.get("insns") or "" for g in gadgets[:5]
         ) + "\n"
 
-    embedder = BgeCodeEmbedder()
-    classifier = BehaviorClassifier.instance(embedder)
-
-    _EXPLOIT_ANCHORS = {
-        "rop_chain": "pop rdi pop rsi pop rdx ret gadget_chain stack_pivot xchg rsp",
-        "write_what_where": "mov [reg] reg str reg [reg] arbitrary_write controlled_write",
-        "code_exec": "jmp reg call reg shellcode_exec mprotect mmap rwx VirtualProtect",
-        "stack_pivot": "xchg rsp mov rsp leave ret pivot_gadget",
-        "memory_manipulation": BehaviorClassifier.ANCHORS.get("memory_manipulation", ""),
-    }
-    orig = dict(classifier.ANCHORS)
-    classifier.ANCHORS.update(_EXPLOIT_ANCHORS)
-    classifier.clear_cache()
-    try:
-        hits = classifier.classify(chain_text, threshold=0.0, top_k=8, block=True)
-        if hits:
-            vals = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
-            q50 = vals[len(vals) // 2]
-            q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
-            gate = q50 + max(0.0, q75 - q50)
-            hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
-    finally:
-        classifier.ANCHORS.clear()
-        classifier.ANCHORS.update(orig)
-        classifier.clear_cache()
+    advisory = _provider_gadget_classification(chain_text, operation="classify_gadget_chain")
+    hits = advisory if isinstance(advisory, list) else []
 
     # Assess exploitability
     has_pivot = bool(all_gadgets.get("stack_pivot"))
@@ -1406,36 +1343,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool 
     else:
         assessment = "MINIMAL: Limited gadget surface"
 
-    # Auto-write exploit findings to blackboard — opt-in only. This is a
-    # read-classified operation, so it must not persist findings without an
-    # explicit auto_blackboard=True.
-    if (has_rop or has_pivot or has_www) and auto_blackboard:
-        try:
-            from blackboard import BlackboardStore  # type: ignore
-            import time as _time
-            store = BlackboardStore()
-            prim_names = sorted(all_gadgets.keys())
-            confidence = 0.9 if "HIGH" in assessment else (0.7 if "MEDIUM" in assessment else 0.5)
-            existing = store.list(category="exploit", limit=50)
-            if not any("gadget" in (e.get("title", "").lower()) for e in existing):
-                store.write(
-                    title=f"Exploit primitives: {', '.join(prim_names)}",
-                    content=assessment,
-                    category="exploit",
-                    tags=["exploit", "gadgets", _get_arch()] + prim_names,
-                    confidence=confidence,
-                    source="gadgets",
-                    source_type="engine_gadgets",
-                    evidence=[{
-                        "type": "gadget_scan",
-                        "value": f"{len(all_gadgets)} primitive types found",
-                        "weight": confidence,
-                        "ts": _time.time(),
-                    }],
-                )
-        except Exception:
-            pass
-
+    # Provider advisory output is never persisted as a finding.
     return {
         "ok": True,
         "arch": _get_arch(),
@@ -1447,5 +1355,5 @@ def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool 
             k: [g.get("gadget") or g.get("insns") for g in v[:3]]
             for k, v in all_gadgets.items() if v
         },
-        "backend": embedder.backend,
+        "backend": "provider_advisory",
     }

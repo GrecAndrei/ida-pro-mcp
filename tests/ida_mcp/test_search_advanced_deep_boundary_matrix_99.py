@@ -471,7 +471,7 @@ def test_search_decompiled_success_cache_preview_index_and_modes(monkeypatch):
     )
     assert result["count"] == 2
     assert result["items"][0].get("context") is None
-    assert result["note"].startswith("No embedding index")
+    assert result["note"].startswith("No signature index")
 
     # An index seeds a duplicate candidate and backfill failures are nonfatal.
     class Index:

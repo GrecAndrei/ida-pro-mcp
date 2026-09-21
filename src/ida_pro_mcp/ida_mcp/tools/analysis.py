@@ -1245,10 +1245,6 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     Best-effort entry seeding for raw blobs when auto-analysis finds 0 functions.
 
     Arch-aware scan of the image head:
-      * RISC-V: reset ``j``/``jal`` (and ``auipc``+``jalr``) branches plus ISR
-        pointer tables read as LE u32, BE u32, or LE u16 (compressed c.j) — a
-        headerless .bin has no vector table, so both the direct branch at the
-        image head and pointer-like tables are candidates.
       * ARM/Thumb: LE u32 vector-table pointers (existing path).
       * Unknown: default LE u32 pointer-table scan.
 
@@ -1284,57 +1280,13 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
                     candidates.append(start_ea + off)
 
     if is_rv:
-        # Reset branch at the image head: `j`/`jal` target, or auipc+jalr long
-        # branch.  Raw RISC-V firmware commonly starts at the reset vector.
-        try:
-            first_mnem = (idc.print_insn_mnem(start_ea) or "").lower()
-        except Exception:
-            first_mnem = ""
-        if first_mnem in ("j", "jal"):
-            try:
-                tgt = int(idc.get_operand_value(start_ea, 0))
-                if tgt not in (idaapi.BADADDR, 0) and start_ea <= tgt < end_ea:
-                    candidates.append(tgt)
-            except Exception:
-                pass
-        elif first_mnem == "auipc":
-            # auipc ra, imm20 ; jalr ra, imm12(ra)  ->  target = PC + (imm20<<12) + imm12
-            try:
-                imm = int(idc.get_operand_value(start_ea, 1))
-                if imm & 0x80000:
-                    imm -= 0x100000
-                ra = start_ea + (imm << 12)
-                ea2 = idc.next_head(start_ea, end_ea)
-                if ea2 != idaapi.BADADDR and (idc.print_insn_mnem(ea2) or "").lower() == "jalr":
-                    imm12 = int(idc.get_operand_value(ea2, 2))
-                    if imm12 & 0x800:
-                        imm12 -= 0x1000
-                    tgt = (ra + imm12) & 0xFFFFFFFFFFFFFFFF
-                    if start_ea <= tgt < end_ea:
-                        candidates.append(tgt)
-            except Exception:
-                pass
-        # ISR pointer tables: LE/BE u32, then LE u16 (compressed c.j targets).
-        for i in range(4, len(data) - 3, 4):
-            for raw in (struct.unpack_from("<I", data, i)[0],
-                        struct.unpack_from(">I", data, i)[0]):
-                if raw == 0:
-                    continue
-                target = raw & ~1
-                if start_ea <= target < end_ea:
-                    candidates.append(target)
-                else:
-                    base = raw & 0xFFFF0000
-                    off = target - base
-                    if 0 <= off < (end_ea - start_ea):
-                        candidates.append(start_ea + off)
-        for i in range(0, len(data) - 1, 2):
-            raw16 = struct.unpack_from("<H", data, i)[0]
-            target16 = raw16 & ~1
-            if raw16 == 0 or target16 < 0x100:
-                continue
-            if start_ea <= target16 < end_ea:
-                candidates.append(target16)
+        # Do not seed functions from MCP-owned RISC-V byte heuristics.  IDA's
+        # processor module and auto-analysis remain authoritative; a provider
+        # answer is advisory and cannot authorize IDB mutations.
+        return {
+            "seeded_entries": 0,
+            "note": "RISC-V entry seeding is delegated to IDA native analysis; no MCP heuristic mutation was applied",
+        }
     elif is_arm:
         # Thumb vector-table pointers (LE u32; bit 0 selects Thumb).
         _scan_le32_table()

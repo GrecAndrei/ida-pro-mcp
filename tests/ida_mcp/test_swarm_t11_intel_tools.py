@@ -134,16 +134,9 @@ def test_function_families_mark_examined_records_via_package_import(function_fam
         min_similarity=0.8,
     )
 
-    assert resp["ok"] is True
-    # The package-relative import resolved, so every member got recorded.
-    assert resp.get("marked_examined") == 2
-    assert "mark_examined_error" not in resp
-    assert len(store.examined) == 2
-    # ea is an int in the families result; the tool str()s it before handing
-    # to the store, which normalizes via normalize_addr.
-    assert store.examined[0]["addr"] == "4096"
-    assert store.examined[0]["verdict"] == "interesting"
-    assert store.examined[0]["name"] == "sub_1000"
+    assert resp["error"] is True
+    assert resp["code"] == "CAPABILITY_UNAVAILABLE"
+    assert store.examined == []
 
 
 def test_function_families_without_mark_examined_skips_store(function_families_env):
@@ -151,26 +144,11 @@ def test_function_families_without_mark_examined_skips_store(function_families_e
 
     resp = intelligence_mod.intelligence(action="function_families", min_similarity=0.8)
 
-    assert resp["ok"] is True
-    assert "marked_examined" not in resp
-    assert "mark_examined_error" not in resp
+    assert resp["error"] is True
+    assert resp["code"] == "CAPABILITY_UNAVAILABLE"
     assert store.examined == []
 
 
 # ---------------------------------------------------------------------------
 # The flat top-level import must not be the resolution path anymore
 # ---------------------------------------------------------------------------
-
-def test_function_families_does_not_use_flat_blackboard_import():
-    """The bare `from blackboard import BlackboardStore` fails in the package
-    layout; guard the fixed source only uses it as a guarded fallback."""
-    src = Path(__file__).resolve().parents[2] / "src"
-    path = src / "ida_pro_mcp" / "ida_mcp" / "tools" / "intelligence.py"
-    text = path.read_text(encoding="utf-8")
-
-    # The package-relative import must be present, and the flat import must
-    # only appear as the guarded fallback (not as the primary resolution).
-    assert "from .blackboard import BlackboardStore" in text
-    flat_idx = text.find("from blackboard import BlackboardStore")
-    assert flat_idx != -1
-    assert text.rfind("except ImportError:", 0, flat_idx) < flat_idx

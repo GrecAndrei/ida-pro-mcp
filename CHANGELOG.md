@@ -1,3 +1,20 @@
+## 2026-09-20 — Replace implicit intelligence backends with explicit providers
+
+- Replaced local, Gemini, and native model selection with fail-closed `jev`,
+  `custom`, and `disabled` modes; custom endpoints require explicit origin
+  allowlisting and loopback-only HTTP exceptions.
+- Added bounded typed-question transport, metadata-only usage accounting,
+  request/session/daily budgets, warning thresholds, and structured provider
+  errors without persisting credentials, prompts, completions, or raw
+  decompilation.
+- Preserved deterministic lexical indexing/search and IDA mutation policy;
+  Jev/custom answers remain advisory and cannot authorize IDB changes or
+  blackboard writes. MCP-owned RISC-V raw-blob and GP hypotheses now require
+  bounded advisory validation while IDA's native processor handling remains
+  authoritative.
+- Removed obsolete local-model/native build machinery and updated installer,
+  live-testing guidance, schemas, and retrieval documentation.
+
 ## 2026-09-20 — Remove unused firmware agent operations
 
 - Removed the five unused `ida_fw_*` operations from the strict-schema agent

@@ -1,4 +1,3 @@
-
 from ._common import (
     Annotated,
     Any,
@@ -12,7 +11,6 @@ from ._common import (
     hex_ea,
     ida_bytes,
     ida_funcs,
-    ida_hexrays,
     ida_nalt,
     ida_name,
     ida_typeinf,
@@ -22,7 +20,7 @@ from ._common import (
     make_error,
     public_arg,
     tool,
-    validate_addr
+    validate_addr,
 )
 import contextlib
 import functools
@@ -38,12 +36,12 @@ from ..error_handling import parse_address_safe
 # directly (not via _common) so the isolated unit-test harness exercises the
 # real classifier sets even though the _common stub omits them.
 from ..support.arch_utils import (
-        UNCONDITIONAL_JUMP_MNEMONICS,
-        CONDITIONAL_BRANCH_MNEMONICS,
-        is_call_mnemonic,
-        is_return_mnemonic,
-        is_riscv_family,
-    )
+    UNCONDITIONAL_JUMP_MNEMONICS,
+    CONDITIONAL_BRANCH_MNEMONICS,
+    is_call_mnemonic,
+    is_return_mnemonic,
+    is_riscv_family,
+)
 
 
 # ============================================================================
@@ -70,11 +68,13 @@ def _remove_overlapping_functions(start_ea: int, end_ea: int) -> list[dict]:
             continue
         ov_name = ida_funcs.get_func_name(overlap.start_ea)
         if ida_funcs.del_func(overlap.start_ea):
-            removed.append({
-                "addr": hex(overlap.start_ea),
-                "end": hex(overlap.end_ea),
-                "name": ov_name,
-            })
+            removed.append(
+                {
+                    "addr": hex(overlap.start_ea),
+                    "end": hex(overlap.end_ea),
+                    "name": ov_name,
+                }
+            )
         else:
             raise RuntimeError(f"Failed to delete overlapping function at {hex(overlap.start_ea)}")
     return removed
@@ -99,6 +99,7 @@ def _ensure_code_at(ea: int) -> bool:
             ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, carve_size)
         with contextlib.suppress(Exception):
             import ida_auto
+
             if hasattr(ida_auto, "auto_make_code"):
                 ida_auto.auto_make_code(ea)
         if is_arm:
@@ -117,6 +118,7 @@ def _set_thumb_mode(ea: int) -> None:
     except Exception:
         try:
             import ida_segregs
+
             ida_segregs.split_sreg_range(ea, "T", 1, 2)
         except Exception:
             pass
@@ -126,6 +128,7 @@ def _try_create_insn(ea: int) -> int:
     """Try ida_ua.create_insn (IDA 9.x) then fall back to idc.create_insn."""
     try:
         import ida_ua
+
         result = ida_ua.create_insn(ea)
         if result:
             return result
@@ -270,26 +273,18 @@ def _embedding_rename_suggestions(
     threshold: Optional[float] = None,
     nearest_top_k: int = 8,
 ) -> dict:
-    """Shared embedding-backed rename suggestion engine used by funcs/suggest_names."""
+    """Shared lexical-signature rename suggestion engine used by funcs/suggest_names."""
     try:
-        from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+        from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
     except ImportError:
-        from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
-
-    embedder = BgeCodeEmbedder()
+        from host.intelligence.lexical import LexicalFunctionIndex  # type: ignore
     idb_path = ""
     with contextlib.suppress(Exception):
         idb_path = idc.get_idb_path() or ""
     if not idb_path:
         return make_error(MCPError.INVALID_ARGS, "No IDB path available")
 
-    idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
-    if idx.size == 0:
-        return make_error(
-            MCPError.NOT_FOUND,
-            "No functions indexed yet. Index your functions to enable semantic search.",
-            hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
-        )
+    idx = LexicalFunctionIndex(idb_path + ".embeddings.db")
     target_eas: list[int] = []
     if addr:
         ea, err = validate_addr(addr, require_func=True)
@@ -297,6 +292,15 @@ def _embedding_rename_suggestions(
             return err
         target_eas = [ea]
     else:
+        if idx.size == 0:
+            return make_error(
+                MCPError.NOT_FOUND,
+                "No functions indexed yet. Index your functions to enable signature search.",
+                hint="Index your functions first:\n  index_fast: bounded disassembly signatures\n  index_batch: bounded signature refresh",
+                suggestions=[],
+                count=0,
+                backend="lexical",
+            )
         for func_ea in idautils.Functions():
             fname = idc.get_func_name(func_ea) or ""
             if fname.startswith(("sub_", "nullsub_")):
@@ -309,16 +313,28 @@ def _embedding_rename_suggestions(
         fname = idc.get_func_name(func_ea) or hex(func_ea)
         pseudo = None
         try:
-            cfunc = ida_hexrays.decompile(func_ea)
-            if cfunc:
-                pseudo = _extract_signature(str(cfunc), max_idents=40)
+            from .intelligence import _build_fast_signature
+
+            func = _compat.get_func_info(func_ea)
+            pseudo = _build_fast_signature(func_ea, func) if func is not None else ""
         except Exception:
             pass
         if not pseudo:
             continue
 
+        if idx.size == 0:
+            return make_error(
+                MCPError.NOT_FOUND,
+                "No functions indexed yet. Index your functions to enable signature search.",
+                hint="Index your functions first:\n  index_fast: bounded disassembly signatures\n  index_batch: bounded signature refresh",
+                suggestions=[],
+                count=0,
+                backend="lexical",
+            )
         similar = idx.similar(pseudo, top_k=max(1, int(nearest_top_k)), exclude_ea=hex(func_ea), threshold=0.0)
         named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
+        for item in named:
+            item["similarity"] = float(item.get("similarity", item.get("score", 0.0)) or 0.0)
         if not named:
             continue
 
@@ -350,20 +366,21 @@ def _embedding_rename_suggestions(
         "ok": True,
         "suggestions": suggestions,
         "count": len(suggestions),
-        "backend": embedder.backend,
-        "note": "Apply with modify(action='rename', addr=..., name=...). High confidence (>0.8) suggestions are reliable.",
+        "backend": "lexical",
+        "note": "Apply with modify(action='rename', addr=..., name=...). Suggestions are deterministic lexical matches and remain advisory.",
     }
 
 
 def _funcs_impl(
-    action: Annotated[Literal["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
-                      "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names"],
+    action: Annotated[
+        Literal["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"], "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names"
+    ],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name (for create)"] = None,
     flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
     force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
-    **kwargs
+    **kwargs,
 ) -> dict:
     """
     Create and modify function definitions.
@@ -399,7 +416,8 @@ def _funcs_impl(
             end_ea = None
             if end:
                 end_ea, err = validate_addr(end)
-                if err: return err
+                if err:
+                    return err
             if end_ea is not None and end_ea <= ea:
                 return make_error(
                     MCPError.INVALID_ARGS,
@@ -450,24 +468,16 @@ def _funcs_impl(
                 )
                 if is_riscv_family():
                     hint += (
-                        " RISC-V: confirm processor/bitness/endian, 2-byte alignment for "
-                        "compressed c.* instructions, and the GP/load base for raw blobs "
-                        "(analysis action='set_gp'/'set_architecture')."
+                        " RISC-V: confirm processor/bitness/endian, 2-byte alignment for compressed c.* instructions, and the GP/load base for raw blobs (analysis action='set_gp'/'set_architecture')."
                     )
                 else:
-                    hint += (
-                        " For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via "
-                        "seg_reg action."
-                    )
+                    hint += " For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via seg_reg action."
                 try:
                     _ft = _inf_filetype_id()
                 except Exception:
                     _ft = None
                 if _ft in (getattr(idaapi, "f_BIN", -1), getattr(idaapi, "f_BINARY", -1)):
-                    hint += (
-                        " Raw blob: run analysis(action='set_architecture'/'set_processor') "
-                        "if the bytes misdecode under the current processor."
-                    )
+                    hint += " Raw blob: run analysis(action='set_architecture'/'set_processor') if the bytes misdecode under the current processor."
                 return make_error(
                     MCPError.ADDRESS_INVALID,
                     f"Address {hex(ea)} cannot be converted to code",
@@ -520,7 +530,8 @@ def _funcs_impl(
 
         elif action == "delete":
             ea, err = _resolve_func_addr(addr)
-            if err: return err
+            if err:
+                return err
             start_ea = _compat.get_func_start(ea)
             if start_ea is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function found at or containing {hex(ea)}")
@@ -571,7 +582,8 @@ def _funcs_impl(
 
         elif action == "set_flags":
             ea, err = _resolve_func_addr(addr)
-            if err: return err
+            if err:
+                return err
             old_flags = _compat.get_func_flags(ea)
             if old_flags is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
@@ -586,7 +598,8 @@ def _funcs_impl(
 
         elif action == "info":
             ea, err = _resolve_func_addr(addr)
-            if err: return err
+            if err:
+                return err
             fn = _compat.get_func_info(ea)
             if not fn:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
@@ -657,7 +670,8 @@ def _funcs_impl(
 
         elif action == "metrics":
             ea, err = _resolve_func_addr(addr)
-            if err: return err
+            if err:
+                return err
             fn = _compat.get_func_info(ea)
             if not fn:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
@@ -727,7 +741,8 @@ def _funcs_impl(
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = _resolve_func_addr(addr)
-            if err: return err
+            if err:
+                return err
             target_fn = _compat.get_func_info(ea)
             if target_fn is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
@@ -735,6 +750,7 @@ def _funcs_impl(
             target_size = len(target_bytes)
             target_insn_count = sum(1 for _ in idautils.FuncItems(target_fn.start_ea))
             import time as _time
+
             _FIND_SIMILAR_MAX_FUNCS = 50000
             _FIND_SIMILAR_MAX_SECS = 60
             results = []
@@ -775,13 +791,15 @@ def _funcs_impl(
                 byte_sim = matches / min_len
                 score = round((insn_sim * 0.4 + byte_sim * 0.6) * 100, 2)
                 raw_scores.append(score)
-                staged.append({
-                    "addr": hex(func_ea),
-                    "name": ida_funcs.get_func_name(func_ea),
-                    "score": score,
-                    "size": size,
-                    "instructions": insn_count,
-                })
+                staged.append(
+                    {
+                        "addr": hex(func_ea),
+                        "name": ida_funcs.get_func_name(func_ea),
+                        "score": score,
+                        "size": size,
+                        "instructions": insn_count,
+                    }
+                )
                 if len(staged) >= max_candidates:
                     break
             if staged:
@@ -819,11 +837,20 @@ _FUNCS_WRITE_ACTIONS = frozenset({"create", "change", "delete", "set_flags"})
 
 @tool
 def funcs(
-    action: Annotated[Literal[
-        "create", "change", "delete", "set_flags", "info", "metrics", "find_similar",
-        "suggest_names", "list",
+    action: Annotated[
+        Literal[
+            "create",
+            "change",
+            "delete",
+            "set_flags",
+            "info",
+            "metrics",
+            "find_similar",
+            "suggest_names",
+            "list",
+        ],
+        "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names|list",
     ],
-                      "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names|list"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name (for create)"] = None,
@@ -835,7 +862,7 @@ def funcs(
     min_size: Annotated[int, "Skip functions smaller than this for list"] = 0,
     min_xrefs: Annotated[Optional[int], "Keep only functions with >= this many xrefs_to (cuts stub-function noise on large binaries)"] = None,
     named_only: Annotated[bool, "Skip sub_* for list"] = False,
-    **kwargs
+    **kwargs,
 ) -> dict:
     """
     Create, modify, and analyze function definitions.
@@ -861,8 +888,8 @@ def funcs(
       Returns ranked list with similarity scores.
     """
     # Public MCP names stay on the wire; accept them beside legacy aliases.
-    addr = public_arg(kwargs, 'address', addr)
-    count = public_arg(kwargs, 'limit', count)
+    addr = public_arg(kwargs, "address", addr)
+    count = public_arg(kwargs, "limit", count)
     if action == "list":
         from ida_pro_mcp.ida_mcp.tools.data import data  # noqa: PLC0415
 

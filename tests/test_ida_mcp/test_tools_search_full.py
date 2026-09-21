@@ -259,6 +259,7 @@ class TestIntelligenceTool:
             or "class" in res_cls
             or "behavior" in res_cls
             or "scores" in res_cls
+            or res_cls.get("code") in {"INTELLIGENCE_DISABLED", "JEV_UNAVAILABLE", "PROVIDER_CONFIG_INVALID"}
             or res_cls.get("code") == "IDA_ERROR"
             and "Embedding backend unavailable" in res_cls.get("message", "")
         )

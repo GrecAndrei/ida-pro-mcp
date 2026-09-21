@@ -2,55 +2,13 @@
 
 from __future__ import annotations
 
-import threading
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server import server_session as session_mod
-from tests._thread_doubles import CaptureThread
 from tests.host.test_session_action_modes_full import _error, _host
-
-
-def test_session_diff_deduplicates_and_cleans_up_background_work(monkeypatch):
-    class _Embedder:
-        pass
-
-    class _Index:
-        size = 1
-
-        def __init__(self, path, _embedder):
-            self.path = path
-            self._cache = {0x401000: [1.0]} if path.startswith("new") else {}
-
-        def similar_vec(self, _vector, **_kwargs):
-            return []
-
-    monkeypatch.setattr(session_mod, "threading", threading)
-    import ida_pro_mcp.host.intelligence.core as core_mod
-
-    monkeypatch.setattr(core_mod, "BgeCodeEmbedder", _Embedder)
-    monkeypatch.setattr(core_mod, "FunctionEmbeddingIndex", _Index)
-    messages = []
-    monkeypatch.setattr(session_mod, "log_rpc", messages.append)
-
-    threads = []
-
-    class _HeldThread(CaptureThread):
-        def start(self):
-            threads.append(self)
-
-    monkeypatch.setattr(threading, "Thread", _HeldThread)
-    with session_mod._SESSION_DIFF_LOCK:
-        session_mod._SESSION_DIFF_INFLIGHT.clear()
-    session_mod.ServerSessionMixin._trigger_session_diff("old", "new")
-    session_mod.ServerSessionMixin._trigger_session_diff("old", "new")
-    assert len(threads) == 1
-    threads[0].run_captured()
-    assert any("new functions" in message for message in messages)
-    with session_mod._SESSION_DIFF_LOCK:
-        assert ("old", "new") not in session_mod._SESSION_DIFF_INFLIGHT
 
 
 def test_prepare_open_args_validates_aliases_conflicts_and_paths(tmp_path):

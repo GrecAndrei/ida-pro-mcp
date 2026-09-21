@@ -7,7 +7,6 @@ import io
 import json
 import tarfile
 import zipfile
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -26,101 +25,6 @@ class _Response:
 
     def read(self, size: int = -1) -> bytes:
         return self.body.read(size)
-
-
-def _patch_model(monkeypatch, body: bytes):
-    import importlib
-
-    model_profiles = importlib.import_module("ida_pro_mcp.host.intelligence.model_profiles")
-
-    profile = model_profiles.MODEL_PROFILES["zembed-1"]
-    patched = replace(
-        profile,
-        download_sha256=hashlib.sha256(body).hexdigest(),
-        download_size=len(body),
-    )
-    profiles = dict(model_profiles.MODEL_PROFILES)
-    profiles["zembed-1"] = patched
-    monkeypatch.setattr(model_profiles, "MODEL_PROFILES", profiles)
-    return patched
-
-
-def test_managed_model_hash_mismatch_keeps_existing_file_and_cleans_partial(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer.runtime import download_embed_model
-
-    expected = b"trusted-model"
-    profile = _patch_model(monkeypatch, expected)
-    destination = tmp_path / "models" / profile.download_filename
-    destination.parent.mkdir(parents=True)
-    destination.write_bytes(b"previous-good-install")
-    monkeypatch.setattr(
-        "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
-        lambda *_args, **_kwargs: _Response(b"tampered!!!!!", headers={"Content-Length": "13"}),
-    )
-
-    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
-        download_embed_model(tmp_path, "zembed-1")
-
-    assert destination.read_bytes() == b"previous-good-install"
-    assert not list(destination.parent.glob("*.part"))
-
-
-def test_managed_model_request_is_pinned_to_profile_revision(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer.runtime import download_embed_model
-
-    body = b"pinned-model"
-    profile = _patch_model(monkeypatch, body)
-    captured: list[str] = []
-
-    def _urlopen(request, **_kwargs):
-        captured.append(request.full_url)
-        return _Response(body, headers={"Content-Length": str(len(body))})
-
-    monkeypatch.setattr("ida_pro_mcp.installer.runtime.urllib.request.urlopen", _urlopen)
-    download_embed_model(tmp_path, "zembed-1")
-
-    assert captured == [
-        profile.download_url.replace("/resolve/main/", f"/resolve/{profile.download_revision}/", 1)
-    ]
-
-
-def test_llama_download_refuses_compatible_asset_without_digest(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer.common import InstallReport
-    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
-
-    release = {
-        "tag_name": "b123",
-        "assets": [
-            {
-                "name": "llama-b123-bin-ubuntu-x64.zip",
-                "browser_download_url": (
-                    "https://github.com/ggml-org/llama.cpp/releases/download/"
-                    "b123/llama-b123-bin-ubuntu-x64.zip"
-                ),
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
-        lambda *_args, **_kwargs: _Response(json.dumps(release).encode()),
-    )
-
-    with pytest.raises(RuntimeError, match="without a GitHub SHA-256 digest"):
-        download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport())
-
-
-def test_archive_extraction_rejects_safe_tar_links_too(tmp_path):
-    from ida_pro_mcp.installer.runtime import _extract_archive
-
-    archive = tmp_path / "link.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        link = tarfile.TarInfo("inside-link")
-        link.type = tarfile.SYMTYPE
-        link.linkname = "inside"
-        tar.addfile(link)
-
-    with pytest.raises(RuntimeError, match="non-regular tar member"):
-        _extract_archive(archive, tmp_path / "out")
 
 
 def test_scoped_kill_fails_closed_when_process_listing_is_unavailable(monkeypatch, tmp_path):

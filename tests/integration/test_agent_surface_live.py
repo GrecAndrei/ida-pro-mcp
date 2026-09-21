@@ -39,7 +39,7 @@ LIVE_FLAG = "IDA_MCP_LIVE_TEST"
 # call into a five-minute stall; fail fast instead. The tiny ELF fixture
 # answers in milliseconds when IDA is healthy.
 DEFAULT_LIVE_CALL_TIMEOUT = 15
-# Indexing / llama-server work is the one legitimately slow path.
+# Indexing a large deterministic signature set is the one legitimately slow path.
 DEFAULT_LIVE_INDEX_TIMEOUT = 180
 # First test in a module also pays for idat startup.
 DEFAULT_LIVE_PYTEST_TIMEOUT = 120
@@ -296,7 +296,7 @@ class LiveMCPClient:
                 "IDA_MCP_DISABLE_RATE_LIMIT": "1",
                 "IDA_MCP_DISABLE_STUCK_DETECTION": "1",
                 "IDA_MCP_POLICY_MODE": "permissive",
-                "IDA_MCP_EMBED_DISABLED": "0" if self.embeddings_enabled else "1",
+                "IDA_MCP_INTELLIGENCE_MODE": "disabled",
                 "IDA_MCP_STRUCTURED_CONTENT": "1",
                 "IDA_MCP_RESPONSE_ENRICH": "0",
                 "IDA_MCP_STARTUP_TIMEOUT": str(max(int(self.timeout), 90)),
@@ -835,7 +835,6 @@ def test_live_read_only_operation_matrix_reaches_real_handlers(live_context: Liv
         "ida_find": {"query": "fixture_entry", "kind": "names", "limit": 10},
         "ida_semantic_search": {"query": "function that calls the fixture leaf", "mode": "quick", "limit": 5},
         "ida_reranker_status": {"probe": True},
-        "ida_function_families": {"min_size": 2, "limit": 5},
         "ida_index_status": {},
         "ida_cancel_index": {"task_id": "missing-live-index"},
         "ida_list_functions": {"query": "fixture_", "limit": 20},

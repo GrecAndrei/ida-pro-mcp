@@ -127,7 +127,7 @@ def test_architecture_recommendation_and_inference_boundaries():
     fallback = session_mod.ServerSessionMixin._arch_recommendations(
         {"inferred_profile": {"candidates": []}}
     )
-    assert fallback[0]["arguments"]["processor"] == "arm"
+    assert fallback is None
     assert session_mod.ServerSessionMixin._arch_inference_warning(None) is None
 
     host = session_mod.ServerSessionMixin.__new__(session_mod.ServerSessionMixin)

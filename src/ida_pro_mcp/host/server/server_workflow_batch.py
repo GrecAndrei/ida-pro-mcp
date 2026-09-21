@@ -36,7 +36,7 @@ _NON_ARG_ANNOTATION_KEYS = {
 }
 
 # D5: tools that never take the single-list-RPC fast path. They are either
-# host-only (no IDA RPC at all), exec-heavy (misc scripts), or embedding-heavy
+# host-only (no IDA RPC at all), exec-heavy (misc scripts), or index-heavy
 # (intelligence) where a list-shaped RPC would serialize one slow job behind
 # the rest. Read eligibility for everything else is decided by policy risk:
 # a call is fast-path-eligible only when evaluate_policy classifies it as a

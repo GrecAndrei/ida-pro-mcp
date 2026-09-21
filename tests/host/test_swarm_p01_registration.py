@@ -135,7 +135,7 @@ class TestNewOperationRegistration(unittest.TestCase):
 
     def test_operation_count_includes_session_diff(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 99, "catalog includes whole-session binary diff triage")
+        self.assertEqual(len(names), 101, "catalog excludes the unavailable vector-family operation")
         self.assertIn("ida_diff_sessions", names)
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)

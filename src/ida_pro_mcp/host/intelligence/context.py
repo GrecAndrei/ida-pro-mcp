@@ -1,8 +1,8 @@
 """
 Context assembly layer for IDA Pro MCP.
 
-Extracted from intelligence.py so the core embedding / classifier / memory
-backends can live in a smaller dedicated module.
+Extracted from the historical intelligence layer. The production path keeps
+context assembly deterministic and uses only bounded typed-question advisories.
 """
 
 from __future__ import annotations
@@ -25,12 +25,14 @@ from .core import (
     _extract_signature,
 )
 from .embeddings import _file_mtime_ns
+from .lexical import LexicalFunctionIndex
 
 
 def _intel_profile_enabled() -> bool:
     """Look up the canonical symbol at call time so tests/runtime can toggle
     the profile flag by mutating the module attribute on intelligence_core."""
     from . import core as intelligence_core
+
     return bool(intelligence_core.INTEL_PROFILE)
 
 
@@ -40,23 +42,23 @@ class ContextAssembler:
     and attention_kernel with a clean, honest pipeline:
 
       1. Blackboard: addr-matched past findings
-      2. Embedding similarity: similar functions in this binary
-      3. Zero-shot behavior classification: what does this function do?
-      4. Rule-based next actions: what should the LLM do next?
-      5. Stuck detection: has the LLM been spinning here?
+      2. Lexical signature retrieval: similar functions in this binary
+      3. Provider advisory classification: what behavior is suggested?
+      4. Rule-based next actions for the calling agent
+      5. Stuck detection: has the agent been spinning here?
 
     Produces a compact `context_pack` injected into every relevant response.
     """
 
     def __init__(self):
-        self._embedder   = BgeCodeEmbedder()
+        self._embedder = BgeCodeEmbedder()
         # Shared singleton classifier — anchors loaded once across all instances
         self._classifier = BehaviorClassifier.instance(self._embedder)
-        # Per-binary embedding indexes keyed by idb_path
+        # Per-binary signature indexes keyed by idb_path
         self._indexes: dict[str, FunctionEmbeddingIndex] = {}
-        self._idx_lock   = threading.Lock()
+        self._idx_lock = threading.Lock()
         # Bounded LRU for _indexes so long-running sessions cannot pin an
-        # unbounded number of embedding indexes (and their in-memory caches)
+        # unbounded number of signature indexes (and their in-memory caches)
         # in RAM.
         self._max_indexes = 4
         self._idx_last_access: dict[str, float] = {}
@@ -117,7 +119,12 @@ class ContextAssembler:
             self._idx_last_access[idb_path] = now
             if idb_path not in self._indexes:
                 db = idb_path + ".embeddings.db"
-                self._indexes[idb_path] = FunctionEmbeddingIndex(db, self._embedder)
+                if getattr(self._embedder, "_provider_only", False):
+                    self._indexes[idb_path] = LexicalFunctionIndex(db)
+                else:
+                    # Explicit compatibility/test facades may still provide a
+                    # vector index; production provider mode never reaches it.
+                    self._indexes[idb_path] = FunctionEmbeddingIndex(db, self._embedder)
             index = self._indexes[idb_path]
             if len(self._indexes) > self._max_indexes:
                 # Evict least-recently-used indexes, keeping the current one.
@@ -143,15 +150,21 @@ class ContextAssembler:
         pseudo_hash: str,
         signature_text: str,
         signature_hash: str,
-        document_text: str,
+        document_text: str | None = None,
     ) -> bool:
-        """Persist a request-time embedding without unbounded thread growth.
+        """Persist a request-time vector without retaining source text.
+
+        ``document_text`` remains an ignored compatibility argument for older
+        injected vector facades. Provider mode never persists decompilation or
+        other raw document content, even when a test/extension supplies a
+        vector-compatible object.
 
         The vector is already in the in-memory cache, so dropping a saturated
-        persistence attempt is safe: a later request can retry it.  This is
+        persistence attempt is safe: a later request can retry it. This is
         deliberately separate from ``index_async`` because re-embedding here
         would duplicate the expensive model call that just produced ``vec``.
         """
+        del document_text
         gate = getattr(self, "_persist_gate", None)
         if gate is None:
             # Some focused tests construct this class with ``__new__``.
@@ -166,9 +179,7 @@ class ContextAssembler:
                     # Never clobber a higher-quality stored embedding: this
                     # path has no structural metadata, so an upsert must not
                     # erase rows written by index_many.
-                    row = conn.execute(
-                        "SELECT index_quality FROM func_embeddings WHERE ea=?", (ea,)
-                    ).fetchone()
+                    row = conn.execute("SELECT index_quality FROM func_embeddings WHERE ea=?", (ea,)).fetchone()
                     if row and str(row[0] or "unknown") in ("full", "fast", "fast_fallback"):
                         return
                     conn.execute(
@@ -176,7 +187,7 @@ class ContextAssembler:
                         INSERT INTO func_embeddings
                            (ea, name, dim, vec_blob, pseudo_hash, indexed_at,
                             signature_text, signature_hash, document_text)
-                        VALUES(?,?,?,?,?,?,?,?,?)
+                        VALUES(?,?,?,?,?,?,?,?,NULL)
                         ON CONFLICT(ea) DO UPDATE SET
                             name=excluded.name, vec_blob=excluded.vec_blob,
                             pseudo_hash=excluded.pseudo_hash,
@@ -186,8 +197,14 @@ class ContextAssembler:
                             document_text=excluded.document_text
                         """,
                         (
-                            ea, name, len(vec), idx._pack(vec), pseudo_hash,
-                            time.time(), signature_text, signature_hash, document_text,
+                            ea,
+                            name,
+                            len(vec),
+                            idx._pack(vec),
+                            pseudo_hash,
+                            time.time(),
+                            signature_text,
+                            signature_hash,
                         ),
                     )
                     conn.commit()
@@ -245,10 +262,7 @@ class ContextAssembler:
         min_conf = 0.0
         max_take = 8
         weight = 1.0
-        filtered_entries = [
-            e for e in entries
-            if float(e.get("confidence") or 0.0) >= min_conf
-        ]
+        filtered_entries = [e for e in entries if float(e.get("confidence") or 0.0) >= min_conf]
         if max_take > 0:
             filtered_entries = sorted(
                 filtered_entries,
@@ -310,10 +324,7 @@ class ContextAssembler:
                     key_kept = f"{source}.kept"
                     metrics[key_total] = int(metrics.get(key_total, 0)) + len(entries)
                     metrics[key_accepted] = int(metrics.get(key_accepted, 0)) + len(filtered_entries)
-                    kept = sum(1 for e in filtered_entries if any(
-                        (r.get("id") and r.get("id") == e.get("id"))
-                        for r in pack.get("related_findings", [])
-                    ))
+                    kept = sum(1 for e in filtered_entries if any((r.get("id") and r.get("id") == e.get("id")) for r in pack.get("related_findings", [])))
                     metrics[key_kept] = int(metrics.get(key_kept, 0)) + kept
                 self._invalidate_session_caches(session_id)
             except Exception:
@@ -406,11 +417,7 @@ class ContextAssembler:
                 # iteration cannot race a concurrent insert.
                 stale_cutoff = now - 600.0
                 with self._session_last_seen_lock:
-                    stale_sessions = [
-                        sid
-                        for sid, last in self._session_last_seen.items()
-                        if last < stale_cutoff
-                    ]
+                    stale_sessions = [sid for sid, last in self._session_last_seen.items() if last < stale_cutoff]
                 for sid in stale_sessions:
                     # Re-check under the lock (TOCTOU guard): the session may
                     # have resumed activity between the snapshot and teardown.
@@ -693,8 +700,7 @@ class ContextAssembler:
             # every-5-calls target-suggestion gate in assemble() survives the
             # 50-entry trim below (len() alone would pin at the cap).
             n = int(log[-1].get("_n") or 0) + 1 if log else 1
-            log.append({"tool": tool, "action": action, "addr": addr,
-                        "ts": time.time(), "_n": n})
+            log.append({"tool": tool, "action": action, "addr": addr, "ts": time.time(), "_n": n})
             # Keep last 50 calls
             if len(log) > 50:
                 self._activity[session_id] = log[-50:]
@@ -719,8 +725,7 @@ class ContextAssembler:
                     "type": "repeated_address",
                     "address": addr,
                     "count": addr_hits,
-                    "message": f"This address has been analyzed {addr_hits} times. "
-                               "Consider exploring callers, callees, or cross-references.",
+                    "message": f"This address has been analyzed {addr_hits} times. Consider exploring callers, callees, or cross-references.",
                     "pivot_suggestions": [
                         f"code(action='callers', addr='{addr}')",
                         f"code(action='callees', addr='{addr}')",
@@ -735,19 +740,22 @@ class ContextAssembler:
         ta_count = sum(1 for e in recent if f"{e['tool']}:{e['action']}" == ta)
         if ta_count >= 5:
             pivots = {
-                "code:decompile":   ["code:callers", "code:callees", "search:semantic"],
-                "search:find":      ["search:structured", "data:imports", "code:decompile"],
-                "code:disasm":      ["code:decompile", "code:blocks", "ctree:get"],
+                "code:decompile": ["code:callers", "code:callees", "search:semantic"],
+                "search:find": ["search:structured", "data:imports", "code:decompile"],
+                "code:disasm": ["code:decompile", "code:blocks", "ctree:get"],
             }
             return {
                 "type": "repeated_tool",
                 "tool_action": ta,
                 "count": ta_count,
                 "message": f"Called {ta} {ta_count} times recently. Try a different approach.",
-                "pivot_suggestions": pivots.get(ta, [
-                    "blackboard(action='list') — review what you've found so far",
-                    "predictor(action='suggest_focus') — get focus suggestions",
-                ]),
+                "pivot_suggestions": pivots.get(
+                    ta,
+                    [
+                        "blackboard(action='list') — review what you've found so far",
+                        "predictor(action='suggest_focus') — get focus suggestions",
+                    ],
+                ),
             }
 
         return None
@@ -767,7 +775,7 @@ class ContextAssembler:
     ) -> dict[str, Any]:
         """
         Build a context_pack for injection into the tool response.
-        Non-blocking: slow operations (embedding new function) are async.
+        Non-blocking: slow operations (indexing a new function) are async.
         Returns empty dict if nothing meaningful to inject.
         """
         _full = mode == "full"
@@ -789,12 +797,10 @@ class ContextAssembler:
                 self._merge_related_findings(pack, bb_addr, "address_linked", session_id=session_id)
 
         # ── 2. Decompile-specific enrichment
-        is_decompile = (tool == "code" and
-                        action in ("decompile", "semantic_decompile", "decompile_chain"))
+        is_decompile = tool == "code" and action in ("decompile", "semantic_decompile", "decompile_chain")
         pseudocode = ""
         if is_decompile:
-            pseudocode = (payload.get("code") or payload.get("pseudocode") or
-                          payload.get("output") or "")
+            pseudocode = payload.get("code") or payload.get("pseudocode") or payload.get("output") or ""
             # For decompile_chain, grab the main pseudocode
             if not pseudocode and isinstance(payload.get("results"), list):
                 for r in payload["results"]:
@@ -813,17 +819,27 @@ class ContextAssembler:
         # structural data so the LLM doesn't need extra tool calls
         # to assess which hits are interesting.
         is_search = tool in ("search", "graph", "code") and action in (
-            "find", "api", "callers", "callees", "xrefs_to", "xrefs_from",
-            "data_ref", "code_ref", "name", "string", "bytes",
-            "call_chain", "common_callers", "hub_functions",
+            "find",
+            "api",
+            "callers",
+            "callees",
+            "xrefs_to",
+            "xrefs_from",
+            "data_ref",
+            "code_ref",
+            "name",
+            "string",
+            "bytes",
+            "call_chain",
+            "common_callers",
+            "hub_functions",
         )
         if is_search and idb_path:
             t_search = self._perf_start()
             try:
                 # Collect addresses from the result payload
                 hit_addrs: list[str] = []
-                for key in ("matches", "items", "results", "callers", "callees",
-                            "xrefs", "refs", "addresses", "functions"):
+                for key in ("matches", "items", "results", "callers", "callees", "xrefs", "refs", "addresses", "functions"):
                     val = payload.get(key)
                     if isinstance(val, list):
                         for item in val:
@@ -846,7 +862,7 @@ class ContextAssembler:
             self._perf_end(session_id, "search_enrich", t_search)
 
         # ── 2c. Suggest next unanalyzed targets (after any tool call) ─────
-        # Use the embedding index to recommend high-interest functions not yet seen.
+        # Use the deterministic signature index to recommend high-interest functions not yet seen.
         if idb_path:
             try:
                 # Only inject next_targets occasionally — every 5 calls per
@@ -872,7 +888,6 @@ class ContextAssembler:
 
         return pack
 
-
     def _enrich_decompile(
         self,
         pack: dict[str, Any],
@@ -885,28 +900,50 @@ class ContextAssembler:
         mode: str = "full",
     ) -> None:
         """
-        Decompile-specific enrichment.  Deterministic first, embeddings second.
+        Decompile-specific enrichment. Deterministic first, provider advisory second.
 
         Priority order:
-          1. Behavior classification via the shared zero-shot classifier (full mode)
+          1. Behavior classification via the explicit typed-question provider (full mode)
           2. Suggested next actions (full mode)
-          3. Function embedding + similarity search (slow, grows over session)
+          3. Signature-index similarity when an explicit vector-compatible extension is supplied
           4. Cross-address blackboard retrieval (callgraph-linked, fast SQL)
           5. Semantic blackboard retrieval (slow, only if bb_store populated)
         """
         _full = mode == "full"
         func_name = payload.get("name") or f"sub_{addr}"
 
-        # ── Behavior classification via the shared zero-shot classifier ──
+        # ── Advisory behavior decision through the explicit provider ──
+        # Only a compact signature/metadata view crosses the provider boundary;
+        # raw decompilation remains local and is never persisted by this path.
         behavior_hits: list = []
         if _full and pseudocode.strip():
             try:
-                behavior_hits = self._behavior_classifier().classify(
-                    pseudocode,
-                    threshold=0.25,
-                    top_k=4,
-                    block=True,
-                )
+                signature = _extract_signature(pseudocode, max_idents=48)
+                classifier = getattr(self, "_classifier", None)
+                if classifier is not None and not isinstance(classifier, BehaviorClassifier):
+                    # Focused callers may inject a deterministic classifier
+                    # double; production always uses the provider-backed
+                    # BehaviorClassifier below.
+                    advisory = classifier.classify(signature, threshold=0.0, top_k=4, block=False)
+                else:
+                    from .advisory import ask_behavior
+
+                    advisory = ask_behavior(
+                        {
+                            "address": addr,
+                            "name": str(func_name)[:256],
+                            "signature": signature,
+                        },
+                        session_id=session_id,
+                        operation="context_behavior",
+                    )
+                if isinstance(advisory, list):
+                    behavior_hits = advisory
+                elif isinstance(advisory, dict) and advisory.get("error"):
+                    pack["intelligence_provider"] = {
+                        "code": advisory.get("code"),
+                        "message": advisory.get("message"),
+                    }
             except Exception:
                 behavior_hits = []
         if behavior_hits:
@@ -919,33 +956,33 @@ class ContextAssembler:
         if _full:
             actions: list[dict[str, Any]] = []
             if addr:
-                actions.append({
-                    "tool": "code", "action": "callers", "addr": addr,
-                    "reason": "See what calls this function",
-                })
+                actions.append(
+                    {
+                        "tool": "code",
+                        "action": "callers",
+                        "addr": addr,
+                        "reason": "See what calls this function",
+                    }
+                )
             if actions:
                 pack["suggested_next_actions"] = actions[:6]
 
-
-        # ── Step 5: Embedding-based function similarity (background-safe) ─
+        # ── Step 5: Optional explicit vector extension (background-safe) ─
         query_vec: list[float] | None = None
         if idb_path:
             try:
-                query_vec = self._embedder.embed_vector(pseudocode[:3000])
+                # Any optional vector-compatible test/provider facade receives
+                # only the compact identifier signature. Typed-question Jev
+                # and custom providers never implement this path.
+                sig = _extract_signature(pseudocode, max_idents=64) or ""
+                query_vec = self._embedder.embed_vector(sig)
                 if query_vec is None:
                     raise RuntimeError("embedding unavailable")
                 idx = self._get_index(idb_path)
-                # Update cache + persist async.  Keep the exact bounded text
-                # used for embedding so the reranker later sees a real
-                # document instead of only the short lexical signature.
-                document_text = pseudocode[:3000]
                 idx.cache_store(addr, query_vec)
-                ph   = idx._phash(pseudocode)
-                sig  = _extract_signature(pseudocode, max_idents=64) or ""
+                ph = idx._phash(pseudocode)
                 sig_hash = hashlib.sha256((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
-                self._schedule_embedding_persist(
-                    idx, addr, func_name, query_vec, ph, sig, sig_hash, document_text
-                )
+                self._schedule_embedding_persist(idx, addr, func_name, query_vec, ph, sig, sig_hash)
 
                 # Similarity search over the in-memory cache. Only surfaced in
                 # full mode, so skip the cosine scan entirely in compact mode —
@@ -953,14 +990,9 @@ class ContextAssembler:
                 # side-effect.  Delegates to FunctionEmbeddingIndex.similar_vec
                 # so the numpy-accelerated batch cosine is used here too.
                 if _full:
-                    similar = idx.similar_vec(
-                        query_vec, top_k=3, threshold=0.6, exclude_ea=addr
-                    )
+                    similar = idx.similar_vec(query_vec, top_k=3, threshold=0.6, exclude_ea=addr)
                     if similar:
-                        pack["similar_functions"] = [
-                            {"ea": row["ea"], "name": row["name"], "similarity": row["similarity"]}
-                            for row in similar
-                        ]
+                        pack["similar_functions"] = [{"ea": row["ea"], "name": row["name"], "similarity": row["similarity"]} for row in similar]
             except Exception:
                 pass
 
@@ -974,15 +1006,13 @@ class ContextAssembler:
                 pass
 
         # ── Step 7: Semantic blackboard retrieval ─────────────────────────
-        # Runs in all modes: this is the recall that makes the blackboard useful
-        # to the LLM — semantically related past findings are surfaced without
-        # the LLM having to query for them. BlackboardStore.semantic_search
-        # embeds the signature once and cosine-scans stored vectors (no
-        # re-embedding of entries).
+        # Runs only when an explicit vector extension supplied a query vector;
+        # otherwise BlackboardStore.semantic_search retains its deterministic
+        # lexical fallback. Provider advisories never write findings.
         if query_vec is not None and bb_store is not None and not self._semantic_circuit_open(session_id):
             try:
                 sem_thr = self._get_semantic_threshold(session_id)
-                sig = _extract_signature(pseudocode, max_idents=40) or pseudocode[:512]
+                sig = _extract_signature(pseudocode, max_idents=40)
                 sem_bb = bb_store.semantic_search(
                     query=sig,
                     top_k=5,
@@ -1001,20 +1031,20 @@ class ContextAssembler:
         if _full and stats:
             pack["retrieval_stats"] = stats
 
-
     def _enrich_address_list(
         self,
         addresses: list[str],
         idb_path: str,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Enrich addresses with structural data from the embedding index."""
+        """Enrich addresses with structural data from the signature index."""
         if not addresses or not idb_path:
             return []
         try:
             idx = self._get_index(idb_path)
             if idx is None or idx.size == 0:
                 return []
+
             # The ea column stores hex strings like "0x401000", so
             # convert inputs to hex strings to match exactly.
             def _to_hex(a: str) -> str | None:
@@ -1028,14 +1058,11 @@ class ContextAssembler:
             eas = [a for a in eas if a is not None]
             if not eas:
                 return []
-            # Query embedding index for structural metadata
+            # Query signature index for structural metadata
             enriched = []
             with idx._conn() as conn:
                 ph = ",".join("?" * len(eas))
-                for row in conn.execute(
-                    f"SELECT ea, name, func_size, bb_count, has_loops, api_count, string_count, segment, cyclomatic "
-                    f"FROM func_embeddings WHERE ea IN ({ph})", eas
-                ):
+                for row in conn.execute(f"SELECT ea, name, func_size, bb_count, has_loops, api_count, string_count, segment, cyclomatic FROM func_embeddings WHERE ea IN ({ph})", eas):
                     entry = {"ea": hex(int(row[0], 16)) if row[0] else "", "name": row[1] or ""}
                     if row[2]:
                         entry["size"] = row[2]
@@ -1056,7 +1083,6 @@ class ContextAssembler:
         except Exception:
             return []
 
-
     def suggest_next_targets(
         self,
         idb_path: str,
@@ -1064,7 +1090,7 @@ class ContextAssembler:
     ) -> list[dict[str, Any]]:
         """Recommend unanalyzed functions worth examining next.
 
-        Uses the embedding index to find high-value structural candidates.
+        Uses the deterministic signature index to find high-value structural candidates.
         """
         if not idb_path:
             return []
@@ -1086,40 +1112,35 @@ class ContextAssembler:
                 if ea in analyzed or ea in seen:
                     continue
                 seen.add(ea)
-                results.append({
-                    "ea": ea,
-                    "name": r["name"],
-                    "reason": f"size={r['func_size']}, bb={r['bb_count']}, apis={r['api_count']}",
-                    "interest_score": 0.5,
-                    "api_count": r["api_count"],
-                    "bb_count": r["bb_count"],
-                    "has_loops": r["has_loops"],
-                })
+                results.append(
+                    {
+                        "ea": ea,
+                        "name": r["name"],
+                        "reason": f"size={r['func_size']}, bb={r['bb_count']}, apis={r['api_count']}",
+                        "interest_score": 0.5,
+                        "api_count": r["api_count"],
+                        "bb_count": r["bb_count"],
+                        "has_loops": r["has_loops"],
+                    }
+                )
             return results[:limit]
         except Exception:
             return []
 
     def stop(self) -> None:
-        """Shut down the llama-server subprocess cleanly."""
+        """Release provider-neutral in-memory context state."""
         self._embedder.stop()
 
     def ensure_embedding_server(self) -> bool:
-        """Ensure the host owns or is attached to the shared embedder."""
-        return self._embedder.ensure_ready()
+        """Return provider readiness; no local server is started."""
+        return self._embedder.check_availability()
 
     @property
     def status(self) -> dict[str, Any]:
         return {
-            "backend": self._embedder.backend,
-            "llama_server_bin": self._embedder._server_bin or "not found",
-            "model_path": self._embedder._model_path or "not found",
-            "model_ready": self._embedder._ready,
-            "embed_dim": self._embedder.dim,
-            "indexes": {
-                idb: {"functions_indexed": idx.size}
-                for idb, idx in self._indexes.items()
-            },
-            "embed_batch_size": getattr(self._embedder, "_batch_size", 1),
+            "provider": self._embedder.status(),
+            "embedding_supported": False,
+            "indexes": {idb: {"functions_indexed": idx.size} for idb, idx in self._indexes.items()},
         }
 
 

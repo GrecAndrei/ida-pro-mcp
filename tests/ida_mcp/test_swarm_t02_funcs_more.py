@@ -7,6 +7,7 @@ compatibility layer) instead of depending on an installed IDA database.
 from __future__ import annotations
 
 import builtins
+import importlib
 import sys
 import types
 from unittest.mock import patch
@@ -210,6 +211,8 @@ def test_persist_symbol_knowledge_and_embedding_boundaries(monkeypatch):
     services.FunctionEmbeddingIndex = Index
     services._extract_signature = lambda text, max_idents: text
     mod.idc.get_idb_path = lambda: "/tmp/sample.i64"
+    lexical = importlib.import_module("ida_pro_mcp.host.intelligence.lexical")
+    monkeypatch.setattr(lexical, "LexicalFunctionIndex", Index)
     assert mod._embedding_rename_suggestions()["code"] == "NOT_FOUND"
 
 
@@ -237,6 +240,12 @@ def test_embedding_suggestions_threshold_and_fallback_signature(monkeypatch):
     services.FunctionEmbeddingIndex = Index
     services._extract_signature = lambda text, max_idents: text[:max_idents]
     monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = importlib.import_module("ida_pro_mcp.host.intelligence.lexical")
+    monkeypatch.setattr(lexical, "LexicalFunctionIndex", Index)
+    intelligence = types.ModuleType("ida_pro_mcp.ida_mcp.tools.intelligence")
+    intelligence._build_fast_signature = lambda *_args: "int f(void)"
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp.tools.intelligence", intelligence)
+    mod._compat.get_func_info = lambda _ea: types.SimpleNamespace(start_ea=0x1000, end_ea=0x1010)
     mod.idc.get_idb_path = lambda: "/tmp/sample.i64"
     mod.validate_addr = lambda _addr, **_kwargs: (0x1000, None)
     mod.idc.get_func_name = lambda _ea: "sub_1000"

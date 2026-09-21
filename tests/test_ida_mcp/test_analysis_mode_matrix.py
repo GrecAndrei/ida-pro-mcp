@@ -218,6 +218,7 @@ def test_raw_entry_bootstrap_and_reanalysis_helpers_cover_architecture_modes(mon
     monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "j", raising=False)
     monkeypatch.setattr(idc, "get_operand_value", lambda *_args: 0x1040, raising=False)
     rv = _bootstrap_raw_entry_points(0x1000, 0x1100)
-    assert rv["seeded_entries"] >= 1
+    assert rv["seeded_entries"] == 0
+    assert "delegated to IDA" in rv["note"]
     monkeypatch.setattr(idautils, "Functions", lambda: iter(()), raising=False)
     assert _ensure_entry_point_functions()["entry_points_total"] >= 0

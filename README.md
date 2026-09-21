@@ -10,7 +10,7 @@ for each session by default.
 
 ## Why this implementation
 
-- **Deterministic agent surface:** 99 strict-schema `ida_*` operations with
+- **Deterministic agent surface:** 101 strict-schema `ida_*` operations with
   live discovery through `tools/list` and `ida_help`.
 - **Local-first architecture:** the host and IDA runtime communicate over a
   token-protected loopback bridge; no hidden LLM service sits in the analysis
@@ -24,7 +24,7 @@ for each session by default.
 
 The current version is `1.0.0a3`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
-stable 1.0.0 release. The default client surface contains 99 exact-schema operations.
+stable 1.0.0 release. The default client surface contains 101 exact-schema operations.
 Use live discovery for the complete contract: `tools/list` enumerates every
 operation with its schema, and `ida_help(topic="...")` returns the exact
 arguments and example for one operation.
@@ -43,9 +43,10 @@ You need:
   Codex, OpenCode, Claude Desktop, Cursor, VS Code/Copilot, Windsurf, Cline,
   Roo Code, Gemini CLI, or Antigravity.
 
-Normal analysis does not require a language model or an embedding model. The
-optional semantic-search features use a local model by default and remain
-disabled when no model is configured.
+Normal analysis does not require an intelligence provider. The explicit
+intelligence modes are `jev`, `custom`, and `disabled`; disabled mode keeps
+deterministic lexical search available and there is no local, Gemini, or
+native-model fallback.
 
 The default runtime is `idat`: one headless IDA process per session. The
 `idalib` backend is experimental, requires an IDA 9.3-or-newer installation
@@ -78,8 +79,8 @@ executables on `PATH`, and common installation directories. `--ida-version`
 selects a version when more than one installation is present. Use
 `--dry-run` to inspect the planned changes first.
 
-The installer does not download an embedding model unless you select or
-request one. It may create or update configuration files for every client
+The installer never downloads a provider model or runtime. It may create
+or update configuration files for every client
 location in its built-in client map, including clients that are not installed
 on your machine. Check `install-report.json` in the install root and remove
 unused entries if necessary. Existing regular configuration files are backed
@@ -206,7 +207,8 @@ complete schemas and examples are available live via `tools/list` and
 | Group | Operations |
 |---|---|
 | **Session** | `open_binary`, `open_background`, `session_state`, `session_status`, `session_health`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch` |
-| **Discovery** | `overview`, `find`, `semantic_search`, `reranker_status`, `function_families`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang` |
+| **Discovery** | `overview`, `find`, `semantic_search`, `intelligence_status`, `usage_status`, `usage_report`, `reranker_status`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang` |
+| **Intelligence** | `intelligence_status`, `usage_status`, `usage_report` |
 | **Code** | `decompile`, `disassemble`, `compare_functions`, `diff_sessions`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `get_type`, `callgraph`, `emulate` |
 | **Findings** | `write_finding`, `mark_examined`, `list_findings`, `search_findings`, `update_finding`, `export_findings`, `publish_findings`, `import_annotations`, `analysis_brief`, `next_target` |
 | **Edit** | `create_function`, `change_function`, `rename`, `comment`, `patch_bytes`, `save_idb`, `make_code`, `undefine`, `rename_local`, `declare_type`, `apply_type`, `add_segment`, `set_segment_attrs`, `apply_sig`, `sreg_set`, `create_data`, `create_strlit`, `undo_begin`, `undo_end`, `add_entry`, `idb_snapshot`, `idb_restore_snapshot`, `struct_member_add`, `struct_member_del`, `struct_member_rename`, `struct_member_set_type`, `enum_member_add`, `enum_member_rename`, `enum_member_revalue`, `til_delete`, `til_export`, `til_import`, `mark_dangerous` |
@@ -265,30 +267,29 @@ requests as untrusted input.
 ## Privacy and data handling
 
 The normal host-to-IDA path is local. The project does not run a built-in LLM
-service in the analysis path, and local embedding is opt-in. That does not
-make the whole workflow automatically offline:
+service in the analysis path. Intelligence is explicit Jev, custom BYOK, or
+disabled; disabled mode is fully offline. A configured remote provider still
+makes the selected advisory requests network-visible:
 
 - The connected MCP client receives paths, symbols, strings, bytes,
   decompilation, findings, and other results. The client or its model provider
   may transmit that context according to its own account, model, and retention
   settings. IDA Pro MCP cannot control those transfers.
-- If you explicitly select the Gemini embedding backend, the server sends a
-  compact behavioral signature to Google rather than a full decompilation.
-  The signature can still contain code-derived calls, constants, string
-  literals, and control-flow information. Do not enable it for binaries that
-  must remain on the workstation.
-- Installer dependency downloads, optional model and `llama-server` downloads,
-  and optional threat-corpus downloads can make network requests when enabled.
+- Jev and custom providers receive only bounded typed-question state: metadata,
+  bytes/disassembly samples, and signatures. Raw decompilation, prompts,
+  completions, and credentials are not logged or persisted.
+- Custom cloud origins require an explicit HTTPS allowlist. Plain HTTP is
+  accepted only for loopback endpoints when explicitly enabled.
+- Installer dependency downloads and optional threat-corpus downloads can make
+  network requests when enabled.
 - Local cache, logs, session metadata, managed IDBs, and the blackboard may
   contain paths, analysis metadata, and findings. Protect the install/data
-  directories. If you pass a Gemini AI Studio key to the installer, the key
-  may be written into the generated MCP client environment block; prefer an
-  environment-based credential and review the client configuration.
+  directories. Credentials are read at request time and are never written to
+  generated client configuration.
 
-For a local-only setup, use the default local runtime, leave Gemini and other
-optional downloads disabled, and configure the MCP client and its model
-according to your organization’s data policy. “Local-only” still requires
-checking what the client sends to its own model provider.
+For a local-only setup, select `--intelligence-mode disabled`. Deterministic
+IDA analysis, lexical indexing/search, storage, and policy controls remain
+available without a provider.
 
 ## Common troubleshooting
 
@@ -329,22 +330,14 @@ arbitrary arguments: schemas are strict. Review `IDA_MCP_POLICY_MODE` and the
 operator policy file before changing policy. Disabling all policy gates is a
 separate, deliberately unsafe choice.
 
-### Semantic search is unavailable
+### Intelligence or semantic search is unavailable
 
-Semantic search is optional and requires an index and a compatible embedding
-backend. Ordinary listing, search, decompilation, and cross-reference work do
-not require it. To set up the optional local path, use the installer’s explicit
-embedder options, for example:
-
-```bash
-python3 install.py --setup-embedder
-```
-
-The installer can also run `--embedder-doctor`, use an explicit model path, or
-download a selected model and `llama-server` when requested. Model licenses,
-disk use, and network downloads are your responsibility. If the model is
-missing, the server should report semantic search as unavailable rather than
-pretending that it ran.
+Semantic search uses deterministic lexical signatures and does not require a
+provider. Optional Jev/custom scoring is advisory; a missing key,
+provider outage, malformed response, or exhausted budget returns a structured
+provider error while lexical results remain available. Configure Jev or custom
+explicitly with `--intelligence-mode` and the documented `IDA_MCP_*` variables;
+there is no local-model fallback.
 
 ### The installer refuses a client configuration
 
@@ -372,8 +365,8 @@ switch to experimental `idalib` while diagnosing a basic installation.
   loopback transport, session ownership, and filesystem guards.
 - [Investigation workspace](docs/wiki/core/investigation.md) — findings,
   evidence, targets, and exports.
-- [Intelligence and embeddings](docs/wiki/core/intelligence.md) — local and
-  optional Gemini retrieval backends.
+- [Intelligence and providers](docs/wiki/core/intelligence.md) — Jev, custom
+  BYOK, disabled mode, usage budgets, and deterministic lexical retrieval.
 - [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration.
 - [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
   flow for readers who need implementation detail.

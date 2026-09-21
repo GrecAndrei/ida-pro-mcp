@@ -13,11 +13,12 @@ When a change touches IDA-side behavior, validate the smallest relevant path:
 - decompilation, disassembly, and xrefs;
 - the intended IDB mutation and its persisted result;
 - snapshot or undo behavior when rollback is involved;
-- retrieval against the selected backend and model;
+- deterministic lexical retrieval and, when explicitly configured, bounded Jev/custom advisory scoring;
 - architecture-specific behavior for firmware or raw blobs.
 
-Record the IDA version, runtime mode, binary, retrieval backend, and model when
-reporting results. Do not present fake-test results as live IDA behavior.
+Record the IDA version, runtime mode, binary, retrieval mode, and safe provider
+status (mode/model only, never credentials or content) when reporting results.
+Do not present fake-test results as live IDA behavior.
 
 ## Run the live scope
 
@@ -62,7 +63,7 @@ For a manual smoke test:
 
 For a live failure, include the operation name, minimal arguments, expected and
 actual result, IDA version, Python version, operating system, and relevant
-runtime/backend details.
+runtime/provider details. Do not include provider request or response bodies.
 
 The repository metadata and README require IDA Pro 9.2 or newer. The optional
 idalib runtime path is experimental and requires an IDA 9.3-or-newer install

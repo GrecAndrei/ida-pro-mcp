@@ -238,7 +238,7 @@ SEARCH_ALIASES = {
     "datarefs": "data_ref", "coderefs": "code_ref",
     "function_signature": "func_by_sig", "signature": "func_by_sig",
     "lookup": "find", "discover": "find",
-    # nl/natural_language → real nl action (bge-code-v1 embeddings)
+    # nl/natural_language → bounded deterministic lexical action with optional provider advisory scoring
     "natural_language": "nl", "embedding_search": "nl", "vector_search": "nl",
     "caller": "callers", "callee": "callees",
     "imports": "api", "import": "api", "apis": "api",

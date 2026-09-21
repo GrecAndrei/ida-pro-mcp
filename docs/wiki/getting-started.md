@@ -9,8 +9,10 @@ finding.
 - Python 3.11 or newer
 - The runtime dependencies installed by the project installer
 
-The server uses deterministic IDA SDK calls. Optional embedding and reranking
-are separate retrieval helpers and are not required for ordinary analysis.
+The server uses deterministic IDA SDK calls. Intelligence is explicitly
+configured as `jev`, `custom`, or `disabled`; disabled mode provides
+fully-local lexical retrieval and there is no local/Gemini/native model
+fallback.
 
 When an alpha release is published, the GitHub release also includes a source
 bundle with the installer. Verify its `SHA256SUMS`, extract it, and run
@@ -53,8 +55,9 @@ pip install -e .
 python -u -m ida_pro_mcp.host.server
 ```
 
-Do not download retrieval models or the optional threat corpus unless you need
-those features. They are opt-in.
+No retrieval model is downloaded. Configure a remote advisory provider only
+when its data policy and budget are acceptable; the optional threat corpus is
+still opt-in.
 
 ## Open the first binary
 

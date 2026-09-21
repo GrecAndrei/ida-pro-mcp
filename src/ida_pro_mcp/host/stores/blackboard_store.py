@@ -87,12 +87,8 @@ _OPPOSED_STATUS = frozenset({("confirmed", "rejected"), ("rejected", "confirmed"
 
 # Rows written by internal enrichment passes rather than by the analyst.
 # They are real data but they are noise in a human-facing brief.
-_INTERNAL_WORKSPACE_CATEGORIES = frozenset(
-    {"evidence_gravity", "wm_now", "quest_log", "proposal_feedback"}
-)
-_INTERNAL_WORKSPACE_SOURCE_TYPES = frozenset(
-    {"evidence_gravity", "gravity", "auto_enrich", "proposal_feedback"}
-)
+_INTERNAL_WORKSPACE_CATEGORIES = frozenset({"evidence_gravity", "wm_now", "quest_log", "proposal_feedback"})
+_INTERNAL_WORKSPACE_SOURCE_TYPES = frozenset({"evidence_gravity", "gravity", "auto_enrich", "proposal_feedback"})
 
 _WS_RUN = re.compile(r"\s+")
 _NON_SYMBOL = re.compile(r"[^0-9a-z]+")
@@ -150,17 +146,14 @@ def _resolve_db_path(db_path: str | None = None) -> str:
         return resolved
     try:
         import idc as _idc
+
         p = _idc.get_idb_path()
         if p:
             return p + ".blackboard.db"
     except Exception:
         pass
     xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    root = (
-        os.environ.get("IDA_MCP_CACHE_DIR")
-        or os.environ.get("IDA_MCP_DATA_DIR")
-        or os.path.join(xdg, "ida-pro-mcp")
-    )
+    root = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR") or os.path.join(xdg, "ida-pro-mcp")
     for candidate in (root, os.path.join(tempfile.gettempdir(), "ida-pro-mcp")):
         try:
             os.makedirs(candidate, exist_ok=True)
@@ -175,15 +168,18 @@ def _resolve_db_path(db_path: str | None = None) -> str:
 
 
 def _get_embedder():
+    """Return the no-vector compatibility facade for lexical fallback paths.
+
+    The facade performs no model loading and advertises no embedding
+    capability.  Keeping an object here preserves the old store seam while
+    ``_embed_text`` and semantic retrieval still fall back deterministically.
+    """
     try:
         from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
+
         return BgeCodeEmbedder()
-    except ImportError:
-        try:
-            from host.intelligence.core import BgeCodeEmbedder  # type: ignore
-            return BgeCodeEmbedder()
-        except ImportError:
-            return None
+    except Exception:
+        return None
 
 
 def normalize_addr(addr: Any) -> str:
@@ -232,6 +228,7 @@ def _clamp01(value: Any, default: float = 0.5) -> float:
 # ---------------------------------------------------------------------------
 # Schema migrations
 # ---------------------------------------------------------------------------
+
 
 class _Rollback(Exception):
     """Internal signal: roll back the current write transaction."""
@@ -354,14 +351,12 @@ def _migrate_0001_initial_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_findings_ioc ON findings(ioc_type)",
         "CREATE INDEX IF NOT EXISTS idx_findings_source_type ON findings(source_type)",
         "CREATE INDEX IF NOT EXISTS idx_findings_xref ON findings(xref_count)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_fingerprint_unique "
-        "ON findings(fingerprint) WHERE fingerprint != ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_fingerprint_unique ON findings(fingerprint) WHERE fingerprint != ''",
         "CREATE INDEX IF NOT EXISTS idx_links_a ON links(entry_a)",
         "CREATE INDEX IF NOT EXISTS idx_links_b ON links(entry_b)",
         "CREATE INDEX IF NOT EXISTS idx_finding_events_entry ON finding_events(entry_id, seq)",
         "CREATE INDEX IF NOT EXISTS idx_bb_tasks_status ON bb_tasks(status)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bb_machinery_ns_key "
-        "ON bb_machinery(namespace, key)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bb_machinery_ns_key ON bb_machinery(namespace, key)",
     ):
         conn.execute(stmt)
 
@@ -409,22 +404,42 @@ def _migrate_legacy_blackboard(conn: sqlite3.Connection) -> None:
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                entry_id, kind, status,
-                str(d.get("category") or "general"), str(d.get("title") or ""),
-                d.get("content"), d.get("addr"), d.get("addr_end"), tags,
-                confidence, priority, q_value,
-                str(d.get("source") or "manual"), source_type, evidence,
+                entry_id,
+                kind,
+                status,
+                str(d.get("category") or "general"),
+                str(d.get("title") or ""),
+                d.get("content"),
+                d.get("addr"),
+                d.get("addr_end"),
+                tags,
+                confidence,
+                priority,
+                q_value,
+                str(d.get("source") or "manual"),
+                source_type,
+                evidence,
                 str(d.get("fingerprint") or ""),
-                d.get("ioc_type"), d.get("ioc_value"), d.get("depends_on"), d.get("blocks_addr"),
-                d.get("register"), d.get("reg_type"),
-                float(d.get("entropy") or 0.0), int(d.get("xref_count") or 0),
-                int(d.get("calibrated") or 0), str(d.get("verdict") or ""),
-                str(d.get("anchor_kind") or ""), str(d.get("anchor_digest") or ""),
-                int(d.get("stale") or 0), str(d.get("stale_reason") or ""),
+                d.get("ioc_type"),
+                d.get("ioc_value"),
+                d.get("depends_on"),
+                d.get("blocks_addr"),
+                d.get("register"),
+                d.get("reg_type"),
+                float(d.get("entropy") or 0.0),
+                int(d.get("xref_count") or 0),
+                int(d.get("calibrated") or 0),
+                str(d.get("verdict") or ""),
+                str(d.get("anchor_kind") or ""),
+                str(d.get("anchor_digest") or ""),
+                int(d.get("stale") or 0),
+                str(d.get("stale_reason") or ""),
                 str(d.get("contradiction_reason") or ""),
                 int(d.get("version") or 1),
-                float(d.get("created_at") or now), float(d.get("updated_at") or now),
-                d.get("decayed_at"), d.get("published_at"),
+                float(d.get("created_at") or now),
+                float(d.get("updated_at") or now),
+                d.get("decayed_at"),
+                d.get("published_at"),
                 str(d.get("published_symbol") or ""),
             ),
         )
@@ -437,18 +452,14 @@ def _migrate_legacy_blackboard(conn: sqlite3.Connection) -> None:
                 other = str(other)
                 if other and other != entry_id:
                     conn.execute(
-                        "INSERT OR IGNORE INTO links(entry_a, entry_b, type, reason, note, created_at, updated_at) "
-                        "VALUES (?,?,?,?,?,?,?)",
-                        (entry_id, other, "conflict",
-                         "migrated from legacy conflicts_with", "migrated from legacy conflicts_with",
-                         now, now),
+                        "INSERT OR IGNORE INTO links(entry_a, entry_b, type, reason, note, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                        (entry_id, other, "conflict", "migrated from legacy conflicts_with", "migrated from legacy conflicts_with", now, now),
                     )
         vector = d.get("vector")
         if vector:
             with contextlib.suppress(sqlite3.Error):
                 conn.execute(
-                    "INSERT OR IGNORE INTO findings_embeddings(entry_id, vector, model, created_at, updated_at) "
-                    "VALUES (?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO findings_embeddings(entry_id, vector, model, created_at, updated_at) VALUES (?,?,?,?,?)",
                     (entry_id, sqlite3.Binary(vector), "", now, now),
                 )
 
@@ -470,17 +481,12 @@ def _create_blackboard_compat_view(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE VIEW blackboard AS SELECT * FROM findings")
     set_clause = ", ".join(f"{c}=NEW.{c}" for c in cols)
     conn.execute("DROP TRIGGER IF EXISTS trg_blackboard_compat_update")
-    conn.execute(
-        "CREATE TRIGGER trg_blackboard_compat_update INSTEAD OF UPDATE ON blackboard "
-        f"BEGIN UPDATE findings SET {set_clause} WHERE id=NEW.id; END"
-    )
+    conn.execute(f"CREATE TRIGGER trg_blackboard_compat_update INSTEAD OF UPDATE ON blackboard BEGIN UPDATE findings SET {set_clause} WHERE id=NEW.id; END")
 
 
 def _migrate_0002_split_findings(conn: sqlite3.Connection) -> None:
     """Migrate legacy single-table data into the new layout, then drop it."""
-    legacy = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='blackboard'"
-    ).fetchone()
+    legacy = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='blackboard'").fetchone()
     if legacy:
         _migrate_legacy_blackboard(conn)
         conn.execute("DROP TABLE blackboard")
@@ -499,10 +505,7 @@ def _migrate_0003_embedding_metadata(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE findings_embeddings ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 0")
     if "text_hash" not in columns:
         conn.execute("ALTER TABLE findings_embeddings ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''")
-    conn.execute(
-        "UPDATE findings_embeddings SET embedding_dim = length(vector) / 4 "
-        "WHERE embedding_dim = 0 AND vector IS NOT NULL"
-    )
+    conn.execute("UPDATE findings_embeddings SET embedding_dim = length(vector) / 4 WHERE embedding_dim = 0 AND vector IS NOT NULL")
 
 
 #: Ordered by the user_version each migration lands on.
@@ -566,9 +569,7 @@ class BlackboardStore:
             try:
                 from ..config import CACHE_DIR
             except ImportError:
-                xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(
-                    os.path.expanduser("~"), ".local", "state"
-                )
+                xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
                 CACHE_DIR = os.path.join(xdg, "ida-pro-mcp")
             h = hashlib.sha256(os.path.abspath(primary_path).encode("utf-8")).hexdigest()[:16]
             fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
@@ -660,10 +661,7 @@ class BlackboardStore:
         if model_path:
             try:
                 stat = os.stat(os.fspath(model_path))
-                parts.append(
-                    f"model:{os.path.realpath(os.fspath(model_path))}:"
-                    f"{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
-                )
+                parts.append(f"model:{os.path.realpath(os.fspath(model_path))}:{int(stat.st_size)}:{int(stat.st_mtime_ns)}")
             except (OSError, TypeError, ValueError):
                 parts.append(f"model:{model_path}")
         if dimension:
@@ -681,15 +679,8 @@ class BlackboardStore:
         """Build the canonical document text used for blackboard retrieval."""
         tag_values = tags if isinstance(tags, builtins.list) else []
         evidence_values = evidence if isinstance(evidence, builtins.list) else []
-        evidence_text = " ".join(
-            " ".join(str(value) for value in item.values())
-            for item in evidence_values
-            if isinstance(item, dict)
-        )
-        return (
-            f"title: {title} category: {category} tags: {' '.join(map(str, tag_values))} "
-            f"content: {content} evidence: {evidence_text}"
-        ).strip()
+        evidence_text = " ".join(" ".join(str(value) for value in item.values()) for item in evidence_values if isinstance(item, dict))
+        return (f"title: {title} category: {category} tags: {' '.join(map(str, tag_values))} content: {content} evidence: {evidence_text}").strip()
 
     def _embed_text(self, text: str) -> bytes | None:
         embedder = self._get_embedder()
@@ -784,8 +775,7 @@ class BlackboardStore:
         # link_conflict stores both directions, so the same neighbour arrives
         # twice here; dedupe with a set before attaching.
         link_rows = conn.execute(
-            f"SELECT entry_a, entry_b FROM links "
-            f"WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
+            f"SELECT entry_a, entry_b FROM links WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
             (*ids, *ids),
         ).fetchall()
         conflict_map: dict[str, set[str]] = {}
@@ -856,13 +846,10 @@ class BlackboardStore:
 
         now = time.time()
         with self._tx() as conn:
-            row = conn.execute(
-                "SELECT digest FROM code_anchors WHERE addr=? AND kind=?", (naddr, kind)
-            ).fetchone()
+            row = conn.execute("SELECT digest FROM code_anchors WHERE addr=? AND kind=?", (naddr, kind)).fetchone()
             previous = row["digest"] if row else ""
             conn.execute(
-                "INSERT INTO code_anchors(addr, kind, digest, seen_at) VALUES (?,?,?,?) "
-                "ON CONFLICT(addr, kind) DO UPDATE SET digest=excluded.digest, seen_at=excluded.seen_at",
+                "INSERT INTO code_anchors(addr, kind, digest, seen_at) VALUES (?,?,?,?) ON CONFLICT(addr, kind) DO UPDATE SET digest=excluded.digest, seen_at=excluded.seen_at",
                 (naddr, kind, new_digest, now),
             )
             marked: builtins.list[str] = []
@@ -875,9 +862,7 @@ class BlackboardStore:
                 marked = [r["id"] for r in rows]
                 if marked:
                     conn.execute(
-                        "UPDATE findings SET stale=1, stale_reason=? WHERE id IN ("
-                        + ",".join("?" for _ in marked)
-                        + ")",
+                        "UPDATE findings SET stale=1, stale_reason=? WHERE id IN (" + ",".join("?" for _ in marked) + ")",
                         (reason, *marked),
                     )
             else:
@@ -897,8 +882,7 @@ class BlackboardStore:
     def stale_entries(self, limit: int = 20) -> builtins.list[dict]:
         conn = self._conn()
         rows = conn.execute(
-            "SELECT * FROM findings WHERE stale=1 AND status != 'rejected' "
-            "ORDER BY confidence DESC, updated_at DESC LIMIT ?",
+            "SELECT * FROM findings WHERE stale=1 AND status != 'rejected' ORDER BY confidence DESC, updated_at DESC LIMIT ?",
             (max(1, int(limit)),),
         ).fetchall()
         return self._hydrate(rows, conn)
@@ -994,13 +978,40 @@ class BlackboardStore:
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    entry_id, kind, status, category, title, content, naddr, addr_end,
-                    json.dumps(tags or []), _clamp01(confidence), _clamp01(priority),
-                    _clamp01(confidence), source, source_type, json.dumps(evidence or []),
+                    entry_id,
+                    kind,
+                    status,
+                    category,
+                    title,
+                    content,
+                    naddr,
+                    addr_end,
+                    json.dumps(tags or []),
+                    _clamp01(confidence),
+                    _clamp01(priority),
+                    _clamp01(confidence),
+                    source,
+                    source_type,
+                    json.dumps(evidence or []),
                     fingerprint,
-                    ioc_type, ioc_value, normalize_addr(depends_on), blocks_addr, register, reg_type,
-                    entropy, xref_count, 0, verdict, anchor_kind, anchor_digest,
-                    0, "", "", 1, now, now,
+                    ioc_type,
+                    ioc_value,
+                    normalize_addr(depends_on),
+                    blocks_addr,
+                    register,
+                    reg_type,
+                    entropy,
+                    xref_count,
+                    0,
+                    verdict,
+                    anchor_kind,
+                    anchor_digest,
+                    0,
+                    "",
+                    "",
+                    1,
+                    now,
+                    now,
                 ),
             )
         if vector_blob:
@@ -1043,17 +1054,16 @@ class BlackboardStore:
 
         conn = self._conn()
         rows = conn.execute(
-            "SELECT * FROM findings WHERE fingerprint=? OR "
-            "(lower(category)=? AND lower(COALESCE(addr,''))=?) "
-            "ORDER BY updated_at DESC LIMIT 200",
+            "SELECT * FROM findings WHERE fingerprint=? OR (lower(category)=? AND lower(COALESCE(addr,''))=?) ORDER BY updated_at DESC LIMIT 200",
             (fingerprint, key[1], naddr),
         ).fetchall()
         existing = next(
-            (row for row in (self._row_to_dict(item) for item in rows)
-             if row.get("fingerprint") == fingerprint or (
-                 self._finding_key(row.get("title", ""), row.get("category", ""), row.get("addr", "")) == key
-                 and str(row.get("kind") or "finding") == str(kind or "finding")
-             )),
+            (
+                row
+                for row in (self._row_to_dict(item) for item in rows)
+                if row.get("fingerprint") == fingerprint
+                or (self._finding_key(row.get("title", ""), row.get("category", ""), row.get("addr", "")) == key and str(row.get("kind") or "finding") == str(kind or "finding"))
+            ),
             None,
         )
 
@@ -1079,9 +1089,17 @@ class BlackboardStore:
                 # Another client recorded the same observation between our
                 # lookup and insert. Re-read and merge into the winner.
                 return self.upsert_finding(
-                    title=title, content=content, category=category, addr=addr,
-                    tags=clean_tags, confidence=confidence, evidence=clean_evidence,
-                    source=source, kind=kind, status=status, priority=priority,
+                    title=title,
+                    content=content,
+                    category=category,
+                    addr=addr,
+                    tags=clean_tags,
+                    confidence=confidence,
+                    evidence=clean_evidence,
+                    source=source,
+                    kind=kind,
+                    status=status,
+                    priority=priority,
                 )
             return {"entry_id": entry_id, "created": True, "version": 1, "conflict": None}
 
@@ -1110,9 +1128,7 @@ class BlackboardStore:
                 (fingerprint,),
             ).fetchone()
             if row is None:
-                row = conn.execute(
-                    "SELECT * FROM findings WHERE id=?", (str(existing["id"]),)
-                ).fetchone()
+                row = conn.execute("SELECT * FROM findings WHERE id=?", (str(existing["id"]),)).fetchone()
             current = self._row_to_dict(row) if row else existing
             merged_tags = sorted(set(current.get("tags") or []) | set(clean_tags))
             merged_evidence = builtins.list(current.get("evidence") or [])
@@ -1129,9 +1145,7 @@ class BlackboardStore:
                 merged_content = str(content).strip()
             now = time.time()
             conn.execute(
-                "UPDATE findings SET content=?, tags=?, evidence=?, confidence=?, priority=?, "
-                "kind=?, status=?, fingerprint=?, updated_at=?, version=? "
-                "WHERE id=?",
+                "UPDATE findings SET content=?, tags=?, evidence=?, confidence=?, priority=?, kind=?, status=?, fingerprint=?, updated_at=?, version=? WHERE id=?",
                 (
                     merged_content,
                     json.dumps(merged_tags),
@@ -1184,10 +1198,7 @@ class BlackboardStore:
             priority=claim["priority"],
             fingerprint="",
         )
-        reason = (
-            f"{claim['status']} here contradicts {existing.get('status')} "
-            f"on the same claim ({existing.get('id')})"
-        )
+        reason = f"{claim['status']} here contradicts {existing.get('status')} on the same claim ({existing.get('id')})"
         self.link_conflict(entry_id, str(existing["id"]), reason)
         return {
             "entry_id": entry_id,
@@ -1207,9 +1218,7 @@ class BlackboardStore:
         if not entry_a or not entry_b or entry_a == entry_b:
             return False
         with self._tx() as conn:
-            rows = conn.execute(
-                "SELECT id FROM findings WHERE id IN (?,?)", (entry_a, entry_b)
-            ).fetchall()
+            rows = conn.execute("SELECT id FROM findings WHERE id IN (?,?)", (entry_a, entry_b)).fetchall()
             if len(rows) != 2:
                 return False
             now = time.time()
@@ -1232,9 +1241,7 @@ class BlackboardStore:
         """
         conn = self._conn()
         rows = conn.execute(
-            "SELECT * FROM findings WHERE status='rejected' "
-            "OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) "
-            "ORDER BY updated_at DESC LIMIT ?",
+            "SELECT * FROM findings WHERE status='rejected' OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) ORDER BY updated_at DESC LIMIT ?",
             (max(1, int(limit)),),
         ).fetchall()
         return self._hydrate(rows, conn)
@@ -1276,18 +1283,18 @@ class BlackboardStore:
         if existing_id:
             with self._tx() as c:
                 c.execute(
-                    "UPDATE findings SET verdict=?, content=?, title=?, updated_at=?, "
-                    "version=version+1, stale=0, stale_reason='', anchor_kind=?, anchor_digest=? "
-                    "WHERE id=?",
+                    "UPDATE findings SET verdict=?, content=?, title=?, updated_at=?, version=version+1, stale=0, stale_reason='', anchor_kind=?, anchor_digest=? WHERE id=?",
                     (
-                        verdict, note, title, time.time(),
-                        str(anchor.get("kind") or ""), str(anchor.get("digest") or ""),
+                        verdict,
+                        note,
+                        title,
+                        time.time(),
+                        str(anchor.get("kind") or ""),
+                        str(anchor.get("digest") or ""),
                         existing_id,
                     ),
                 )
-            self._record_event(
-                existing_id, "examined", {"verdict": verdict, "previous": previous, "addr": naddr}
-            )
+            self._record_event(existing_id, "examined", {"verdict": verdict, "previous": previous, "addr": naddr})
             return {"entry_id": existing_id, "address": naddr, "verdict": verdict, "created": False}
 
         entry_id = self.write(
@@ -1312,9 +1319,7 @@ class BlackboardStore:
         if not naddr:
             return None
         conn = self._conn()
-        row = conn.execute(
-            "SELECT * FROM findings WHERE kind='examined' AND addr=? LIMIT 1", (naddr,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM findings WHERE kind='examined' AND addr=? LIMIT 1", (naddr,)).fetchone()
         if row is None:
             return None
         entry = self._row_to_dict(row)
@@ -1330,9 +1335,7 @@ class BlackboardStore:
     def coverage(self) -> dict[str, Any]:
         """Counts of examined addresses by verdict."""
         conn = self._conn()
-        rows = conn.execute(
-            "SELECT verdict, COUNT(*) AS n FROM findings WHERE kind='examined' GROUP BY verdict"
-        ).fetchall()
+        rows = conn.execute("SELECT verdict, COUNT(*) AS n FROM findings WHERE kind='examined' GROUP BY verdict").fetchall()
         by_verdict = {str(r["verdict"] or "unclear"): int(r["n"]) for r in rows}
         return {"examined": sum(by_verdict.values()), "by_verdict": by_verdict}
 
@@ -1462,9 +1465,7 @@ class BlackboardStore:
         conn = self._conn()
         rows = conn.execute(
             f"SELECT * FROM findings WHERE addr IN ({placeholders}) "
-            "AND lower(COALESCE(source_type,'')) NOT IN ("
-            + ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES)
-            + ") ORDER BY confidence DESC, updated_at DESC LIMIT 200",
+            "AND lower(COALESCE(source_type,'')) NOT IN (" + ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES) + ") ORDER BY confidence DESC, updated_at DESC LIMIT 200",
             (*ordered, *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
         ).fetchall()
 
@@ -1477,12 +1478,14 @@ class BlackboardStore:
             status = str(entry.get("status") or "open")
             if kind == "examined":
                 if len(result["examined"]) < limit:
-                    result["examined"].append({
-                        "address": entry.get("addr"),
-                        "verdict": entry.get("verdict") or "unclear",
-                        "note": (entry.get("content") or "")[:160],
-                        "stale": bool(entry.get("stale")),
-                    })
+                    result["examined"].append(
+                        {
+                            "address": entry.get("addr"),
+                            "verdict": entry.get("verdict") or "unclear",
+                            "note": (entry.get("content") or "")[:160],
+                            "stale": bool(entry.get("stale")),
+                        }
+                    )
                 continue
             item = {
                 "id": entry.get("id"),
@@ -1626,9 +1629,7 @@ class BlackboardStore:
             if not include_contradicted:
                 conditions.append("status != 'rejected'")
             where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-            return conn.execute(
-                f"SELECT * FROM findings {where} ORDER BY updated_at DESC", params
-            ).fetchall()
+            return conn.execute(f"SELECT * FROM findings {where} ORDER BY updated_at DESC", params).fetchall()
 
         def _lexical_candidates() -> builtins.list[dict]:
             candidates: builtins.list[dict] = []
@@ -1637,11 +1638,7 @@ class BlackboardStore:
                 title = str(d.get("title") or "").lower()
                 content = str(d.get("content") or "").lower()
                 tags = " ".join(map(str, d.get("tags") or [])).lower()
-                evidence = " ".join(
-                    " ".join(str(value) for value in item.values()).lower()
-                    for item in (d.get("evidence") or [])
-                    if isinstance(item, dict)
-                )
+                evidence = " ".join(" ".join(str(value) for value in item.values()).lower() for item in (d.get("evidence") or []) if isinstance(item, dict))
                 searchable = " ".join((title, content, str(d.get("category") or ""), tags, evidence))
                 matched = {term for term in terms if term in searchable}
                 phrase = bool(q and q in searchable)
@@ -1651,10 +1648,7 @@ class BlackboardStore:
                 d["similarity"] = round(similarity, 4)
                 d["lexical_similarity"] = round(similarity, 4)
                 d["match"] = "lexical"
-                d["rank_reason"] = (
-                    "exact phrase in finding text" if phrase
-                    else f"matched {len(matched)}/{len(terms)} query terms"
-                )
+                d["rank_reason"] = "exact phrase in finding text" if phrase else f"matched {len(matched)}/{len(terms)} query terms"
                 # Similarity is the primary signal; title/tag hits are useful
                 # tie-breakers without changing the public similarity value.
                 d["_lexical_priority"] = (
@@ -1666,8 +1660,10 @@ class BlackboardStore:
                 candidates.append(d)
             candidates.sort(
                 key=lambda item: (
-                    item["similarity"], item["_lexical_priority"],
-                    item.get("confidence", 0.0), item.get("updated_at", 0.0),
+                    item["similarity"],
+                    item["_lexical_priority"],
+                    item.get("confidence", 0.0),
+                    item.get("updated_at", 0.0),
                 ),
                 reverse=True,
             )
@@ -1756,8 +1752,10 @@ class BlackboardStore:
             scored.append(item)
         scored.sort(
             key=lambda item: (
-                item.get("score", 0.0), item.get("similarity", 0.0),
-                item.get("confidence", 0.0), item.get("updated_at", 0.0),
+                item.get("score", 0.0),
+                item.get("similarity", 0.0),
+                item.get("confidence", 0.0),
+                item.get("updated_at", 0.0),
             ),
             reverse=True,
         )
@@ -1768,8 +1766,7 @@ class BlackboardStore:
         if ids:
             placeholders = ",".join("?" for _ in ids)
             link_rows = conn.execute(
-                f"SELECT entry_a, entry_b FROM links "
-                f"WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
+                f"SELECT entry_a, entry_b FROM links WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
                 (*ids, *ids),
             ).fetchall()
             cmap: dict[str, set[str]] = {}
@@ -1789,13 +1786,38 @@ class BlackboardStore:
 
     def update(self, entry_id: str, embed: bool = False, **kwargs) -> bool:
         allowed = {
-            "title", "content", "category", "addr", "addr_end", "tags",
-            "confidence", "q_value", "ioc_type", "ioc_value",
-            "depends_on", "blocks_addr", "register", "reg_type",
-            "evidence", "source_type", "entropy", "xref_count", "calibrated",
-            "kind", "status", "priority", "fingerprint", "rejected_reason",
-            "verdict", "anchor_kind", "anchor_digest", "stale", "stale_reason",
-            "source", "published_at", "published_symbol",
+            "title",
+            "content",
+            "category",
+            "addr",
+            "addr_end",
+            "tags",
+            "confidence",
+            "q_value",
+            "ioc_type",
+            "ioc_value",
+            "depends_on",
+            "blocks_addr",
+            "register",
+            "reg_type",
+            "evidence",
+            "source_type",
+            "entropy",
+            "xref_count",
+            "calibrated",
+            "kind",
+            "status",
+            "priority",
+            "fingerprint",
+            "rejected_reason",
+            "verdict",
+            "anchor_kind",
+            "anchor_digest",
+            "stale",
+            "stale_reason",
+            "source",
+            "published_at",
+            "published_symbol",
         }
         # Legacy aliases: resolved/contradicted/contradiction_reason were
         # stored columns in the single-table era and are derived now. Map them
@@ -1820,10 +1842,7 @@ class BlackboardStore:
                 raise _Rollback()
             current = self._row_to_dict(row)
             if "tags" in updates and isinstance(updates["tags"], builtins.list):
-                updates["tags"] = sorted(
-                    set(current.get("tags") or [])
-                    | {str(tag).strip() for tag in updates["tags"] if str(tag).strip()}
-                )
+                updates["tags"] = sorted(set(current.get("tags") or []) | {str(tag).strip() for tag in updates["tags"] if str(tag).strip()})
             if "evidence" in updates and isinstance(updates["evidence"], builtins.list):
                 merged_evidence = builtins.list(current.get("evidence") or [])
                 seen = {json.dumps(item, sort_keys=True, ensure_ascii=True) for item in merged_evidence}
@@ -1860,9 +1879,7 @@ class BlackboardStore:
             if "rejected_reason" in updates and not str(updates["rejected_reason"] or "").strip():
                 updates["rejected_reason"] = ""
             sets = ", ".join(f"{k} = ?" for k in updates)
-            cur = conn.execute(
-                f"UPDATE findings SET {sets} WHERE id = ?", (*updates.values(), entry_id)
-            )
+            cur = conn.execute(f"UPDATE findings SET {sets} WHERE id = ?", (*updates.values(), entry_id))
             ok = cur.rowcount > 0
 
         embedding_changed = {"title", "content", "category", "tags", "evidence"}.intersection(updates)
@@ -1882,7 +1899,8 @@ class BlackboardStore:
             self._enqueue_embedding(entry_id, text)
         if ok:
             self._record_event(
-                entry_id, "updated",
+                entry_id,
+                "updated",
                 {"fields": sorted(k for k in updates if k not in {"updated_at", "version"})},
             )
         return ok
@@ -1923,8 +1941,7 @@ class BlackboardStore:
     def contradict(self, entry_id: str, reason: str) -> bool:
         with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE findings SET status='rejected', rejected_reason=?, updated_at=?, version=version+1 "
-                "WHERE id=?",
+                "UPDATE findings SET status='rejected', rejected_reason=?, updated_at=?, version=version+1 WHERE id=?",
                 (reason, time.time(), entry_id),
             )
             ok = cur.rowcount > 0
@@ -1932,8 +1949,7 @@ class BlackboardStore:
                 # Store the reason in any conflict links this entry participates
                 # in, so the disagreement trail carries it.
                 conn.execute(
-                    "UPDATE links SET note=?, updated_at=? WHERE type='conflict' "
-                    "AND (entry_a=? OR entry_b=?)",
+                    "UPDATE links SET note=?, updated_at=? WHERE type='conflict' AND (entry_a=? OR entry_b=?)",
                     (reason, time.time(), entry_id, entry_id),
                 )
         if ok:
@@ -1957,12 +1973,14 @@ class BlackboardStore:
         if not entry:
             return False
         ev_list = entry.get("evidence") or []
-        ev_list.append({
-            "type": evidence_type,
-            "value": str(value),
-            "weight": round(_clamp01(weight, 1.0), 3),
-            "ts": round(time.time(), 1),
-        })
+        ev_list.append(
+            {
+                "type": evidence_type,
+                "value": str(value),
+                "weight": round(_clamp01(weight, 1.0), 3),
+                "ts": round(time.time(), 1),
+            }
+        )
         return self.update(entry_id, evidence=ev_list)
 
     def calibrate_confidence(self, entry_id: str) -> float | None:
@@ -2002,8 +2020,7 @@ class BlackboardStore:
         updated = 0
         with self._tx() as conn:
             rows = conn.execute(
-                "SELECT id, confidence, updated_at, decayed_at, calibrated, evidence "
-                "FROM findings WHERE confidence > ?",
+                "SELECT id, confidence, updated_at, decayed_at, calibrated, evidence FROM findings WHERE confidence > ?",
                 (min_confidence,),
             ).fetchall()
             for row in rows:
@@ -2086,9 +2103,7 @@ class BlackboardStore:
             result["note"] = self.last_coverage_note
         return result
 
-    def _filter_by_query(
-        self, candidates: builtins.list[dict], query: str
-    ) -> builtins.list[dict]:
+    def _filter_by_query(self, candidates: builtins.list[dict], query: str) -> builtins.list[dict]:
         """Rank candidates by keyword overlap with a theme, keeping all of them.
 
         Filtering would hide work; this only reorders, and records the overlap
@@ -2098,33 +2113,24 @@ class BlackboardStore:
         if not terms:
             return candidates
         for item in candidates:
-            text = f"{item.get('title','')} {item.get('reason','')} {item.get('category','')}".lower()
+            text = f"{item.get('title', '')} {item.get('reason', '')} {item.get('category', '')}".lower()
             hits = sum(1 for t in terms if t in text)
             item["query_overlap"] = round(hits / len(terms), 3)
         return sorted(candidates, key=lambda i: i.get("query_overlap", 0.0), reverse=True)
 
     def _resolved_addrs(self) -> set:
         conn = self._conn()
-        return {
-            r["addr"] for r in conn.execute(
-                "SELECT addr FROM findings WHERE status IN ('resolved','confirmed') "
-                "AND addr != '' AND addr IS NOT NULL"
-            ).fetchall()
-        }
+        return {r["addr"] for r in conn.execute("SELECT addr FROM findings WHERE status IN ('resolved','confirmed') AND addr != '' AND addr IS NOT NULL").fetchall()}
 
     def _targets_unresolved(self, limit: int, rpc_fn=None) -> builtins.list[dict]:
         resolved = self._resolved_addrs()
         placeholders = ",".join("?" for _ in OPEN_THREAD_KINDS)
         conn = self._conn()
         rows = conn.execute(
-            f"SELECT * FROM findings WHERE kind IN ({placeholders}) AND status='open' "
-            "ORDER BY priority DESC, confidence DESC, updated_at DESC LIMIT 200",
+            f"SELECT * FROM findings WHERE kind IN ({placeholders}) AND status='open' ORDER BY priority DESC, confidence DESC, updated_at DESC LIMIT 200",
             tuple(sorted(OPEN_THREAD_KINDS)),
         ).fetchall()
-        unverified = conn.execute(
-            "SELECT * FROM findings WHERE kind='finding' AND status='open' "
-            "AND confidence < 0.6 ORDER BY priority DESC, updated_at DESC LIMIT 100"
-        ).fetchall()
+        unverified = conn.execute("SELECT * FROM findings WHERE kind='finding' AND status='open' AND confidence < 0.6 ORDER BY priority DESC, updated_at DESC LIMIT 100").fetchall()
 
         out: builtins.list[dict] = []
         blocked: builtins.list[dict] = []
@@ -2145,18 +2151,17 @@ class BlackboardStore:
             if len(out) >= limit:
                 break
             entry = self._row_to_dict(row)
-            out.append(self._target_item(
-                entry,
-                reason=f"recorded at confidence {round(float(entry.get('confidence') or 0), 2)}, never verified",
-            ))
+            out.append(
+                self._target_item(
+                    entry,
+                    reason=f"recorded at confidence {round(float(entry.get('confidence') or 0), 2)}, never verified",
+                )
+            )
         # Blocked items rank last: they are real work, just not yet actionable.
         return out + blocked
 
     def _targets_stale(self, limit: int, rpc_fn=None) -> builtins.list[dict]:
-        return [
-            self._target_item(entry, reason=entry.get("stale_reason") or "code changed since this was recorded")
-            for entry in self.stale_entries(limit=limit * 2)
-        ]
+        return [self._target_item(entry, reason=entry.get("stale_reason") or "code changed since this was recorded") for entry in self.stale_entries(limit=limit * 2)]
 
     def _targets_conflict(self, limit: int, rpc_fn=None) -> builtins.list[dict]:
         out = []
@@ -2182,31 +2187,19 @@ class BlackboardStore:
         """
         self.last_coverage_note = ""
         if rpc_fn is None:
-            self.last_coverage_note = (
-                "No live IDA session (rpc_fn is None), so the function inventory "
-                "could not be read; coverage targets are unavailable."
-            )
+            self.last_coverage_note = "No live IDA session (rpc_fn is None), so the function inventory could not be read; coverage targets are unavailable."
             return []
         functions = self._function_inventory(rpc_fn)
         if not functions:
-            self.last_coverage_note = (
-                "The IDA function inventory is empty; there are no coverage candidates yet."
-            )
+            self.last_coverage_note = "The IDA function inventory is empty; there are no coverage candidates yet."
             return []
         conn = self._conn()
-        known = {
-            r["addr"] for r in conn.execute(
-                "SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL"
-            ).fetchall()
-        }
+        known = {r["addr"] for r in conn.execute("SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL").fetchall()}
 
         def is_auto_named(name: str) -> bool:
             return not name or name.startswith(("sub_", "j_", "loc_", "nullsub_", "unknown_libname_"))
 
-        fresh = [
-            fn for fn in functions
-            if normalize_addr(fn.get("addr")) and normalize_addr(fn.get("addr")) not in known
-        ]
+        fresh = [fn for fn in functions if normalize_addr(fn.get("addr")) and normalize_addr(fn.get("addr")) not in known]
         unnamed = [fn for fn in fresh if is_auto_named(str(fn.get("name") or ""))]
         pool, named_fallback = (unnamed, False) if unnamed else (fresh, True)
 
@@ -2217,17 +2210,19 @@ class BlackboardStore:
             reason = f"{xrefs} callers, never examined" if xrefs else "never examined"
             if named_fallback:
                 reason += "; no auto-named functions left to prefer"
-            out.append({
-                "address": addr,
-                "entry_id": None,
-                "kind": "candidate",
-                "status": "open",
-                "title": fn.get("name") or addr,
-                "category": "coverage",
-                "confidence": None,
-                "reason": reason,
-                "xref_count": xrefs,
-            })
+            out.append(
+                {
+                    "address": addr,
+                    "entry_id": None,
+                    "kind": "candidate",
+                    "status": "open",
+                    "title": fn.get("name") or addr,
+                    "category": "coverage",
+                    "confidence": None,
+                    "reason": reason,
+                    "xref_count": xrefs,
+                }
+            )
             if len(out) >= limit * 2:
                 break
         return out
@@ -2237,15 +2232,8 @@ class BlackboardStore:
         if rpc_fn is None:
             return []
         conn = self._conn()
-        anchors = conn.execute(
-            "SELECT id, addr, title FROM findings WHERE status='confirmed' "
-            "AND addr != '' AND addr IS NOT NULL ORDER BY confidence DESC LIMIT 12"
-        ).fetchall()
-        known = {
-            r["addr"] for r in conn.execute(
-                "SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL"
-            ).fetchall()
-        }
+        anchors = conn.execute("SELECT id, addr, title FROM findings WHERE status='confirmed' AND addr != '' AND addr IS NOT NULL ORDER BY confidence DESC LIMIT 12").fetchall()
+        known = {r["addr"] for r in conn.execute("SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL").fetchall()}
         out: builtins.list[dict] = []
         seen: set[str] = set()
         for anchor in anchors:
@@ -2256,17 +2244,19 @@ class BlackboardStore:
                         continue
                     seen.add(naddr)
                     verb = "calls into" if direction == "callers" else "is called by"
-                    out.append({
-                        "address": naddr,
-                        "entry_id": None,
-                        "kind": "candidate",
-                        "status": "open",
-                        "title": naddr,
-                        "category": "frontier",
-                        "confidence": None,
-                        "reason": f"{verb} confirmed \"{anchor['title']}\" at {anchor['addr']}",
-                        "anchor_entry_id": anchor["id"],
-                    })
+                    out.append(
+                        {
+                            "address": naddr,
+                            "entry_id": None,
+                            "kind": "candidate",
+                            "status": "open",
+                            "title": naddr,
+                            "category": "frontier",
+                            "confidence": None,
+                            "reason": f'{verb} confirmed "{anchor["title"]}" at {anchor["addr"]}',
+                            "anchor_entry_id": anchor["id"],
+                        }
+                    )
             if len(out) >= limit * 2:
                 break
         return out
@@ -2327,11 +2317,13 @@ class BlackboardStore:
                 addr = fn.get("start_ea") or fn.get("addr")
                 if addr is None:
                     continue
-                out.append({
-                    "addr": hex(addr) if isinstance(addr, int) else str(addr),
-                    "name": fn.get("name") or "",
-                    "xref_count": fn.get("xref_count") or fn.get("callers_count") or 0,
-                })
+                out.append(
+                    {
+                        "addr": hex(addr) if isinstance(addr, int) else str(addr),
+                        "name": fn.get("name") or "",
+                        "xref_count": fn.get("xref_count") or fn.get("callers_count") or 0,
+                    }
+                )
             return out
         if isinstance(funcs, str):
             out = []
@@ -2401,14 +2393,9 @@ class BlackboardStore:
             (*sorted(_INTERNAL_WORKSPACE_CATEGORIES), *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
         ).fetchall()
         conflict_rows = conn.execute(
-            "SELECT * FROM findings WHERE status='rejected' "
-            "OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) "
-            "ORDER BY updated_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM findings WHERE status='rejected' OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) ORDER BY updated_at DESC LIMIT ?", (limit,)
         ).fetchall()
-        recent_events = conn.execute(
-            "SELECT entry_id, event, details, created_at FROM finding_events "
-            "ORDER BY seq DESC LIMIT ?", (limit,)
-        ).fetchall()
+        recent_events = conn.execute("SELECT entry_id, event, details, created_at FROM finding_events ORDER BY seq DESC LIMIT ?", (limit,)).fetchall()
         entries = self._hydrate(rows, conn)
         conflicts = self._hydrate(conflict_rows, conn)
         stale = self.stale_entries(limit=limit)
@@ -2476,10 +2463,7 @@ class BlackboardStore:
         counts = payload["counts"]
         cover = payload["coverage"]
         if not counts["total"] and not cover["examined"]:
-            return (
-                "Workspace is empty — nothing recorded or examined yet.\n\n"
-                "Next: ida_overview to orient, then ida_next_target(strategy='coverage')."
-            )
+            return "Workspace is empty — nothing recorded or examined yet.\n\nNext: ida_overview to orient, then ida_next_target(strategy='coverage')."
 
         lines: builtins.list[str] = []
 
@@ -2511,29 +2495,24 @@ class BlackboardStore:
         lines.append(f"{counts['total']} recorded items: {state}.")
 
         if cover["examined"]:
-            by_verdict = ", ".join(
-                f"{n} {v}" for v, n in sorted(cover["by_verdict"].items(), key=lambda kv: -kv[1])
-            )
-            lines.append(
-                f"{cover['examined']} addresses examined and set aside ({by_verdict}) — "
-                "do not re-read these without a reason."
-            )
+            by_verdict = ", ".join(f"{n} {v}" for v, n in sorted(cover["by_verdict"].items(), key=lambda kv: -kv[1]))
+            lines.append(f"{cover['examined']} addresses examined and set aside ({by_verdict}) — do not re-read these without a reason.")
 
         # --- the case ------------------------------------------------------
         section(
-            "Established", payload["confirmed"],
-            lambda i: f"{loc(i)}{i['title']}{conf(i)}"
-            + (f"  [stale: {i['stale']}]" if i.get("stale") else ""),
+            "Established",
+            payload["confirmed"],
+            lambda i: f"{loc(i)}{i['title']}{conf(i)}" + (f"  [stale: {i['stale']}]" if i.get("stale") else ""),
         )
         section(
-            "Open", payload["focus"],
-            lambda i: f"{loc(i)}[{i['kind']}] {i['title']}"
-            + (f" — blocked on {i['depends_on']}" if i.get("depends_on") else ""),
+            "Open",
+            payload["focus"],
+            lambda i: f"{loc(i)}[{i['kind']}] {i['title']}" + (f" — blocked on {i['depends_on']}" if i.get("depends_on") else ""),
         )
         section(
-            "Contested — two claims here cannot both hold", payload["conflicts"],
-            lambda i: f"{loc(i)}{i['title']} — recorded {i['status']}"
-            + (f", contradicts {', '.join(i['conflicts_with'])}" if i.get("conflicts_with") else ""),
+            "Contested — two claims here cannot both hold",
+            payload["conflicts"],
+            lambda i: f"{loc(i)}{i['title']} — recorded {i['status']}" + (f", contradicts {', '.join(i['conflicts_with'])}" if i.get("conflicts_with") else ""),
         )
         section(
             "Needs re-checking — the code changed after these were written",
@@ -2544,29 +2523,17 @@ class BlackboardStore:
         # --- what to do ----------------------------------------------------
         lines.append("")
         if payload["conflicts"]:
-            lines.append(
-                "Next: reconcile the contested claims with ida_update_finding before "
-                "building on either side."
-            )
+            lines.append("Next: reconcile the contested claims with ida_update_finding before building on either side.")
         elif payload["stale"]:
-            lines.append(
-                "Next: re-read the entries above — ida_next_target(strategy='stale') "
-                "lists them with their addresses."
-            )
+            lines.append("Next: re-read the entries above — ida_next_target(strategy='stale') lists them with their addresses.")
         elif payload["focus"]:
             blocked = [i for i in payload["focus"] if i.get("depends_on")]
             if len(blocked) == len(payload["focus"]):
-                lines.append(
-                    "Next: every open item is blocked. Resolve a dependency, or "
-                    "ida_next_target(strategy='coverage') for unrelated ground."
-                )
+                lines.append("Next: every open item is blocked. Resolve a dependency, or ida_next_target(strategy='coverage') for unrelated ground.")
             else:
                 lines.append("Next: take an unblocked open item above.")
         elif payload["confirmed"]:
-            lines.append(
-                "Next: ida_next_target(strategy='frontier') to expand from what is "
-                "confirmed, or publish it with ida_publish_findings."
-            )
+            lines.append("Next: ida_next_target(strategy='frontier') to expand from what is confirmed, or publish it with ida_publish_findings.")
         else:
             lines.append("Next: ida_next_target(strategy='coverage') for unexamined functions.")
         return "\n".join(lines)
@@ -2576,14 +2543,8 @@ class BlackboardStore:
         brief = self.workspace_brief(limit=5)
         stats = self.stats()
         conn = self._conn()
-        iocs = conn.execute(
-            "SELECT ioc_type, ioc_value, addr, confidence FROM findings "
-            "WHERE category='ioc' AND status != 'resolved' ORDER BY confidence DESC LIMIT 10"
-        ).fetchall()
-        vulns = conn.execute(
-            "SELECT title, addr, confidence FROM findings "
-            "WHERE category='vuln' AND status != 'resolved' ORDER BY confidence DESC LIMIT 5"
-        ).fetchall()
+        iocs = conn.execute("SELECT ioc_type, ioc_value, addr, confidence FROM findings WHERE category='ioc' AND status != 'resolved' ORDER BY confidence DESC LIMIT 10").fetchall()
+        vulns = conn.execute("SELECT title, addr, confidence FROM findings WHERE category='vuln' AND status != 'resolved' ORDER BY confidence DESC LIMIT 5").fetchall()
         return {
             "total_entries": stats["total_entries"],
             "active_entries": stats["total_entries"] - stats["resolved"] - stats["contradicted"],
@@ -2636,21 +2597,11 @@ class BlackboardStore:
             "SUM(calibrated) AS calibrated "
             "FROM findings"
         ).fetchone()
-        by_cat = {r["category"]: r["n"] for r in conn.execute(
-            "SELECT category, COUNT(*) AS n FROM findings GROUP BY category"
-        ).fetchall()}
-        iocs = {r["ioc_type"]: r["n"] for r in conn.execute(
-            "SELECT ioc_type, COUNT(*) AS n FROM findings "
-            "WHERE ioc_type != '' AND ioc_type IS NOT NULL GROUP BY ioc_type"
-        ).fetchall()}
-        source_types = {r["source_type"]: r["n"] for r in conn.execute(
-            "SELECT source_type, COUNT(*) AS n FROM findings "
-            "WHERE source_type IS NOT NULL GROUP BY source_type"
-        ).fetchall()}
+        by_cat = {r["category"]: r["n"] for r in conn.execute("SELECT category, COUNT(*) AS n FROM findings GROUP BY category").fetchall()}
+        iocs = {r["ioc_type"]: r["n"] for r in conn.execute("SELECT ioc_type, COUNT(*) AS n FROM findings WHERE ioc_type != '' AND ioc_type IS NOT NULL GROUP BY ioc_type").fetchall()}
+        source_types = {r["source_type"]: r["n"] for r in conn.execute("SELECT source_type, COUNT(*) AS n FROM findings WHERE source_type IS NOT NULL GROUP BY source_type").fetchall()}
         embedded = conn.execute("SELECT COUNT(*) AS n FROM findings_embeddings").fetchone()["n"]
-        ev_rows = conn.execute(
-            "SELECT evidence FROM findings WHERE evidence != '[]' AND evidence IS NOT NULL"
-        ).fetchall()
+        ev_rows = conn.execute("SELECT evidence FROM findings WHERE evidence != '[]' AND evidence IS NOT NULL").fetchall()
         total_evidence = sum(len(json.loads(r["evidence"] or "[]")) for r in ev_rows)
         return {
             "total_entries": head["total"] or 0,
@@ -2696,10 +2647,13 @@ class BlackboardStore:
         where = "WHERE " + " AND ".join(conditions)
         to_delete = max(0, total - max_entries)
         if to_delete > 0:
-            ids = [r["id"] for r in conn.execute(
-                f"SELECT id FROM findings {where} ORDER BY confidence ASC, updated_at ASC LIMIT ?",
-                (*params, to_delete),
-            ).fetchall()]
+            ids = [
+                r["id"]
+                for r in conn.execute(
+                    f"SELECT id FROM findings {where} ORDER BY confidence ASC, updated_at ASC LIMIT ?",
+                    (*params, to_delete),
+                ).fetchall()
+            ]
             with self._tx() as c:
                 for eid in ids:
                     c.execute("DELETE FROM findings WHERE id = ?", (eid,))
@@ -2749,7 +2703,7 @@ class BlackboardStore:
         for i, e in enumerate(entries):
             if e["id"] in deleted:
                 continue
-            for o in entries[i + 1:]:
+            for o in entries[i + 1 :]:
                 if o["id"] in deleted:
                     continue
                 # Never merge away a row that records a disagreement.

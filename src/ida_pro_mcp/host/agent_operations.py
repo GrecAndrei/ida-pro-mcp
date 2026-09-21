@@ -773,12 +773,9 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_semantic_search",
         description=(
-            "Find functions by behavior or natural-language intent after indexing the binary. "
-            "Results are recalled by the embedding index (Stage 1) and, when a reranker is "
-            "installed, re-scored by the cross-encoder (Stage 2) so the top of the list is "
-            "the genuinely most relevant functions. Stage 2 runs automatically in expand "
-            "mode and whenever rerank=true is passed; quick mode skips it (bounded on CPU "
-            "boxes) unless explicitly requested."
+            "Find functions by deterministic lexical behavior signatures and optional bounded "
+            "Jev/custom advisory scoring. Provider scoring is never required: disabled or "
+            "unavailable providers preserve lexical order."
         ),
         category="discovery",
         input_schema=_schema(
@@ -790,10 +787,9 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "rerank": {
                     "type": "boolean",
                     "description": (
-                        "Re-score recalled candidates with the cross-encoder reranker. "
-                        "Omitted = auto (on in expand mode, off in quick mode); explicit "
-                        "true forces it, false disables it. No-op when no rerank model "
-                        "is installed."
+                        "Optionally ask the configured Jev/custom provider to score bounded "
+                        "signatures. Omitted = auto in expand mode; false disables it. "
+                        "Disabled or unavailable providers preserve lexical order."
                     ),
                 },
                 "start": {"type": "string", "description": "Inclusive start address for result filtering."},
@@ -810,12 +806,42 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         argument_map={"min_score": "semantic_min_score", "address": "addr"},
     ),
     AgentOperation(
+        name="ida_intelligence_status",
+        description="Report the explicit Jev, custom, or disabled intelligence mode, capabilities, readiness, and safe provider identity.",
+        category="discovery",
+        input_schema=_schema({"session_id": {"type": "string", "description": "Optional session identifier for usage attribution."}}),
+        example={},
+        backend_tool="intelligence",
+        backend_action="intelligence_status",
+    ),
+    AgentOperation(
+        name="ida_usage_status",
+        description="Report metadata-only intelligence request, token, and cost usage against session or daily budgets.",
+        category="discovery",
+        input_schema=_schema({"session_id": {"type": "string", "description": "Optional session identifier."}}),
+        example={},
+        backend_tool="intelligence",
+        backend_action="usage_status",
+    ),
+    AgentOperation(
+        name="ida_usage_report",
+        description="List bounded metadata-only intelligence provider attempts without prompts, completions, or credentials.",
+        category="discovery",
+        input_schema=_schema({
+            "session_id": {"type": "string", "description": "Optional session identifier."},
+            "limit": {"type": "integer", "description": "Maximum metadata records to return (1-500)."},
+        }),
+        example={"limit": 20},
+        backend_tool="intelligence",
+        backend_action="usage_report",
+    ),
+    AgentOperation(
         name="ida_reranker_status",
-        description="Report the cross-encoder reranker backend: installed model, profile, and whether it is ready.",
+        description="Report the optional Jev/custom typed-question scoring capability as a compatibility alias.",
         category="discovery",
         input_schema=_schema(
             {
-                "probe": {"type": "boolean", "description": "Start or attach the rerank server so ready reflects reality."},
+                "probe": {"type": "boolean", "description": "Probe provider readiness without exposing credentials or content."},
                 "idb": IDB,
             }
         ),
@@ -824,50 +850,15 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="reranker_status",
     ),
     AgentOperation(
-        name="ida_function_families",
-        description=(
-            "Cluster lookalike functions by embedding cosine similarity and return each family "
-            "with a centroid summary, a representative member, and per-member deltas. "
-            "Examine the representative and skip the rest."
-        ),
-        category="discovery",
-        input_schema=_schema(
-            {
-                "address": ADDRESS,
-                "radius": {"type": "integer", "description": "Byte radius around address to scope the clustering."},
-                "start": {"type": "string", "description": "Inclusive start address of a scope range."},
-                "end": {"type": "string", "description": "Exclusive end address of a scope range."},
-                "query": {"type": "string", "description": "Optional function-name filter (substring)."},
-                "min_size": {"type": "integer", "description": "Minimum family size to report (default 2)."},
-                "min_similarity": {"type": "number", "description": "Cosine threshold for 'lookalike' (default 0.85)."},
-                "limit": LIMIT,
-                "mark_examined": {
-                    "type": "boolean",
-                    "description": "Record every family member as examined in one call (default false).",
-                },
-                "verdict": {
-                    "type": "string",
-                    "enum": ["boring", "interesting", "unclear"],
-                    "description": "Verdict used when mark_examined is true (default boring).",
-                },
-                "idb": IDB,
-            }
-        ),
-        example={"min_size": 2, "limit": 10},
-        backend_tool="intelligence",
-        backend_action="function_families",
-        argument_map={"address": "addr"},
-    ),
-    AgentOperation(
         name="ida_index_functions",
-        description="Build a scoped semantic function index in responsive background slices.",
+        description="Build a scoped deterministic lexical function-signature index in responsive background slices.",
         category="discovery",
         input_schema=_schema(
             {
                 "quality": {
                     "type": "string",
                     "enum": ["fast", "full"],
-                    "description": "fast scans metadata and disassembly; full adds Hex-Rays decompilation for better retrieval quality.",
+                    "description": "Compatibility quality label; both modes store bounded metadata, disassembly, and lexical signatures without hidden provider calls.",
                 },
                 "limit": {
                     "type": "integer",

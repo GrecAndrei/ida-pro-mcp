@@ -23,9 +23,11 @@ quantile = _q
 
 
 def dot_product(a: Sequence[float], b: Sequence[float]) -> float:
-    """Sum of elementwise products. Equivalent to cosine similarity when
-    both inputs are pre-normalized to unit length — the convention used by
-    the BgeCodeEmbedder output vectors."""
+    """Sum of elementwise products for compatibility vector rows.
+
+    The explicit provider path is typed-question only; this helper remains for
+    legacy stored-vector readers and deterministic math tests.
+    """
     try:
         import numpy as np
         return float(np.dot(a, b))
@@ -56,8 +58,8 @@ class _EmbedResult:
     The old TF-IDF fallback violated this by returning garbage vectors
     whenever the model was unavailable.
 
-    Shared by the local llama-server backend (``intelligence/core.py``) and
-    the opt-in cloud Gemini backend (``intelligence/gemini.py``).
+    Retained as a compatibility result shape for the deterministic lexical
+    index. The explicit provider layer does not produce vectors.
     """
 
     __slots__ = ("vector", "backend", "ok")
@@ -93,9 +95,8 @@ def estimate_tokens(text) -> int:
     """Approximate token count for a string (~4 chars per token).
 
     Returns 0 for empty / falsy input. This is intentionally a rough
-    heuristic — it matches the convention already used in
-    ``llm_helpers._estimate_tokens`` and the inline ``len(text) // 4``
-    expressions scattered through ``host/context_density.py``.
+    heuristic — it is used only for bounded provider budget reservations and
+    is never treated as an exact billing value.
     """
     return len(text) // 4 if text else 0
 
@@ -231,11 +232,10 @@ def decomp_document_char_budget(
     explicit_chars: int = 0,
     fraction: float = 0.20,
 ) -> int:
-    """Full-decomp document budget shared by the local and cloud embedders.
+    """Bound a legacy document-size calculation for compatibility callers.
 
-    Both backends index long decompilations with the same cap: an explicit
-    character override wins when set, otherwise a clamped fraction of the
-    embedder's input window.  Kept here so the two backends cannot drift.
+    The explicit provider boundary does not send raw decompilation; this helper
+    remains available to callers that need a local size estimate.
     """
     window = max(1024, int(max_input_chars) if max_input_chars else 1024)
     if explicit_chars and explicit_chars > 0:

@@ -15,8 +15,8 @@ Expectations are per-op:
   hard-blocked patch_bytes, TRUNCATION_TOKEN_INVALID for a bogus token).
 
 Stateful operations that need embeddings or a background job
-(ida_index_functions, ida_semantic_search, ida_function_families,
-ida_index_status, ida_cancel_index) run with their graceful contract here;
+(ida_index_functions, ida_semantic_search, ida_index_status,
+ida_cancel_index) run with their graceful contract here;
 the deep behavior suite (test_agent_surface_behavior_live.py) and the
 indexing suite (test_agent_surface_live.py) cover the happy paths.
 
@@ -67,7 +67,6 @@ pytestmark = [
 GRACEFUL: dict[str, str | None] = {
     "ida_open_background": "FEATURE_DISABLED",   # opt-in flag unset by default
     "ida_semantic_search": "NOT_FOUND",          # no embedding index yet
-    "ida_function_families": "NO_RESULTS",       # no embedding index yet
     "ida_index_status": None,                    # no background job
     "ida_cancel_index": "NOT_FOUND",             # unknown task id
     "ida_compare_functions": "FILE_NOT_FOUND",   # example session ids are placeholders

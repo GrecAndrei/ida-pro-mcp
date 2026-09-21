@@ -1,4 +1,4 @@
-"""Deterministic and optional-embedding semantic matching coverage."""
+"""Deterministic matching plus explicit vector-extension compatibility coverage."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def test_winner_decisive_boundaries(scores, expected):
     assert _module()._winner_decisive(scores) is expected
 
 
-def test_embedding_batch_caches_successes_and_tolerates_failures(monkeypatch):
+def test_explicit_vector_extension_caches_successes_and_tolerates_failures(monkeypatch):
     sm = _module()
 
     class Embedder:
@@ -90,7 +90,7 @@ def test_embedding_batch_caches_successes_and_tolerates_failures(monkeypatch):
     assert sm._get_embedder() is None
 
 
-def test_semantic_score_uses_embedding_only_for_ambiguous_text(monkeypatch):
+def test_semantic_score_uses_explicit_vector_extension_only_for_ambiguous_text(monkeypatch):
     sm = _module()
     calls = []
     monkeypatch.setattr(sm, "_embedding_score", lambda q, c: calls.append((q, c)) or 77.0)
@@ -137,7 +137,7 @@ def test_semantic_scores_covers_identifier_phrase_and_partial_batches(monkeypatc
     assert fallback == sm.semantic_scores("long phrase query", ["candidate"], force_embed=False)
 
 
-def test_embedding_score_clamps_and_handles_missing_or_bad_cosine(monkeypatch):
+def test_vector_extension_score_clamps_and_handles_missing_or_bad_cosine(monkeypatch):
     sm = _module()
     emb = SimpleNamespace(cosine=lambda _left, _right: 2.0)
     sm._EMBEDDER = emb

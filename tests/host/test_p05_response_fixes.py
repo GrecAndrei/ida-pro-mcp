@@ -354,54 +354,6 @@ class TestWikiSuggest:
         assert "headers" not in out, out
         assert "sections" in out, out
 
-    def test_embed_singleflight_and_no_failed_cache_poison(self, monkeypatch):
-        server = _wiki_stub()
-        server._wiki_embed_cache = {}
-        server._wiki_embed_cache_max = 8
-        started = threading.Event()
-        release = threading.Event()
-        calls = 0
-        calls_lock = threading.Lock()
-
-        class _Embedder:
-            def embed_vector(self, _text):
-                nonlocal calls
-                with calls_lock:
-                    calls += 1
-                started.set()
-                release.wait(timeout=2)
-                return [0.25, 0.75]
-
-        monkeypatch.setattr(
-            "ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", _Embedder
-        )
-        results = []
-        threads = [
-            threading.Thread(
-                target=lambda: results.append(server._wiki_embed_text("same query")),
-                daemon=True,
-            )
-            for _ in range(8)
-        ]
-        for thread in threads:
-            thread.start()
-        assert started.wait(timeout=2)
-        release.set()
-        for thread in threads:
-            thread.join(timeout=2)
-        assert calls == 1
-        assert results == [[0.25, 0.75]] * 8
-
-        class _Unavailable:
-            def embed_vector(self, _text):
-                return None
-
-        monkeypatch.setattr(
-            "ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", _Unavailable
-        )
-        assert server._wiki_embed_text("failed query") is None
-        assert "failed query" not in server._wiki_embed_cache
-
     def test_forced_index_rebuild_publishes_atomic_snapshot(self, tmp_path):
         server = _wiki_stub()
         wiki_root = tmp_path / "wiki"

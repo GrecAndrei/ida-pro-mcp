@@ -87,9 +87,11 @@ def test_evidence_gravity_runtime_embedding_and_no_runtime_modes(tmp_path, monke
     assert any(item["tool"] == "semantic" for item in snapshot["items"])
     assert len(calls) == 3
 
-    monkeypatch.setenv("IDA_MCP_EMBED_DISABLED", "1")
+    # Legacy embedding toggles are ignored; the semantic evidence path is
+    # deterministic lexical search and remains available in disabled mode.
+    monkeypatch.setenv("IDA_MCP_INTELLIGENCE_MODE", "disabled")
     no_embed = server._evidence_gravity(store, "entry-2", "0x2000")
-    assert all(item["tool"] != "semantic" for item in no_embed["items"])
+    assert any(item["tool"] == "semantic" for item in no_embed["items"])
     assert server._orchestration().machinery_get(store, module.NS_GRAVITY, "entry")
     server._orchestration().shutdown()
 

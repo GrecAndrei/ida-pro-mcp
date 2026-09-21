@@ -550,7 +550,7 @@ def idb_architecture_profile(meta=None, summary=None):
                 gp_val = gp_info.get("gp")
                 gp_expr = hex(gp_val) if isinstance(gp_val, int) else str(gp_val)
                 recs.append(
-                    f"misc(action='idc', expr='idc.set_reg_value(\"gp\", {gp_expr}, idc.BADADDR)')"
+                    f"analysis(action='set_gp', gp='{gp_expr}') — explicit operator review required"
                 )
         except Exception:
             gp_info = None

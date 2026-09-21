@@ -107,17 +107,18 @@ The installer records an install report under its managed install root. On a
 failed install it attempts to restore configuration backups by default; keep
 the report and error log when diagnosing a partial setup.
 
-## Optional retrieval configuration
+## Intelligence provider configuration
 
-Embedding and reranking are not needed for the first session. If you install
-them later, use the installer options documented in the
-[retrieval guide](search-and-retrieval). Local retrieval is the default
-direction; Gemini is explicitly opt-in. Never place a cloud credential in a
-shared or checked-in client configuration.
+The provider mode is explicit: `disabled` (default), `jev`, or `custom`.
+Deterministic IDA analysis and lexical retrieval work in disabled mode. Jev
+uses `TYPESAFE_API_KEY`; custom mode requires an HTTPS base URL, an explicit
+origin allowlist, a model, and a credential environment variable or file.
+Loopback HTTP requires an explicit opt-in flag. Legacy embedding, Gemini,
+native, and reranker settings are rejected rather than translated.
 
-The installer may persist an AI Studio key into the generated MCP client's
-environment block when you explicitly provide it. The key is not written to
-`embedder.json`; still treat the client configuration as sensitive.
+The installer never writes API keys into client configuration. Providers read
+credentials at request time. Review `ida_intelligence_status`,
+`ida_usage_status`, and `ida_usage_report` after connecting.
 
 References: [installer README](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md),
 [client configuration templates](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/installer/client_configs.json),

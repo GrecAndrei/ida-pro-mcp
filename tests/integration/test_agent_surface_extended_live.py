@@ -754,10 +754,6 @@ class TestIndexHelpers:
         if payload.get("error") is True:
             assert payload.get("code") in {"NOT_FOUND", "INVALID_ARGS"}, payload
 
-    def test_function_families_without_index(self, ctx: ExtendedContext):
-        payload = ctx.call("ida_function_families", {"limit": 5})
-        assert payload.get("ok") is True or isinstance(payload.get("code"), str), payload
-
     def test_semantic_search_without_index_is_coded(self, ctx: ExtendedContext):
         payload = ctx.call("ida_semantic_search", {
             "query": "function that prints a marker", "mode": "quick", "limit": 5,

@@ -203,8 +203,9 @@ def search(
             Pass kind='strings' for a dedicated string-literal search, kind='names'
             for symbols only, or kind='imports'|'comments'|'instructions'|'refs' to
             restrict to that one category.
-    - nl: Natural language search via FunctionEmbeddingIndex (bge-code-v1 embeddings)
-            Supports mode="quick" (hybrid search only) or mode="expand" (with behavior expansion)
+    - nl: Natural language search via deterministic lexical signatures with optional
+            Jev/custom typed-question advisory scoring. Supports mode="quick" or
+            mode="expand" (with bounded behavior expansion)
     - behavior: Find functions matching a behavior tag (crypto_symmetric, network_http, etc.)
     - callers: Functions calling a target
     - callees: Functions called by a target
@@ -234,7 +235,7 @@ def search(
     - analyze: Unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes)
     - neighborhood: 360-degree context card around a function (callers, callees, similar, tags)
     - outlier: Find structurally anomalous functions (size/complexity/orphan/leaf/hub/deep)
-    - fingerprint: Embedding-similar functions via bge-code-v1 cosine similarity
+    - fingerprint: Deterministic structural/signature similarity for functions
     - path: Shortest call-graph path between two symbols
     - reach: Functions reachable from a root within N hops
     - noreach: Functions NOT reachable from any known entrypoint
@@ -371,6 +372,7 @@ def search(
                 center_ea=center_ea,
                 radius=raw_radius,
                 rerank=None if kwargs.get("rerank") is None else bool(kwargs.get("rerank")),
+                session_id=str(kwargs.get("_session_id") or ""),
             )
 
         def _search_path():

@@ -32,20 +32,27 @@ an optional `idb` parameter to target a specific open session instead of the act
 
 ---
 
-## 3. Semantic Retrieval & Indexing
+## 3. Deterministic Retrieval & Advisory Scoring
 
 | Operation | Purpose | Notes |
 | --- | --- | --- |
-| `ida_index_functions` | Build a scoped semantic function index in responsive background slices. | Supports `query`, `ranges`, `min_size`, `max_size`, and `quality="fast"` or `"full"`. Gated in safe mode. |
+| `ida_index_functions` | Build a scoped deterministic lexical signature index in responsive background slices. | Stores bounded names, disassembly, and structural metadata; no model or raw decompilation. Gated in safe mode. |
 | `ida_index_status(task_id=...)` | Check progress or retrieve the result of a background indexing job. | Poll with the `task_id` returned by `ida_index_functions`. |
 | `ida_cancel_index(task_id=...)` | Cancel a running background semantic-index task. | Stops after the current slice. |
-| `ida_semantic_search(query=...)` | Find functions by natural-language intent (e.g. "decrypts payload", "parses packet"). | Stage 1 bi-encoder recall with optional Stage 2 cross-encoder reranking (`rerank=true`). |
-| `ida_reranker_status` | Report the cross-encoder reranker backend, model profile, and readiness. | Confirms whether Stage 2 semantic reranking is available. |
-| `ida_function_families(query=...)` | Cluster lookalike functions by embedding cosine similarity. | Returns centroid summary, representative member, and member deltas to avoid re-reading duplicates. |
+| `ida_semantic_search(query=...)` | Find functions by bounded lexical behavior signatures. | Optional Jev/custom typed-question scoring is advisory; disabled/unavailable providers preserve lexical order. |
+| `ida_reranker_status` | Report the Jev/custom typed-question scoring capability. | Compatibility alias; no local cross-encoder is started. |
 
 ---
 
-## 4. Processor State & Segment Registers
+## 4. Intelligence status and usage
+
+| Operation | Purpose | Notes |
+| --- | --- | --- |
+| `ida_intelligence_status` | Report explicit provider mode and safe readiness metadata. | Modes are `jev`, `custom`, and `disabled`; credentials are never returned. |
+| `ida_usage_status` | Report metadata-only request, token, and cost totals. | Session and daily budgets are enforced before provider calls. |
+| `ida_usage_report` | List bounded provider attempt metadata. | Prompts, completions, raw responses, and credentials are excluded. |
+
+## 5. Processor State & Segment Registers
 
 | Operation | Purpose | Notes |
 | --- | --- | --- |
@@ -55,7 +62,7 @@ an optional `idb` parameter to target a specific open session instead of the act
 
 ---
 
-## 5. Analysis Synchronization & Events
+## 6. Analysis Synchronization & Events
 
 | Operation | Purpose | Notes |
 | --- | --- | --- |
@@ -64,7 +71,7 @@ an optional `idb` parameter to target a specific open session instead of the act
 
 ---
 
-## 6. Raw-byte inspection
+## 7. Raw-byte inspection
 
 For headerless ROM dumps, bootloaders, and embedded binaries, use
 `ida_overview`, `ida_list_segments`, `ida_read_bytes`, and

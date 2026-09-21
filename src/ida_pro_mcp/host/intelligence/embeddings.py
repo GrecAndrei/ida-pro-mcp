@@ -431,12 +431,9 @@ def _clip_signature(text: str, max_len: int = 160) -> str:
 
 class FunctionEmbeddingIndex:
     """
-    Stores model-native float32 embeddings of decompiled functions,
-    one SQLite database per binary (<idb_path>.embeddings.db).
-
-    Replaces the spectral-CFG encoder (MbaGCN — untrained random SSM)
-    and TurboQuant (quantization of tabular features it was never
-    designed for).
+    Stores compact function signatures and optional compatible vectors,
+    one SQLite database per binary (<idb_path>.embeddings.db). Provider mode
+    uses the lexical signature path and never persists raw decompilation.
     """
 
     INDEX_SCHEMA_VERSION = 4
@@ -546,12 +543,14 @@ class FunctionEmbeddingIndex:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_text TEXT")
             if "signature_hash" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_hash TEXT")
-            # Full bounded document text used for cross-encoder reranking.  The
-            # short signature_text is a tokenized lexical fingerprint; the
-            # cross-encoder needs the same text that was embedded (the bounded
-            # decompilation) to score (query, doc) pairs.
+            # Retained as a nullable compatibility column. New rows store only
+            # compact signatures; raw decompilation is never persisted.
             if "document_text" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN document_text TEXT")
+            # Older releases persisted bounded decompilation for a local
+            # reranker. Provider mode is metadata/signature-only; purge that
+            # legacy field and never write raw code to it again.
+            conn.execute("UPDATE func_embeddings SET document_text=NULL WHERE document_text IS NOT NULL")
             # Structural metadata (replaces SchemaBoot)
             if "func_size" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN func_size INTEGER DEFAULT 0")
@@ -651,20 +650,22 @@ class FunctionEmbeddingIndex:
         embedder = embedder if embedder is not None else self._embedder
         backend = str(getattr(embedder, "backend", "unknown"))
         dim = str(getattr(embedder, "dim", 0) or 0)
+        provider_only = bool(getattr(embedder, "_provider_only", False)) or backend in {"lexical", "disabled"}
         model_path = ""
         server_bin = ""
-        try:
-            status = getattr(embedder, "status", None)
-            if callable(status):
-                st = status(probe=False)
-                model_path = str(st.get("model_path") or "")
-                server_bin = str(st.get("server_bin") or "")
-        except Exception:
-            pass
-        if not model_path:
-            model_path = str(getattr(embedder, "_model_path", "") or "")
-        if not server_bin:
-            server_bin = str(getattr(embedder, "_server_bin", "") or "")
+        if not provider_only:
+            try:
+                status = getattr(embedder, "status", None)
+                if callable(status):
+                    st = status(probe=False)
+                    model_path = str(st.get("model_path") or "")
+                    server_bin = str(st.get("server_bin") or "")
+            except Exception:
+                pass
+            if not model_path:
+                model_path = str(getattr(embedder, "_model_path", "") or "")
+            if not server_bin:
+                server_bin = str(getattr(embedder, "_server_bin", "") or "")
         model_size, _ = _safe_stat(model_path)
         server_size, _ = _safe_stat(server_bin)
         return {
@@ -757,7 +758,8 @@ class FunctionEmbeddingIndex:
     def build_embedding_state_payload(self) -> dict[str, Any]:
         """Build an embedding state payload."""
         meta = self.metadata()
-        model_head = str(meta.get("model_sha256_head") or "")
+        provider_only = bool(getattr(self._embedder, "_provider_only", False)) or str(getattr(self._embedder, "backend", "")) in {"lexical", "disabled"}
+        model_head = "" if provider_only else str(meta.get("model_sha256_head") or "")
         index_metadata = {
             "implementation": "FunctionEmbeddingIndex",
             "db_path": self._db_path,
@@ -772,7 +774,7 @@ class FunctionEmbeddingIndex:
         }
         return {
             "backend": str(meta.get("embedding_backend") or getattr(self._embedder, "backend", "unknown")),
-            "model_path": str(meta.get("model_path") or ""),
+            "model_path": "" if provider_only else str(meta.get("model_path") or ""),
             "model_hash": model_head,
             "embedding_dim": int(meta.get("embedding_dim") or getattr(self._embedder, "dim", 0) or 0),
             "index_metadata": index_metadata,
@@ -953,14 +955,7 @@ class FunctionEmbeddingIndex:
         return rows
 
     def _row_docs_for_eas(self, eas: list[str]) -> dict[str, str]:
-        """Return the persisted bounded document text for a set of addresses.
-
-        Used by the cross-encoder rerank stage: the short ``signature_text``
-        is a lexical fingerprint, but a reranker scores the *document* that
-        was embedded.  Addresses with no persisted text (legacy rows indexed
-        before this column existed) are simply absent from the result; the
-        caller falls back to re-decompiling those.
-        """
+        """Return persisted compact signatures for a set of addresses."""
         if not eas:
             return {}
         out: dict[str, str] = {}
@@ -968,7 +963,7 @@ class FunctionEmbeddingIndex:
             with closing(self._conn()) as conn:
                 ph = ",".join("?" * len(eas))
                 for row in conn.execute(
-                    f"SELECT ea, document_text FROM func_embeddings WHERE ea IN ({ph})",
+                    f"SELECT ea, signature_text FROM func_embeddings WHERE ea IN ({ph})",
                     eas,
                 ):
                     if row[1]:
@@ -1076,7 +1071,7 @@ class FunctionEmbeddingIndex:
         if not callable(embed_batch):
             embed_batch = getattr(self._embedder, "embed_batch", None)
         try:
-            embedded = embed_batch([entry["pseudocode"] for entry in prepared]) if callable(embed_batch) else None
+            embedded = embed_batch([entry["signature_text"] for entry in prepared]) if callable(embed_batch) else None
         except Exception:
             embedded = None
         if not isinstance(embedded, list) or len(embedded) != len(prepared):
@@ -1091,17 +1086,24 @@ class FunctionEmbeddingIndex:
                     logger.warning("embedding failed during index_many: %s", exc)
                     return None
 
-            embedded = [_safe_embed(entry["pseudocode"]) for entry in prepared]
+            embedded = [_safe_embed(entry["signature_text"]) for entry in prepared]
 
         ready: list[tuple[dict[str, Any], list[float]]] = []
         failed_eas: set[str] = set()
+        lexical_only = bool(getattr(self._embedder, "_provider_only", False)) or str(getattr(self._embedder, "backend", "")) in {"lexical", "disabled"}
         for entry, result in zip(prepared, embedded, strict=True):
             vec = getattr(result, "vector", result)
             if vec is None:
-                failed += 1
-                failed_eas.add(str(entry["ea"]))
+                if lexical_only:
+                    # A typed-question provider has no vector protocol. Store
+                    # the bounded signature with an empty vector so lexical
+                    # search and structural filters remain usable.
+                    ready.append((entry, []))
+                else:
+                    failed += 1
+                    failed_eas.add(str(entry["ea"]))
                 continue
-            ready.append((entry, vec))
+            ready.append((entry, list(vec)))
 
         if not ready:
             return {"indexed": indexed, "failed": failed, "resume_after_ea": None}
@@ -1111,6 +1113,7 @@ class FunctionEmbeddingIndex:
                 for entry, vec in ready:
                     md = entry["metadata"]
                     search_tokens, name_tokens = _persist_search_tokens(entry["name"], entry["signature_text"])
+                    quality = "lexical" if lexical_only else md.get("index_quality", "unknown")
                     conn.execute(
                         """
                         INSERT INTO func_embeddings(
@@ -1148,10 +1151,10 @@ class FunctionEmbeddingIndex:
                         (
                             entry["ea"], entry["name"], len(vec), self._pack(vec), entry["pseudo_hash"], time.time(),
                             "function", hashlib.sha256(f"{entry['ea']}:{entry['pseudo_hash']}".encode()).hexdigest()[:24],
-                            entry["signature_text"], entry["signature_hash"], entry["pseudocode"],
+                            entry["signature_text"], entry["signature_hash"], None,
                             md.get("func_size", 0), md.get("bb_count", 0),
                             md.get("has_loops", 0), md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
-                            md.get("is_thunk", 0), md.get("cyclomatic", 0), md.get("index_quality", "unknown"),
+                            md.get("is_thunk", 0), md.get("cyclomatic", 0), quality,
                             _ea_to_int(entry["ea"]), search_tokens, name_tokens,
                         ),
                     )
@@ -1305,12 +1308,13 @@ class FunctionEmbeddingIndex:
         with self._cache_lock:
             if not self._cache:
                 return []
+        signature = _extract_signature_text(pseudocode, max_tokens=256)
         embed_document = getattr(self._embedder, "embed_document", None)
         if callable(embed_document):
-            embedded = embed_document(pseudocode)
+            embedded = embed_document(signature)
             q = getattr(embedded, "vector", embedded)
         else:
-            q = self._embedder.embed_vector(pseudocode)
+            q = self._embedder.embed_vector(signature)
         if q is None:
             return []
         return self.similar_vec(

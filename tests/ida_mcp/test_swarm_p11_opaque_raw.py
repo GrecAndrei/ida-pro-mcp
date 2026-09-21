@@ -82,30 +82,20 @@ class TestFixtureArchSeam(unittest.TestCase):
             "is_be": False,
         }
 
-    def test_architecture_profile_reports_raw_riscv_with_load_base(self):
+    def test_architecture_profile_keeps_raw_riscv_advisory(self):
         result = self.mod.idb_architecture_profile(
             meta=self._raw_meta(), summary={"imports": 0, "exports": 0}
         )
-        # Raw-blob surface on the fixture.
+        # Raw-blob status remains useful, but disabled mode must not promote
+        # host-side RISC-V opcode/bitness guesses or a load base.
         self.assertTrue(result["raw_binary_mode"], result)
         inferred = result["inferred_from_binary"]
         self.assertEqual(inferred.get("file_kind"), "raw")
         self.assertTrue(inferred.get("looks_like_code"))
-        # The vector-table / load-base ops see a riscv candidate first...
-        cands = list(inferred.get("candidates") or [])
-        self.assertTrue(cands, inferred)
-        self.assertEqual(cands[0]["processor"], "riscv", cands)
-        self.assertEqual(cands[0]["bitness"], 64, cands)  # RV64 lean from ld/sd
-        rv32 = next((c for c in cands if c["bitness"] == 32), None)
-        self.assertIsNotNone(rv32)
-        self.assertGreater(cands[0]["confidence"], rv32["confidence"])
-        # ...and the dominant lui/auipc hi20 resolves to the linked base.
-        self.assertEqual(inferred.get("load_base"), LOAD_BASE, inferred)
-        self.assertEqual(result["inferred_load_base"], LOAD_BASE)
-        self.assertIn("0x80000000", inferred.get("reason", ""))
-        # firmware_detected derivation used by idb.py overview (line 155).
-        is_firmware = bool(result["raw_binary_mode"])
-        self.assertTrue(is_firmware)
+        self.assertIsNone(inferred.get("processor"))
+        self.assertIsNone(inferred.get("load_base"))
+        self.assertFalse(any(row.get("processor") == "riscv" for row in inferred.get("candidates", [])))
+        self.assertIn("set architecture explicitly", inferred.get("warning", ""))
 
     def test_architecture_profile_carries_honest_raw_warning(self):
         result = self.mod.idb_architecture_profile(
@@ -260,24 +250,6 @@ class TestAnalysisRawBlobFlow(unittest.TestCase):
         self.assertEqual(res["addr"], hex(LOAD_BASE))
         self.assertEqual(res["name"], "reset")
         self.assertEqual(self.blob.state["entries"], [(1, LOAD_BASE, "reset")])
-
-    def test_entry_bootstrap_seeds_reset_and_isr_targets(self):
-        """_bootstrap_raw_entry_points must seed the reset-vector jal target
-        and the LE u32 vector-table ISR pointers as code/entry candidates."""
-        # Switch to RISC-V first so the bootstrap takes the RISC-V branch
-        # (reset `j` + LE u32 ISR table scan).
-        self.mod.analysis(action="set_architecture", processor="riscv", bitness=64)
-        end = LOAD_BASE + len(fixture_bytes())
-        boot = self.mod._bootstrap_raw_entry_points(LOAD_BASE, end)
-        self.assertGreaterEqual(boot["seeded_entries"], 1, boot)
-        functions = self.blob.state["functions"]
-        self.assertIn(_vector_ptr(RISCV_RESET_HANDLER), functions)
-        self.assertIn(_vector_ptr(RISCV_ISR_TIMER), functions)
-        self.assertIn(_vector_ptr(RISCV_ISR_UART), functions)
-        # Candidates are promoted to real entries via ida_entry.add_entry.
-        entry_eas = [ea for (_o, ea, _n) in self.blob.state["entries"]]
-        self.assertTrue(entry_eas)
-        self.assertIn(_vector_ptr(RISCV_RESET_HANDLER), entry_eas)
 
 
 # ---------------------------------------------------------------------------

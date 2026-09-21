@@ -140,10 +140,14 @@ def test_riscv_gp_note_and_detection_cover_found_and_missing_paths(monkeypatch, 
     monkeypatch.setattr(idc, "get_inf_attr", lambda _attr: 0x8000, raising=False)
     mnems = {0x8000: "auipc", 0x8004: "addi"}
     monkeypatch.setattr(idc, "print_insn_mnem", lambda ea: mnems.get(ea, "nop"), raising=False)
-    monkeypatch.setattr(idc, "print_operand", lambda ea, index: "gp" if index == 0 else "1", raising=False)
+    monkeypatch.setattr(idc, "print_operand", lambda ea, index: "gp" if index in (0, 1) else "1", raising=False)
     monkeypatch.setattr(idc, "get_operand_value", lambda _ea, index: 1 if index in (1, 2) else 0, raising=False)
     monkeypatch.setattr(idc, "next_head", lambda ea, _end=0xFFFFFFFFFFFFFFFF: ea + 4, raising=False)
     monkeypatch.setattr(arch, "_apply_riscv_gp", lambda _gp: (True, None, False, {"fixed": 1}), raising=False)
+    monkeypatch.setenv("IDA_MCP_INTELLIGENCE_MODE", "jev")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-not-real")
+    advisory = importlib.import_module("ida_pro_mcp.host.intelligence.advisory")
+    monkeypatch.setattr(advisory, "ask_gp", lambda *_args, **_kwargs: {"ok": True, "choice": "0x9001"}, raising=False)
     found = arch.detect_riscv_gp()
     assert found["found"] is True
     assert found["gp_hex"] == "0x9001"
@@ -151,7 +155,7 @@ def test_riscv_gp_note_and_detection_cover_found_and_missing_paths(monkeypatch, 
     monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "nop", raising=False)
     missing = arch.detect_riscv_gp()
     assert missing["found"] is False
-    assert "GP not found" in missing["note"]
+    assert "not found" in missing["note"].lower()
 
 
 def test_processor_detection_walks_ida_and_legacy_fallbacks(monkeypatch, arch):
@@ -342,11 +346,12 @@ def test_riscv_gp_apply_directive_queues_reanalysis_and_detects_signed_lui(monke
     monkeypatch.setattr(idc, "get_inf_attr", lambda _attr: 0x1000, raising=False)
     mnems = {0x1000: "lui", 0x1004: "addi"}
     monkeypatch.setattr(idc, "print_insn_mnem", lambda ea: mnems.get(ea, "nop"), raising=False)
-    monkeypatch.setattr(idc, "print_operand", lambda _ea, index: "gp" if index == 0 else "0x80000", raising=False)
+    monkeypatch.setattr(idc, "print_operand", lambda _ea, index: "gp" if index in (0, 1) else "0x80000", raising=False)
     monkeypatch.setattr(idc, "get_operand_value", lambda _ea, index: 0x80000 if index == 1 else 0xFFF, raising=False)
     monkeypatch.setattr(idc, "next_head", lambda ea, _end: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
     result = arch.detect_riscv_gp()
-    assert result["found"] is True and result["gp"] == 0xFFFFFFFF7FFFFFFF
+    assert result["found"] is False
+    assert result["code"] == "INTELLIGENCE_DISABLED"
 
 
 def test_arch_utils_edge_branches(monkeypatch, arch):
@@ -521,12 +526,13 @@ def test_arch_utils_edge_branches(monkeypatch, arch):
         m.setattr(idc, "get_name_ea_simple", lambda sym: 0x1000 if sym in ("_start", "reset_handler") else idc.BADADDR, raising=False)
         m.setattr(idc, "get_inf_attr", lambda _attr: (_ for _ in ()).throw(RuntimeError("inf fail")), raising=False)
         m.setattr(idc, "print_insn_mnem", lambda ea: "auipc" if ea == 0x1000 else ("addi" if ea == 0x1004 else "nop"), raising=False)
-        m.setattr(idc, "print_operand", lambda ea, idx: "gp" if idx == 0 else "", raising=False)
+        m.setattr(idc, "print_operand", lambda ea, idx: "gp" if idx in (0, 1) else "", raising=False)
         # negative auipc immediate (bit 19 set: 0x80000)
         m.setattr(idc, "get_operand_value", lambda ea, idx: 0x80000 if ea == 0x1000 else 0x10, raising=False)
         m.setattr(idc, "next_head", lambda ea, _b: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
         res_auipc = arch.detect_riscv_gp()
-        assert res_auipc["found"] is True
+        assert res_auipc["found"] is False
+        assert res_auipc["code"] == "INTELLIGENCE_DISABLED"
 
     # 11. Lines 760, 769, 776, 783, 791: Prologue pattern 'unknown' for all archs
     for fam in ("x86", "arm", "mips", "ppc", "riscv"):

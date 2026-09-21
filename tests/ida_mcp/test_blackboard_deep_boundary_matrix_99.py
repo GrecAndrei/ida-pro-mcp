@@ -332,26 +332,6 @@ def test_embedder_fallback_is_explicit_when_optional_backends_are_missing(monkey
     assert blackboard_module._get_embedder() is None
 
 
-def test_embedder_fallback_can_use_host_backend(monkeypatch):
-    services = sys.modules["ida_pro_mcp.services"]
-    monkeypatch.delattr(services, "BgeCodeEmbedder", raising=False)
-    host = types.ModuleType("host")
-    host.__path__ = []
-    intelligence = types.ModuleType("host.intelligence")
-    core = types.ModuleType("host.intelligence.core")
-
-    class FallbackEmbedder:
-        pass
-
-    core.BgeCodeEmbedder = FallbackEmbedder
-    host.intelligence = intelligence
-    intelligence.core = core
-    monkeypatch.setitem(sys.modules, "host", host)
-    monkeypatch.setitem(sys.modules, "host.intelligence", intelligence)
-    monkeypatch.setitem(sys.modules, "host.intelligence.core", core)
-    assert isinstance(blackboard_module._get_embedder(), FallbackEmbedder)
-
-
 def test_standalone_import_can_use_host_store_fallback(monkeypatch):
     package = types.ModuleType("ida_pro_mcp")
     package.__path__ = []

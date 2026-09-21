@@ -395,20 +395,19 @@ class _FakeClassifier:
         return self.hits
 
 
-def test_search_nl_degraded_falls_back_to_lexical_with_note():
-    """Embedding backend cannot start but the index has rows: rank lexically
-    and say so, instead of refusing the search."""
+def test_search_nl_lexical_fallback_preserves_recall_with_note():
+    """A provider-unavailable index still ranks lexically and says so."""
     sem = _semantic()
     idx = _FakeIndex()
     sem.get_backend = lambda: (
         idx,
         None,
         "test.idb",
-        "degraded — embedding backend unavailable; results ranked by lexical overlap only.",
+        "lexical-only — typed-question provider unavailable; results ranked by lexical overlap only.",
     )
     resp = sem.search_nl("alpha behavior", mode="quick", rerank=False)
     assert resp["ok"] is True
-    assert resp["degraded"].startswith("degraded")
+    assert resp["degraded"].startswith("lexical-only")
     assert "0x401000" in resp["results"]
 
 

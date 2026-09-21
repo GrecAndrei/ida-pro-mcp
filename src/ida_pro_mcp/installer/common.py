@@ -157,27 +157,17 @@ class InstallerOptions:
     rollback_on_fail: bool = True
     runtime_source: str = "auto"
     interactive: bool | None = None
-    embed_auto: bool = True
-    embed_profile: str = "qwen3-embedding-0.6b"
-    embed_backend: str = "qwen3-embedding-0.6b"  # qwen3-embedding-0.6b | bge-code-v1 | zembed-1 | gemini
-    gemini_access: str = "aistudio"  # aistudio | vertex
-    gemini_api_key: str = ""
-    gemini_vertex_project: str = ""
-    gemini_vertex_location: str = "us-central1"
-    gemini_install_auth: bool = False
-    gemini_dim: int = 768
-    gemini_model: str = "gemini-embedding-2"
-    embed_model_path: str = ""
-    embed_server_bin: str = ""
-    install_llama_server: bool = False
-    download_embed_model: bool = False
-    accept_model_license: bool = False
-    rerank_profile: str = "qwen3-reranker-0.6b"  # qwen3-reranker-0.6b | qwen3-reranker-4b | bge-reranker-v2-gemma | bge-reranker-v2-m3
-    rerank_model_path: str = ""
-    download_rerank_model: bool = False
-    rerank_disabled: bool = False  # user explicitly declined the reranker; emit IDA_MCP_RERANK_DISABLED=1
-    embedder_doctor: bool = False
-    setup_embedder: bool = False
+    # Explicit intelligence provider configuration. The only supported modes
+    # are Jev, operator-configured custom BYOK, and disabled.
+    intelligence_mode: str = "disabled"  # jev | custom | disabled
+    jev_model: str = "jev-latest"
+    custom_base_url: str = ""
+    custom_allowed_origins: str = ""
+    custom_model: str = ""
+    custom_protocol: str = "typed_questions"
+    custom_api_key_env: str = ""
+    custom_api_key_file: str = ""
+    custom_local_http: bool = False
     only: set[str] = field(default_factory=set)
     install_root: Path | None = None
     source_root: Path | None = None
@@ -197,7 +187,6 @@ class InstallerOptions:
     # .sig pack".
     sigs_dir: str = ""  # --sigs <dir>: stage a FLIRT sig pack into IDA's sig dir
     ida_binary_path: str = ""  # optional --kill-ida executable scope
-    allow_unverified_downloads: bool = False  # explicit supply-chain escape hatch
     with_bron_corpus: bool = False  # opt-in download of the optional threat corpus
     verify_bron_corpus: bool = False  # require per-source BRON SHA-256 env vars
     uninstall: bool = False  # clean removal of plugins, client configs, and shims

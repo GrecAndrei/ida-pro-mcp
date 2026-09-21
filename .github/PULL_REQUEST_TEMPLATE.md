@@ -34,4 +34,4 @@
 ## Notes for reviewers
 
 <!-- Migration steps, env var changes, backend selection impact, or anything
-that touches the native backend (libmcp_llama.so) or the operation surface. -->
+that touches the provider boundary, IDA runtime, or operation surface. -->

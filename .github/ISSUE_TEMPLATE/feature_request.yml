@@ -29,7 +29,7 @@ body:
       label: Area
       options:
         - New operation / tool surface
-        - Retrieval (embed / rerank / semantic search)
+        - Retrieval (lexical / Jev advisory scoring)
         - Investigation workspace (findings)
         - Session lifecycle / IDA integration
         - Installer / config

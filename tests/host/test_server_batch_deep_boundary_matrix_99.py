@@ -207,9 +207,9 @@ def test_matching_index_reuse_records_path_fingerprint_and_rejects_profile(tmp_p
     _embedding_db(f"{source2.idb_path}.embeddings.db", rows=[("0x2", "full")])
     host = _BatchHarness([source2, target2])
     host.assembler = SimpleNamespace(_embedder=object())
-    rejected = host._seed_index_from_matching_binary(target2)
+    reused_provider_index = host._seed_index_from_matching_binary(target2)
     host._batch_manager.shutdown()
-    assert rejected["reason"] == "incompatible_embedding_profile"
+    assert reused_provider_index["reused"] is True
 
 
 def test_matching_index_reuse_covers_cached_digest_malformed_db_and_stat_race(tmp_path, monkeypatch):

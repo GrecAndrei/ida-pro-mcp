@@ -136,14 +136,14 @@ def test_dispatch_gate_workspace_seed_and_evidence_failure_modes(tmp_path, monke
     store = _Store()
     server._execute_tool = lambda *_args: (_ for _ in ()).throw(RuntimeError("probe"))
     monkeypatch.setattr(module.time, "monotonic", iter([0.0, 0.0, 3.0]).__next__)
-    monkeypatch.setenv("IDA_MCP_EMBED_DISABLED", "1")
+    monkeypatch.setenv("IDA_MCP_INTELLIGENCE_MODE", "disabled")
     snapshot = server._evidence_gravity(store, "entry", "0x1000")
     assert snapshot["ok"] is True
     assert snapshot["items"][0]["ok"] is False
 
     store.semantic_search = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("embedding"))
     monkeypatch.setattr(module.time, "monotonic", lambda: 0.0)
-    monkeypatch.delenv("IDA_MCP_EMBED_DISABLED")
+    monkeypatch.delenv("IDA_MCP_INTELLIGENCE_MODE")
     assert server._evidence_gravity(store, "entry-2", "0x2000")["ok"] is True
 
 

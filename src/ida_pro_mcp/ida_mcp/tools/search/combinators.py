@@ -10,13 +10,14 @@ Actions provided:
   - search_analyze:     unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic)
   - search_neighborhood: 360 degree context around a function addr (delegates to analyze)
   - search_outlier:     find structurally anomalous functions (delegates to analyze)
-  - search_fingerprint: embedding-similar functions via bge-code-v1 cosine similarity (delegates to analyze)
+  - search_fingerprint: deterministic signature-similar functions (delegates to analyze)
   - search_path:        shortest call-graph path between two symbols
   - search_reach:       functions reachable from a root within N hops
   - search_noreach:     functions NOT reachable from any known entrypoint
 """
 
 import re
+import struct
 from collections import defaultdict, deque
 from typing import Optional
 
@@ -921,7 +922,13 @@ def _get_behavior_tags(ea: int) -> list[str]:
 
 
 def _get_embedding_similar(ea: int, top_k: int = 10) -> list[dict]:
-    """Find embedding-similar functions using the intelligence index."""
+    """Find similar functions from persisted vectors or lexical signatures.
+
+    The production lexical index never generates vectors.  A deliberately
+    injected compatibility index may still expose ``similar_vec`` for old
+    persisted rows, so use that deterministic stored-vector path when it is
+    available and otherwise search the bounded signature text.
+    """
     try:
         from ida_pro_mcp.services import get_assembler
         asm = get_assembler()
@@ -931,18 +938,43 @@ def _get_embedding_similar(ea: int, top_k: int = 10) -> list[dict]:
         idx = asm._get_index(idb_path)
         if idx is None or idx.size == 0:
             return []
-        # Get the target function's vector
+        vector_blob = None
+        signature = ""
+        name = ""
         with idx._conn() as conn:
-            row = conn.execute(
-                "SELECT vec_blob FROM func_embeddings WHERE ea = ?",
-                (hex(ea),)
-            ).fetchone()
-            if not row or not row[0]:
+            try:
+                row = conn.execute(
+                    "SELECT vec_blob, signature_text, name FROM func_embeddings WHERE ea = ?",
+                    (hex(ea),),
+                ).fetchone()
+                if row:
+                    vector_blob = row[0]
+                    signature = str(row[1] or "")
+                    name = str(row[2] or "")
+            except Exception:
+                # Older compatibility indexes may not have signature columns.
+                row = conn.execute(
+                    "SELECT vec_blob FROM func_embeddings WHERE ea = ?",
+                    (hex(ea),),
+                ).fetchone()
+                if row:
+                    vector_blob = row[0]
+        similar_vec = getattr(idx, "similar_vec", None)
+        if vector_blob and callable(similar_vec):
+            if len(vector_blob) % 4:
                 return []
-            import numpy as np
-            vec = np.frombuffer(row[0], dtype=np.float32).copy()
-        results = idx.similar_vec(vec, top_k=top_k + 1, threshold=0.0)
-        return [r for r in results if _coerce_ea(r.get("ea")) != ea][:top_k]
+            vector = list(struct.unpack(f"<{len(vector_blob) // 4}f", vector_blob))
+            results = similar_vec(vector, top_k=top_k + 1, threshold=0.0)
+            if isinstance(results, list):
+                return [r for r in results if _coerce_ea(r.get("ea")) != ea][:top_k]
+        query = signature or name
+        if not query:
+            return []
+        search_text = getattr(idx, "search_text", None)
+        if not callable(search_text):
+            return []
+        results = search_text(query, top_k=top_k + 1, threshold=0.0, exclude_ea=hex(ea))
+        return results[:top_k] if isinstance(results, list) else []
     except Exception:
         return []
 
@@ -1199,7 +1231,7 @@ def search_analyze(
             "note": f"Outliers by {metric} from cached call graph.",
         }
 
-    # --- SIMILAR (embedding-based) ---
+    # --- SIMILAR (deterministic signature-based) ---
     if scope == "similar":
         if not addr:
             return make_error(MCPError.INVALID_ARGS, "similar requires addr")
@@ -1229,7 +1261,7 @@ def search_analyze(
             "reference": {"addr": hex(fea), "name": _func_name(fea)},
             "results": text, "count": len(page), "total": len(items),
             "items": page,
-            "note": "Semantic similarity via bge-code-v1 embeddings. Different from structural fingerprint.",
+            "note": "Deterministic lexical signature similarity. Different from structural fingerprint; no vector model was used.",
         }
 
     # --- VULNERABLE ---
@@ -1350,7 +1382,7 @@ def search_analyze(
             "results": text, "count": len(page), "total": total,
             "truncated": total > offset + limit, "items": page,
             "taint_sources": len(sources), "taint_depth": taint_depth,
-            "note": "Vuln candidates reachable from taint sources via cached call graph + embedding behavior classification.",
+            "note": "Vulnerability candidates reachable from taint sources via cached call graph and bounded deterministic signatures.",
         }
 
     # --- SEMANTIC ---
@@ -1385,7 +1417,7 @@ def search_analyze(
                 "ok": True, "action": "analyze", "scope": "semantic",
                 "results": text, "count": len(items), "total": len(hits),
                 "truncated": len(hits) > offset + limit, "items": items,
-                "note": "Hybrid semantic+lexical search via bge-code-v1 embeddings.",
+                "note": "Deterministic lexical signature search; typed-question provider scoring is optional and advisory.",
             }
         except Exception as e:
             return make_error(MCPError.NOT_FOUND, f"Semantic search failed: {e}")

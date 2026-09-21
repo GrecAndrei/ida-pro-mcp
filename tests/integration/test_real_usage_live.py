@@ -379,12 +379,9 @@ def test_real_user_marks_a_dead_end_and_gets_a_next_target(real_live_context: Li
         assert isinstance(next_target, dict)
 
 
-def test_real_user_optional_backends_return_status_instead_of_transport_failures(real_live_context: LiveContext):
+def test_real_user_provider_status_returns_metadata_instead_of_transport_failures(real_live_context: LiveContext):
     client = real_live_context.client
-    for name, arguments in (
-        ("ida_reranker_status", {}),
-        ("ida_function_families", {"query": "fixture", "limit": 5}),
-    ):
+    for name, arguments in (("ida_reranker_status", {}),):
         payload = client.call(name, arguments)
         assert isinstance(payload, dict), (name, payload)
         if payload.get("error") is True:

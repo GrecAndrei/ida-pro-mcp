@@ -153,7 +153,7 @@ def test_prepare_open_args_validates_aliases_conflicts_and_files(tmp_path, monke
 def test_architecture_recommendations_inference_warning_and_stale_checkpoint(monkeypatch):
     host = ServerSessionMixin.__new__(ServerSessionMixin)
     assert host._arch_recommendations(None) is None
-    assert host._arch_recommendations({"inferred_profile": {"candidates": []}})[0]["confidence"] == 0.2
+    assert host._arch_recommendations({"inferred_profile": {"candidates": []}}) is None
     recs = host._arch_recommendations({"inferred_profile": {"candidates": [
         {"processor": "x86", "bitness": 64, "confidence": 0.8, "reason": "a"},
         {"processor": "arm", "bitness": 32, "confidence": 0.7, "reason": "b"},
@@ -346,7 +346,13 @@ def test_create_session_reuse_and_fresh_inference_edges(tmp_path, monkeypatch):
     created = []
     host._prepare_open_args = lambda _args: (
         str(binary), {"processor": "arm"},
-        {"inferred_profile": {"file_kind": "packed_idb", "candidates": []}, "inference_warning": "verify"},
+        {
+            "inferred_profile": {
+                "file_kind": "packed_idb",
+                "candidates": [{"processor": "arm", "bitness": 32, "endian": "little", "confidence": 0.2}],
+            },
+            "inference_warning": "verify",
+        },
         False, ["-z"], None,
     )
     host._select_reuse_candidate = lambda *_args: None
@@ -404,7 +410,11 @@ def test_attach_open_envelope_includes_recommendations_errors_and_completion(tmp
         "inference_warning": "check architecture",
     })
     out = {}
-    host._attach_open_envelope(session, out, {"inferred_profile": {"candidates": []}})
+    host._attach_open_envelope(
+        session,
+        out,
+        {"inferred_profile": {"candidates": [{"processor": "arm", "bitness": 32, "endian": "little"}]}},
+    )
     assert out["architecture_recommendations"][0]["arguments"]["processor"] == "arm"
     assert out["analysis_complete"] is True
     assert out["safe_mode"] is False

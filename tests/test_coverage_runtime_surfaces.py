@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import os
 import subprocess
 import types
@@ -12,24 +11,6 @@ import pytest
 
 from ida_pro_mcp.installer import runtime
 from ida_pro_mcp.installer.common import InstallReport
-
-
-def test_runtime_url_and_limited_reader_guards():
-    profile = types.SimpleNamespace(
-        download_url="https://huggingface.co/org/model/resolve/main/model.gguf",
-        download_revision="a" * 40,
-    )
-    assert runtime._profile_download_url(profile).endswith(f"resolve/{'a' * 40}/model.gguf")
-    for bad in (
-        types.SimpleNamespace(download_url="https://example.test/model", download_revision="a" * 40),
-        types.SimpleNamespace(download_url="https://huggingface.co/model/resolve/main/model", download_revision="bad"),
-    ):
-        assert runtime._profile_download_url(bad) == ""
-    with pytest.raises(ValueError):
-        runtime._read_response_limited(io.BytesIO(b"x"), max_bytes=-1, label="data")
-    with pytest.raises(RuntimeError, match="safety limit"):
-        runtime._read_response_limited(io.BytesIO(b"12345"), max_bytes=4, label="data")
-    assert runtime._read_response_limited(io.BytesIO(b"1234"), max_bytes=4, label="data") == b"1234"
 
 
 def test_kill_ida_processes_scopes_linux_and_windows(monkeypatch, tmp_path):
@@ -76,14 +57,6 @@ def test_kill_ida_processes_scopes_linux_and_windows(monkeypatch, tmp_path):
 
 
 def test_runtime_discovery_sigs_and_bundled_setup(monkeypatch, tmp_path):
-    server_dir = tmp_path / "localappdata" / "Programs" / "llama.cpp" / "bin"
-    server_dir.mkdir(parents=True)
-    server = server_dir / "llama-server.exe"
-    server.write_text("server", encoding="ascii")
-    monkeypatch.setattr(runtime.sys, "platform", "win32")
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
-    assert runtime.find_llama_server_bin(tmp_path / "install") == str(server)
-
     signature = tmp_path / "one.sig"
     signature.write_text("sig", encoding="ascii")
     report = InstallReport()

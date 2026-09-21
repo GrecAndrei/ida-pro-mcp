@@ -225,35 +225,8 @@ def test_workflow_prioritize_composition_and_plan_edge_shapes():
     assert not_list["explained_steps"] == []
 
 
-def test_workflow_embedding_fallback_and_plan_passthrough(monkeypatch):
+def test_workflow_plan_passthrough():
     host = _WorkflowHost()
-    core = importlib.import_module("ida_pro_mcp.host.intelligence.core")
-
-    class _UnavailableEmbedder:
-        def embed_vector(self, _text):
-            return None
-
-    monkeypatch.setattr(workflow_module, "EMBEDDING_FIRST_MODE", True)
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _UnavailableEmbedder)
-    estimated = host._handle_workflow(
-        {"action": "estimate", "workflow_action": "triage_fast"}
-    )
-    assert estimated["estimate"]["risk_score"] > 0
-
-    class _PartiallyUnavailableEmbedder:
-        def __init__(self):
-            self.calls = 0
-
-        def embed_vector(self, _text):
-            self.calls += 1
-            return [1.0] if self.calls == 1 else None
-
-    monkeypatch.setattr(core, "BgeCodeEmbedder", _PartiallyUnavailableEmbedder)
-    estimated = host._handle_workflow(
-        {"action": "estimate", "workflow_action": "triage_fast"}
-    )
-    assert estimated["estimate"]["risk_score"] > 0
-
     host.action_overrides["returns-text"] = "plan result"
     assert host._handle_workflow(
         {"action": "plan", "workflow_action": "returns-text"}

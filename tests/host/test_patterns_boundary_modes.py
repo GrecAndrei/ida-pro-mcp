@@ -5,7 +5,6 @@ from __future__ import annotations
 from ida_pro_mcp.host.analysis.patterns import (
     GlobalFactsDatabase,
     _adaptive_fuzzy_cutoff,
-    _c_half_plausible,
     _compile_semantic_matcher,
     _compile_smart_pattern_uncached,
     _is_regex,
@@ -14,11 +13,10 @@ from ida_pro_mcp.host.analysis.patterns import (
     byte_entropy,
     compile_smart_pattern,
     looks_like_code,
-    riscv_instruction_validity,
 )
 
 
-def test_byte_and_riscv_detectors_cover_empty_text_and_instruction_modes():
+def test_byte_detectors_cover_empty_text_and_code_modes():
     assert byte_entropy(b"") == 0.0
     assert byte_entropy(b"aaaa") == 0.0
     assert byte_entropy(bytes(range(256))) == 8.0
@@ -27,21 +25,6 @@ def test_byte_and_riscv_detectors_cover_empty_text_and_instruction_modes():
     assert looks_like_code(b"A" * 32) is False
     assert looks_like_code(bytes(range(1, 65))) is True
     assert looks_like_code(bytes(range(1, 65)), entropy_floor=7.9) is False
-
-    assert _c_half_plausible(0) is False
-    assert _c_half_plausible(0xFFFF) is False
-    assert _c_half_plausible(0x0001) is True
-    assert _c_half_plausible(0x0005) is False
-    assert _c_half_plausible(0x0006) is False
-    assert _c_half_plausible(0x4000) is True
-    assert _c_half_plausible(0x6141) is True
-
-    short = riscv_instruction_validity(b"\x13\x00")
-    assert short["looks_like_riscv"] is False and short["scanned_bytes"] == 0
-    valid = riscv_instruction_validity(b"\x13\x00\x00\x00" * 4, rv64=True)
-    assert valid["valid32"] == 4 and valid["looks_like_riscv"] is True
-    mixed = riscv_instruction_validity(b"\x13\x00\x00\x00\x00\x00\x00\x00\xff")
-    assert mixed["invalid"] >= 1
 
 
 def test_semantic_tokens_matcher_and_adaptive_modes():

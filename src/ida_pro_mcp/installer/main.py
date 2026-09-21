@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import getpass
-import json
 import os
 import shlex
 import shutil
@@ -12,7 +10,6 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import runtime as _runtime
 from .clients import (
     backup_file,
     configure_clients,
@@ -38,22 +35,12 @@ from .discovery import (
 from .runtime import (
     activate_idalib,
     build_stdio_config,
-    choose_runtime_source,
-    download_and_install_llama_server,
-    download_embed_model,
-    download_rerank_model,
-    find_embed_model,
     find_idalib_python_dir,
-    find_llama_server_bin,
-    find_rerank_model,
     get_install_root,
-    install_optional_packages,
     kill_ida_processes,
     setup_runtime_environment,
     stage_sigs,
 )
-
-_sha256_file = _runtime._sha256_file
 
 
 class UI:
@@ -81,120 +68,6 @@ class UI:
 def _absolute_path(path: Path | str) -> Path:
     """Expand a user path without resolving symlinks or requiring existence."""
     return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
-
-
-def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
-    install_root = _absolute_path(opts.install_root or get_install_root())
-    try:
-        reject_symlink_path(install_root, "installer root")
-    except RuntimeError as exc:
-        ui.err(str(exc))
-        return 1
-    gemini_mode = opts.embed_backend == "gemini"
-    profile = "" if gemini_mode else opts.embed_profile
-    embed_model = "" if gemini_mode else (opts.embed_model_path or (
-        find_embed_model(install_root, profile) if opts.embed_auto else ""
-    ))
-    embed_server = "" if gemini_mode else (opts.embed_server_bin or (find_llama_server_bin(install_root) if opts.embed_auto else ""))
-
-    ui.info("Embedder doctor")
-    ui.info("---------------")
-    ui.info(f"install_root: {install_root}")
-    if gemini_mode:
-        ui.info("backend: gemini-embedding-2 (cloud — credentials come from the environment)")
-        ui.info("llama-server: n/a (cloud backend)")
-        ui.info("model: n/a (cloud backend)")
-    else:
-        ui.info(f"llama-server: {'found ' + embed_server if embed_server else 'not found'}")
-        ui.info(f"model: {'found ' + embed_model if embed_model else 'not found'}")
-
-    from ida_pro_mcp.host.intelligence import core as intel_core
-
-    # Recreate singleton under doctor-selected env so status/probe reflect this setup.
-    # Include the managed root and cloud settings: otherwise a custom
-    # --install-root can report against the user's default state file and a
-    # --gemini-api-key/--gemini-model override has no effect on the probe.
-    doctor_env_names = (
-        "IDA_PRO_MCP_HOME",
-        "IDA_MCP_EMBED_BACKEND",
-        "IDA_MCP_EMBED_SERVER_BIN",
-        "IDA_MCP_EMBED_MODEL",
-        "IDA_MCP_EMBED_PROFILE",
-        "IDA_MCP_GEMINI_MODEL",
-        "IDA_MCP_GEMINI_DIM",
-        "IDA_MCP_GEMINI_VERTEX",
-        "GEMINI_API_KEY",
-        "GOOGLE_CLOUD_PROJECT",
-        "VERTEX_AI_LOCATION",
-    )
-    previous_doctor_env = {name: os.environ.get(name) for name in doctor_env_names}
-    prev_instance = intel_core.BgeCodeEmbedder._instance
-    try:
-        for name in doctor_env_names:
-            os.environ.pop(name, None)
-        os.environ["IDA_PRO_MCP_HOME"] = str(install_root)
-        if gemini_mode:
-            os.environ["IDA_MCP_EMBED_BACKEND"] = "gemini"
-        else:
-            # A previous Gemini install may have backend=gemini in the state
-            # file. Explicitly force this doctor invocation to inspect the
-            # requested local backend instead of inheriting that state.
-            os.environ["IDA_MCP_EMBED_BACKEND"] = "local"
-        if embed_server:
-            os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
-        if embed_model:
-            os.environ["IDA_MCP_EMBED_MODEL"] = embed_model
-        if profile:
-            os.environ["IDA_MCP_EMBED_PROFILE"] = profile
-        if gemini_mode:
-            os.environ["IDA_MCP_GEMINI_MODEL"] = opts.gemini_model
-            os.environ["IDA_MCP_GEMINI_DIM"] = str(opts.gemini_dim)
-            if opts.gemini_access == "vertex":
-                os.environ["IDA_MCP_GEMINI_VERTEX"] = "1"
-            if opts.gemini_api_key:
-                os.environ["GEMINI_API_KEY"] = opts.gemini_api_key
-            if opts.gemini_vertex_project:
-                os.environ["GOOGLE_CLOUD_PROJECT"] = opts.gemini_vertex_project
-            if opts.gemini_vertex_location:
-                os.environ["VERTEX_AI_LOCATION"] = opts.gemini_vertex_location
-        intel_core.BgeCodeEmbedder._instance = None
-        emb = intel_core.BgeCodeEmbedder()
-        status = emb.status(probe=True, deep_hash=False)
-        status["model_fingerprint"] = intel_core.model_fingerprint(embed_model, deep_hash=False)
-        status["server_fingerprint"] = intel_core.server_fingerprint(embed_server, deep_hash=False)
-        status["embed_test_ok"] = False
-        status["embed_test_dim"] = 0
-        try:
-            vec = emb.embed_vector("embedder doctor quick check")
-            if vec is None:
-                raise RuntimeError("embedding unavailable")
-            status["embed_test_ok"] = bool(vec)
-            status["embed_test_dim"] = len(vec or [])
-        except Exception as exc:
-            status["embed_test_error"] = str(exc)
-
-        if status.get("ready"):
-            ui.ok("embedder ready")
-        else:
-            ui.warn("embedder not ready")
-        ui.info(f"backend: {status.get('backend')}")
-        ui.info(f"embed test: {'ok' if status.get('embed_test_ok') else 'failed'}")
-        if gemini_mode and status.get("error"):
-            ui.warn(f"gemini: {status.get('error')}")
-        ui.info("fallback: unavailable (semantic features fail explicitly)")
-        print(json.dumps(status, indent=2))
-        # A doctor command is commonly used as a readiness gate by scripts and
-        # service managers.  Reporting a healthy-looking exit code when either
-        # the backend probe or the quick embedding check failed makes those
-        # callers proceed with a known-broken semantic setup.
-        return 0 if status.get("ready") and status.get("embed_test_ok") else 1
-    finally:
-        intel_core.BgeCodeEmbedder._instance = prev_instance
-        for name, value in previous_doctor_env.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
 
 
 def _is_interactive_terminal() -> bool:
@@ -243,25 +116,6 @@ def _prompt_text(question: str, default: str = "") -> str:
     suffix = f" (default: {default})" if default else ""
     ans = input(f"{question}{suffix}: ").strip().strip("\"'")
     return ans or default
-
-
-def _prompt_secret(question: str) -> str:
-    """Ask for a secret without echoing it into the terminal or command log."""
-    return getpass.getpass(f"{question}: ").strip()
-
-
-def _prompt_model_path(profile: str) -> str:
-    """Ask the user to provide a model file path interactively."""
-    print(f"Enter the full path to your {profile} GGUF model file, or leave empty to skip.")
-    print("Example: /home/user/Downloads/model.gguf")
-    while True:
-        ans = input("Model path (or press Enter to skip): ").strip().strip("\"'")
-        if not ans:
-            return ""
-        p = Path(os.path.expandvars(os.path.expanduser(ans)))
-        if p.is_file():
-            return str(p)
-        print(f"File not found: {ans}. Check the path and try again.")
 
 
 def _prompt_ida_install(installs: list[IdaInstall], default_index: int = 0) -> IdaInstall:
@@ -361,294 +215,36 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     ui.info("Interactive install mode")
     ui.info("Press Enter to keep recommended defaults.")
 
-    resolved_runtime = choose_runtime_source(opts.runtime_source, opts.source_root or Path.cwd())
-    runtime_default = opts.runtime_source if opts.runtime_source != "auto" else resolved_runtime
-    opts.runtime_source = _prompt_choice(
-        "Runtime package source",
-        ["snapshot", "pypi", "local"],
-        runtime_default if runtime_default in {"snapshot", "pypi", "local"} else "snapshot",
-    )
-
-    if sys.platform != "win32":
-        opts.install_cli_shim = _prompt_yes_no(
-            "Install CLI shell shim into ~/.bashrc?",
-            default=opts.install_cli_shim,
-        )
-
-    # These choices select an embedding *model*.  The server backend that runs
-    # the model is determined separately: either the native in-process library
-    # (libmcp_llama.so, built from scripts/build_native_llama.sh — fastest,
-    # lowest memory) or a llama-server subprocess (HTTP, works out of the box).
-    # The installer sets up the subprocess path; the native library is auto-used
-    # at runtime when present.
-    _backend_choices = {
-        "qwen3-embedding-0.6b (local GGUF, recommended)": "qwen3-embedding-0.6b",
-        "bge-code-v1 (local GGUF)": "bge-code-v1",
-        "zembed-1 (local GGUF, non-commercial)": "zembed-1",
-        "gemini-embedding-2 (cloud, requires API key)": "gemini",
+    # Intelligence is configured as an explicit provider; no local model,
+    # Gemini, native library, or secret-entry wizard is offered.
+    mode_labels = {
+        "Jev (TypeSafe hosted provider)": "jev",
+        "Custom (operator HTTPS/loopback endpoint)": "custom",
+        "Disabled (deterministic and lexical analysis only)": "disabled",
     }
-    current_backend = opts.embed_backend if opts.embed_backend in _backend_choices.values() else "qwen3-embedding-0.6b"
-    default_backend_label = next(k for k, v in _backend_choices.items() if v == current_backend)
-    opts.embed_backend = _backend_choices[
-        _prompt_choice(
-            "Embedding backend",
-            list(_backend_choices.keys()),
-            default_backend_label,
-        )
+    current_mode = opts.intelligence_mode if opts.intelligence_mode in mode_labels.values() else "disabled"
+    default_mode_label = next(label for label, value in mode_labels.items() if value == current_mode)
+    opts.intelligence_mode = mode_labels[
+        _prompt_choice("Intelligence provider mode", list(mode_labels), default_mode_label)
     ]
-    if opts.embed_backend == "gemini":
-        opts.embed_auto = False
-        _access_choices = {
-            "Google AI Studio (API key)": "aistudio",
-            "Vertex AI (GCP)": "vertex",
-        }
-        current_access = opts.gemini_access if opts.gemini_access in _access_choices.values() else "aistudio"
-        default_access_label = next(k for k, v in _access_choices.items() if v == current_access)
-        opts.gemini_access = _access_choices[
-            _prompt_choice(
-                "Gemini access",
-                list(_access_choices.keys()),
-                default_access_label,
-            )
-        ]
-        if opts.gemini_access == "aistudio":
-            existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            if existing_key:
-                ui.ok("GEMINI_API_KEY detected in your environment; the server will use it.")
-                opts.gemini_api_key = ""
-            else:
-                ui.info("Get a free key at https://aistudio.google.com/apikey")
-                key = _prompt_secret(
-                    "Gemini API key (or leave empty to rely on the GEMINI_API_KEY env var)"
-                )
-                opts.gemini_api_key = key.strip().strip("'\"")
-                if opts.gemini_api_key:
-                    ui.ok(
-                        "Key recorded; it will be written into the MCP client config env block."
-                    )
-                else:
-                    ui.warn(
-                        "No key entered. Set GEMINI_API_KEY in your environment before "
-                        "using semantic features."
-                    )
-        else:
-            default_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or ""
-            opts.gemini_vertex_project = _prompt_text(
-                "Google Cloud project ID (Vertex AI)", default=default_project
-            ) or default_project
-            opts.gemini_vertex_location = _prompt_text(
-                "Vertex AI region (location)", default="us-central1"
-            ) or "us-central1"
-            opts.gemini_install_auth = _prompt_yes_no(
-                "Install google-auth so Application Default Credentials "
-                "(GOOGLE_APPLICATION_CREDENTIALS) work with Vertex AI?",
-                default=True,
-            )
-            ui.info(
-                "Vertex AI also needs the aiplatform.googleapis.com API enabled and "
-                "the Vertex AI User role (roles/aiplatform.user)."
-            )
-    else:
-        opts.embed_profile = opts.embed_backend
-        if opts.embed_profile == "zembed-1":
-            ui.info("Zembed 1 is opt-in and licensed CC-BY-NC-4.0 (non-commercial).")
-    auto_embed_model = find_embed_model(opts.install_root or get_install_root(), opts.embed_profile)
-    auto_embed_server = find_llama_server_bin(opts.install_root or get_install_root())
-    # Check for the native in-process backend (libmcp_llama.so).
-    # This is built separately from scripts/build_native_llama.sh and gives
-    # ~10x faster cold-start and ~2x lower RAM vs the llama-server subprocess.
-    # The installer doesn't build it, but we detect and report it here.
-    _native_lib = ""
-    if opts.embed_backend != "gemini":
-        try:
-            from ida_pro_mcp.host.intelligence.native import find_native_lib
-            _native_lib = find_native_lib()
-        except Exception:
-            pass
-        if _native_lib:
-            ui.ok(f"Native embedding library found: {_native_lib}")
-            ui.info("Native backend (in-process libmcp_llama.so) will be used automatically — "
-                    "no llama-server subprocess needed.")
-        else:
-            ui.info("Native embedding library (libmcp_llama.so) not found.")
-            ui.info("The server will use a llama-server subprocess (HTTP). "
-                    "For faster startup and lower RAM, build the native library after install: "
-                    "  bash scripts/build_native_llama.sh")
-    selected_embed_model = opts.embed_model_path or auto_embed_model
-    if opts.embed_backend != "gemini" and selected_embed_model:
-        if not opts.embed_model_path:
-            ui.ok(f"Detected embedding model: {auto_embed_model}")
-        # Honor an explicit --no-embed-auto: the prompt default reflects the
-        # current flag so a bare Enter cannot silently flip an opt-out back on.
-        opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=opts.embed_auto)
-        if opts.embed_auto:
-            if not opts.embed_model_path:
-                opts.embed_model_path = auto_embed_model
-            if auto_embed_server and not opts.embed_server_bin:
-                ui.ok(f"Detected llama-server: {auto_embed_server}")
-                opts.embed_server_bin = auto_embed_server
-            elif not auto_embed_server and not opts.embed_server_bin:
-                ui.warn("llama-server not found.")
-                opts.install_llama_server = _prompt_yes_no(
-                    "Download and install llama-server automatically?",
-                    default=True,
-                )
-    elif opts.embed_backend != "gemini":
-        ui.warn(f"No {opts.embed_profile} model auto-detected.")
-        if opts.interactive:
-            if opts.embed_profile == "zembed-1" and _prompt_yes_no(
-                "Download the managed Zembed 1 Q4_K_M model?", default=False
-            ):
-                if _prompt_yes_no("I accept the CC-BY-NC-4.0 model license", default=False):
-                    opts.download_embed_model = True
-                    opts.accept_model_license = True
-                    opts.embed_auto = True
-                    manual = ""
-                else:
-                    ui.warn("Zembed download skipped because its license was not accepted.")
-                    manual = _prompt_model_path(opts.embed_profile)
-            else:
-                manual = _prompt_model_path(opts.embed_profile)
-            if manual:
-                ui.ok(f"Using model: {manual}")
-                opts.embed_model_path = manual
-                opts.embed_auto = True
-            elif not opts.download_embed_model:
-                opts.embed_auto = False
-                ui.warn("Semantic embedding features stay disabled by default.")
-        else:
-            opts.embed_auto = False
-
-    # --- Reranker model (second model required for semantic search quality) ---
-    # Gemini supplies the embedding model remotely, but reranking is still a
-    # separate local cross-encoder.  Keep this section independent of the
-    # embedding backend so cloud users do not silently lose reranking.
-    if opts.embed_backend == "gemini" or opts.embed_auto or opts.embed_model_path:
-        ui.info(
-            "Semantic search uses two models: an embedding model (already configured above) "
-            "and a reranker (cross-encoder) that re-scores results for precision."
+    if opts.intelligence_mode == "jev":
+        opts.jev_model = _prompt_text("Jev model", default=opts.jev_model or "jev-latest") or "jev-latest"
+        ui.info("Provide TYPESAFE_API_KEY or TYPESAFE_API_KEY_FILE in the server environment; it is never stored by the installer.")
+    elif opts.intelligence_mode == "custom":
+        opts.custom_base_url = _prompt_text("Custom HTTPS origin", default=opts.custom_base_url)
+        opts.custom_allowed_origins = _prompt_text(
+            "Explicit allowed origins (comma-separated)", default=opts.custom_allowed_origins or opts.custom_base_url
         )
-        _rerank_choices = {
-            "qwen3-reranker-0.6b (recommended, ~0.6B)": "qwen3-reranker-0.6b",
-            "qwen3-reranker-4b (higher quality, larger)": "qwen3-reranker-4b",
-            "bge-reranker-v2-gemma": "bge-reranker-v2-gemma",
-            "bge-reranker-v2-m3": "bge-reranker-v2-m3",
-        }
-        current_rerank = opts.rerank_profile if opts.rerank_profile in _rerank_choices.values() else "qwen3-reranker-0.6b"
-        default_rerank_label = next(k for k, v in _rerank_choices.items() if v == current_rerank)
-        opts.rerank_profile = _rerank_choices[
-            _prompt_choice(
-                "Reranker model",
-                list(_rerank_choices.keys()),
-                default_rerank_label,
-            )
-        ]
-        auto_rerank_model = find_rerank_model(opts.install_root or get_install_root(), opts.rerank_profile)
-        selected_rerank_model = opts.rerank_model_path or auto_rerank_model
-        if selected_rerank_model:
-            if not opts.rerank_model_path:
-                ui.ok(f"Detected reranker: {auto_rerank_model}")
-            if _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
-                if not opts.rerank_model_path:
-                    opts.rerank_model_path = auto_rerank_model
-            else:
-                # An explicit 'No' must stick: remember the opt-out and don't
-                # let the default profile leak into state / client env.
-                opts.rerank_disabled = True
-                opts.rerank_model_path = ""
-        else:
-            ui.warn(f"No {opts.rerank_profile} reranker model found.")
-            if _prompt_yes_no(
-                f"Download managed {opts.rerank_profile} reranker model (~300 MB)?",
-                default=True,
-            ):
-                from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
-
-                selected_rerank = get_rerank_model_profile(opts.rerank_profile)
-                if selected_rerank is not None and selected_rerank.opt_in:
-                    if _prompt_yes_no(
-                        f"I accept the {selected_rerank.license} license for {selected_rerank.display_name}",
-                        default=False,
-                    ):
-                        opts.download_rerank_model = True
-                        opts.accept_model_license = True
-                    else:
-                        ui.warn("Reranker download skipped because its license was not accepted.")
-                        opts.rerank_disabled = True
-                else:
-                    opts.download_rerank_model = True
-            else:
-                opts.rerank_disabled = True
-        ui.info(
-            "Rerank tuning knobs (optional env vars): IDA_MCP_RERANK_POOL "
-            "(recall pool, default 8), IDA_MCP_RERANK_DOC_BUDGET_CHARS "
-            "(per-document budget, default 800), IDA_MCP_RERANK_CTX "
-            "(per-pair context, default 1024)."
+        opts.custom_model = _prompt_text("Custom model", default=opts.custom_model)
+        opts.custom_api_key_env = _prompt_text(
+            "Credential environment variable name", default=opts.custom_api_key_env or "CUSTOM_PROVIDER_API_KEY"
         )
-
-    # Session runtime backend. idat is the default (crash-isolated
-    # per-session idat processes); idalib runs the IDA kernel in-process
-    # (python -m ida_pro_mcp.idalib_worker) — faster session start and undo
-    # history, but one crash takes the session down and it needs the idapro
-    # whl + activation on the chosen install.
-    _runtime_choices = {
-        "idat (per-session processes, recommended)": "idat",
-        "idalib (in-process kernel, experimental)": "idalib",
-    }
-    current_runtime = opts.ida_runtime if opts.ida_runtime in _runtime_choices.values() else "idat"
-    default_runtime_label = next(k for k, v in _runtime_choices.items() if v == current_runtime)
-    opts.ida_runtime = _runtime_choices[
-        _prompt_choice(
-            "IDA session runtime backend",
-            list(_runtime_choices.keys()),
-            default_runtime_label,
+        opts.custom_api_key_file = _prompt_text(
+            "Credential file path (optional)", default=opts.custom_api_key_file
         )
-    ]
-    if opts.ida_runtime == "idalib":
-        chosen_install = getattr(opts, "_ida_install", None)
-        ida_dir = str(chosen_install.path) if chosen_install is not None else ""
-        idalib_py = find_idalib_python_dir(ida_dir)
-        if not idalib_py:
-            ui.warn(
-                "idalib backend selected but no idapro package found under "
-                f"{ida_dir or '<IDA install>'}/idalib/python. The runtime flag "
-                "will be written anyway; sessions will fail until the whl is "
-                "present and activated."
-            )
-        else:
-            ui.ok(f"idapro package found: {idalib_py}")
-            ui.info(
-                "idalib activation will run after the installation phases complete, "
-                "because it changes IDA's global active runtime."
-            )
-
-    opts.rollback_on_fail = _prompt_yes_no(
-        "Rollback backed-up config files on failure?",
-        default=opts.rollback_on_fail,
-    )
-    corpus_env_enabled = os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {
-        "1", "true", "yes", "on"
-    }
-    opts.with_bron_corpus = _prompt_yes_no(
-        "Download the optional threat corpus and crypto signatures?",
-        default=opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled,
-    )
-    ui.info(
-        "Policy gates are ON by default — they require evidence cards and "
-        "acknowledgements for write-surface tools. Disable them only if you "
-        "trust every MCP client and LLM with full edit access to your IDB."
-    )
-    opts.disable_policy = _prompt_yes_no(
-        "Disable ALL policy gates (strict-blackboard, phase choreography, ack requirements)?",
-        default=opts.disable_policy,
-    )
-    if opts.disable_policy:
-        ui.warn("Policy gates DISABLED — all tools run without restrictions.")
-
-    if not _prompt_yes_no("Proceed with installation now?", default=True):
-        raise RuntimeError("Installation cancelled by user.")
+        opts.custom_protocol = "typed_questions"
+        ui.info("Credentials are read at request time and never copied into client configuration.")
     return opts
-
 
 def _activate_idalib_after_install(
     opts: InstallerOptions,
@@ -764,61 +360,28 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="runtime package source: snapshot (default: frozen copy of the "
         "checkout), pypi, or local (dev mode: live source tree — not recommended)",
     )
-    parser.add_argument("--embed-model", default="", help="explicit path to an embedding GGUF model")
-    parser.add_argument(
-        "--embed-profile", choices=["qwen3-embedding-0.6b", "bge-code-v1", "zembed-1"], default="qwen3-embedding-0.6b",
-        help="embedding prompt/model profile (default: qwen3-embedding-0.6b)",
+    intelligence_group = parser.add_mutually_exclusive_group()
+    intelligence_group.add_argument(
+        "--intelligence-mode",
+        choices=["jev", "custom", "disabled"],
+        default="disabled",
+        help="intelligence provider mode (default: disabled; no local/Gemini/native fallback)",
     )
+    parser.add_argument("--jev-model", default="jev-latest", help="Jev model identifier")
+    parser.add_argument("--custom-base-url", default="", help="custom provider HTTPS origin")
     parser.add_argument(
-        "--embed-backend", choices=["qwen3-embedding-0.6b", "bge-code-v1", "zembed-1", "gemini"], default="qwen3-embedding-0.6b",
-        help="embedding backend: a local GGUF profile or the opt-in cloud gemini-embedding-2",
+        "--custom-allowed-origin", action="append", default=[],
+        help="explicit custom provider origin allowlist entry (repeatable)",
     )
+    parser.add_argument("--custom-model", default="", help="custom typed-question model identifier")
     parser.add_argument(
-        "--gemini-access", choices=["aistudio", "vertex"], default="aistudio",
-        help="Gemini credential route: Google AI Studio API key or Vertex AI (GCP)",
+        "--custom-api-key-env", default="CUSTOM_PROVIDER_API_KEY",
+        help="environment variable name read for custom credentials",
     )
-    parser.add_argument("--gemini-api-key", default="", help="Gemini API key (Google AI Studio)")
-    parser.add_argument("--gemini-vertex-project", default="", help="Google Cloud project ID for Vertex AI")
-    parser.add_argument("--gemini-vertex-location", default="us-central1", help="Vertex AI region/location")
-    parser.add_argument("--gemini-model", default="gemini-embedding-2", help="Gemini embedding model name")
-    parser.add_argument("--gemini-dim", type=int, default=768, help="Gemini embedding output dimensionality")
+    parser.add_argument("--custom-api-key-file", default="", help="optional custom credential file path")
     parser.add_argument(
-        "--gemini-install-auth", action="store_true",
-        help="install google-auth into the runtime venv for Vertex AI ADC",
-    )
-    parser.add_argument(
-        "--download-embed-model", action="store_true",
-        help="download the selected managed embedding model",
-    )
-    parser.add_argument(
-        "--rerank-model", default="", help="explicit path to a cross-encoder rerank GGUF model"
-    )
-    parser.add_argument(
-        "--rerank-profile",
-        choices=["qwen3-reranker-0.6b", "qwen3-reranker-4b", "bge-reranker-v2-gemma", "bge-reranker-v2-m3"],
-        default="qwen3-reranker-0.6b",
-        help="cross-encoder rerank profile (default: qwen3-reranker-0.6b)",
-    )
-    parser.add_argument(
-        "--download-rerank-model", action="store_true",
-        help="download the selected managed rerank model",
-    )
-    parser.add_argument(
-        "--accept-model-license", action="store_true",
-        help="confirm acceptance of the selected model's license when required",
-    )
-    parser.add_argument("--embed-server-bin", default="", help="explicit path to llama-server binary")
-    parser.add_argument("--embedder-doctor", action="store_true", help="diagnose local embedder/model/server setup")
-    parser.add_argument("--setup-embedder", action="store_true", help="convenience mode to configure embedder with client setup")
-    parser.add_argument(
-        "--install-llama-server",
-        action="store_true",
-        help="download and install llama-server automatically when embed model is enabled/found",
-    )
-    parser.add_argument(
-        "--allow-unverified-downloads",
-        action="store_true",
-        help="allow llama-server downloads when GitHub omits its SHA-256 digest (unsafe; prefer verified assets)",
+        "--custom-local-http", action="store_true",
+        help="allow custom HTTP only for a loopback origin",
     )
     parser.add_argument(
         "--with-corpus",
@@ -830,7 +393,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="require IDA_MCP_BRON_CORPUS_SHA256_* hashes for every threat-corpus source",
     )
-    parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument(
         "--sigs",
         default="",
@@ -881,26 +443,14 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         rollback_on_fail=args.rollback_on_fail,
         runtime_source=args.runtime_source,
         interactive=True if args.interactive else (False if args.no_interactive else None),
-        embed_auto=not args.no_embed_auto,
-        embed_profile=args.embed_profile,
-        embed_backend=args.embed_backend,
-        gemini_access=args.gemini_access,
-        gemini_api_key=args.gemini_api_key,
-        gemini_vertex_project=args.gemini_vertex_project,
-        gemini_vertex_location=args.gemini_vertex_location,
-        gemini_install_auth=args.gemini_install_auth,
-        gemini_dim=args.gemini_dim,
-        gemini_model=args.gemini_model,
-        embed_model_path=args.embed_model,
-        embed_server_bin=args.embed_server_bin,
-        install_llama_server=args.install_llama_server,
-        download_embed_model=args.download_embed_model,
-        accept_model_license=args.accept_model_license,
-        embedder_doctor=args.embedder_doctor,
-        setup_embedder=args.setup_embedder,
-        rerank_profile=args.rerank_profile,
-        rerank_model_path=args.rerank_model,
-        download_rerank_model=args.download_rerank_model,
+        intelligence_mode=args.intelligence_mode,
+        jev_model=args.jev_model,
+        custom_base_url=args.custom_base_url,
+        custom_allowed_origins=",".join(args.custom_allowed_origin),
+        custom_model=args.custom_model,
+        custom_api_key_env=args.custom_api_key_env,
+        custom_api_key_file=args.custom_api_key_file,
+        custom_local_http=args.custom_local_http,
 
         only=set(args.only),
         disable_policy=args.disable_policy,
@@ -908,15 +458,9 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,
-        allow_unverified_downloads=args.allow_unverified_downloads,
         with_bron_corpus=args.with_corpus or args.verify_corpus,
         verify_bron_corpus=args.verify_corpus,
     )
-    if opts.setup_embedder:
-        opts.embed_auto = True
-        opts.install_llama_server = True
-        if not opts.only:
-            opts.only = {"clients"}
     opts.install_root = Path(args.install_root).expanduser() if args.install_root else get_install_root()
     # Prefer a checkout root that contains client_configs.json; otherwise use
     # the installed package directory so pip installs still find bundled assets.
@@ -998,7 +542,7 @@ def _normalise_runtime_path(
     """Return an absolute runtime path after checking its usable type.
 
     Client configuration is consumed later from a different working
-    directory, so relative model and binary paths are not safe to persist.
+    directory, so relative runtime and binary paths are not safe to persist.
     Explicit paths are always checked; dry-run-only paths returned by planned
     downloads may be absent until the real install runs.
     """
@@ -1020,64 +564,6 @@ def _normalise_runtime_path(
         elif not os.access(resolved, os.X_OK):
             raise RuntimeError(f"{label} is not executable: {value}")
     return str(resolved)
-
-
-def _resolve_reranker_for_install(
-    opts: InstallerOptions,
-    install_root: Path,
-    report: InstallReport,
-    ui: UI,
-    *,
-    semantic_enabled: bool,
-) -> str:
-    """Resolve the selected local reranker and make absence explicit.
-
-    Embedding and reranking are separate capabilities, including for Gemini's
-    cloud embedding backend.  Non-interactive installs must perform the same
-    profile-aware discovery as the wizard; otherwise the host can later find
-    an arbitrary default model or silently run without precision reranking.
-    """
-    if opts.rerank_disabled:
-        return ""
-    if not semantic_enabled and not opts.rerank_model_path and not opts.download_rerank_model:
-        return ""
-
-    rerank_model = opts.rerank_model_path
-    if not rerank_model:
-        rerank_model = find_rerank_model(install_root, opts.rerank_profile)
-
-    if opts.download_rerank_model and not rerank_model:
-        from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
-
-        selected_rerank = get_rerank_model_profile(opts.rerank_profile)
-        if selected_rerank is None:
-            raise RuntimeError(f"Unknown rerank profile: {opts.rerank_profile}")
-        if selected_rerank.opt_in and not opts.accept_model_license:
-            raise RuntimeError(
-                f"{selected_rerank.display_name} is {selected_rerank.license}; "
-                "rerun with --accept-model-license to download it"
-            )
-        if opts.dry_run:
-            ui.info(f"Would download {selected_rerank.display_name} rerank model")
-            report.add_step("rerank_model", "dry-run", selected_rerank.key)
-        else:
-            ui.info(f"Downloading {selected_rerank.display_name} rerank model")
-            rerank_model = download_rerank_model(install_root, selected_rerank.key)
-
-    if rerank_model:
-        ui.ok("Rerank model configured for MCP clients")
-        report.metadata["rerank_model"] = rerank_model
-    elif not opts.rerank_disabled and not opts.dry_run:
-        # Do not let host-side fallback discovery unexpectedly activate a
-        # different model after this installer explicitly found none.
-        opts.rerank_disabled = True
-        ui.warn(
-            f"No {opts.rerank_profile} reranker model found; reranking is disabled "
-            "explicitly. Install the selected cross-encoder and rerun the installer "
-            "to enable higher-precision semantic search."
-        )
-        report.add_step("rerank_model", "warn", "not found; explicitly disabled")
-    return rerank_model
 
 
 def _warn_ida_python_compat(chosen_install, report, ui) -> None:
@@ -1226,23 +712,25 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 "--ida-runtime idalib requires the clients phase so its activation "
                 "and runtime setting are applied"
             )
-        # Validate user-supplied paths before any client config is touched.
-        # The wizard already validates model paths, but CLI/API callers do not
-        # go through those prompts.  A disabled reranker is intentionally not
-        # resolved or validated because it must stay inert even if a stale
-        # model path was supplied alongside the opt-out.
-        if opts.embed_backend != "gemini" and opts.embed_model_path:
-            opts.embed_model_path = _normalise_runtime_path(
-                opts.embed_model_path, "Embedding model"
-            )
-        if opts.embed_server_bin:
-            opts.embed_server_bin = _normalise_runtime_path(
-                opts.embed_server_bin, "llama-server binary", executable=True
-            )
-        if opts.rerank_model_path and not opts.rerank_disabled:
-            opts.rerank_model_path = _normalise_runtime_path(
-                opts.rerank_model_path, "Reranker model"
-            )
+        # Validate the explicit provider configuration before any client
+        # config is touched. Credentials are deliberately not read here.
+        from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
+
+        provider_env = {
+            "IDA_MCP_INTELLIGENCE_MODE": opts.intelligence_mode,
+            # Defaults for an inactive provider are not configuration. Keep
+            # them out of validation so a signatures-only or disabled install
+            # does not manufacture a cross-mode conflict.
+            "IDA_MCP_JEV_MODEL": opts.jev_model if opts.intelligence_mode == "jev" else "",
+            "IDA_MCP_CUSTOM_BASE_URL": opts.custom_base_url if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_ALLOWED_ORIGINS": opts.custom_allowed_origins if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_MODEL": opts.custom_model if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_PROTOCOL": opts.custom_protocol if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_API_KEY_ENV": opts.custom_api_key_env if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_API_KEY_FILE": opts.custom_api_key_file if opts.intelligence_mode == "custom" else "",
+            "IDA_MCP_CUSTOM_LOCAL_HTTP": "1" if opts.intelligence_mode == "custom" and opts.custom_local_http else "",
+        }
+        resolve_provider_config(env=provider_env, state={})
         if chosen_install is not None and not opts.dry_run:
             state_path = install_root / STATE_FILE
             backup_file(state_path, report, dry_run=False)
@@ -1253,8 +741,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 ui.warn(f"Could not write ida-install.json: {exc}")
         ui.info("Starting installer")
         ui.info(f"Install root: {install_root}")
-        embed_model = ""
-        embed_server = ""
         if opts.dry_run:
             ui.warn("Running in dry-run mode")
 
@@ -1417,201 +903,39 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         elif _phase_enabled(opts, "sigs"):
             report.add_step("sigs", "skipped", "not requested (pass --sigs <dir>)")
 
+        # The intelligence provider is the only supported model-facing
+        # configuration. Legacy local/Gemini/native model installer phases are
+        # intentionally absent; client configuration only records the explicit
+        # provider mode and safe non-secret settings.
         if _phase_enabled(opts, "clients"):
             ui.info("Configuring MCP clients")
-            if opts.embed_backend == "gemini":
-                rerank_model = _resolve_reranker_for_install(
-                    opts,
-                    install_root,
-                    report,
-                    ui,
-                    semantic_enabled=True,
-                )
-                if rerank_model:
-                    rerank_model = _normalise_runtime_path(
-                        rerank_model, "Reranker model", allow_missing=opts.dry_run
-                    )
-                if not opts.dry_run:
-                    try:
-                        from ida_pro_mcp.host.intelligence.core import write_embedder_state
-                        state_target = install_root / "embedder.json"
-                        backup_file(state_target, report, dry_run=False)
-                        state_path = write_embedder_state(
-                            install_root,
-                            backend="gemini",
-                            gemini_model=opts.gemini_model,
-                            gemini_dimension=opts.gemini_dim,
-                            gemini_vertex_project=opts.gemini_vertex_project,
-                            gemini_vertex_location=opts.gemini_vertex_location,
-                            rerank=(
-                                None
-                                if opts.rerank_disabled
-                                else {
-                                    "profile": opts.rerank_profile,
-                                    "model_path": rerank_model,
-                                }
-                            ),
-                        )
-                        report.metadata["embedder_state"] = str(state_path)
-                        report.add_modified(Path(state_path))
-                    except Exception as exc:
-                        ui.warn(f"Could not persist embedder.json: {exc}")
-                if opts.gemini_access == "vertex" and opts.gemini_install_auth and not opts.dry_run:
-                    ui.info("Installing google-auth for Vertex AI Application Default Credentials")
-                    if install_optional_packages(python_exe, ["google-auth"]):
-                        ui.ok("google-auth installed for Vertex AI")
-                        report.add_step("gemini-auth", "ok", "google-auth installed")
-                    else:
-                        ui.warn(
-                            "google-auth install failed; the server will fall back to "
-                            "VERTEX_AI_ACCESS_TOKEN"
-                        )
-                        report.add_step("gemini-auth", "warn", "google-auth install failed")
-                ui.ok("Gemini embedding backend configured for MCP clients")
-                if opts.gemini_access == "vertex":
-                    ui.info(
-                        f"Vertex AI: project={opts.gemini_vertex_project} "
-                        f"location={opts.gemini_vertex_location}"
-                    )
-                server_cfg = build_stdio_config(
-                    python_exe,
-                    install_root,
-                    embed_backend="gemini",
-                    rerank_model=rerank_model,
-                    rerank_profile=opts.rerank_profile,
-                    gemini_api_key=opts.gemini_api_key,
-                    gemini_vertex_project=opts.gemini_vertex_project,
-                    gemini_vertex_location=opts.gemini_vertex_location,
-                    gemini_vertex=opts.gemini_access == "vertex",
-                    ida_install=getattr(opts, "_ida_install", None),
-                    disable_policy=opts.disable_policy,
-                    rerank_disabled=opts.rerank_disabled,
-                    ida_runtime=opts.ida_runtime,
-                )
-                configured = configure_clients(
-                    source_root=source_root,
-                    server_cfg=server_cfg,
-                    report=report,
-                    dry_run=opts.dry_run,
-                )
-                report.metadata["configured_clients"] = configured
-                _report_client_configuration(
-                    source_root, configured, report, ui, dry_run=opts.dry_run
-                )
-            else:
-                embed_model = opts.embed_model_path
-                embed_server = opts.embed_server_bin
-                if opts.download_embed_model and not embed_model:
-                    from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
-
-                    selected_profile = get_model_profile(opts.embed_profile)
-                    if selected_profile is None:
-                        raise RuntimeError(f"Unknown embedding profile: {opts.embed_profile}")
-                    if selected_profile.opt_in and not opts.accept_model_license:
-                        raise RuntimeError(
-                            f"{selected_profile.display_name} is {selected_profile.license}; "
-                            "rerun with --accept-model-license to download it"
-                        )
-                    if opts.dry_run:
-                        ui.info(f"Would download {selected_profile.display_name} embedding model")
-                        report.add_step("embed_model", "dry-run", selected_profile.key)
-                    else:
-                        ui.info(f"Downloading {selected_profile.display_name} embedding model")
-                        embed_model = download_embed_model(install_root, selected_profile.key)
-                if opts.embed_auto and not embed_model:
-                    embed_model = find_embed_model(install_root, opts.embed_profile)
-                if opts.embed_auto and not embed_server:
-                    embed_server = find_llama_server_bin(install_root)
-                if (
-                    opts.install_llama_server
-                    and opts.embed_auto
-                    and embed_model
-                    and not embed_server
-                ):
-                    ui.info("Downloading and installing llama-server")
-                    embed_server = download_and_install_llama_server(
-                        install_root=install_root,
-                        dry_run=opts.dry_run,
-                        report=report,
-                        allow_unverified=opts.allow_unverified_downloads or None,
-                    )
-                if embed_model:
-                    embed_model = _normalise_runtime_path(
-                        embed_model, "Embedding model", allow_missing=opts.dry_run
-                    )
-                if embed_server:
-                    embed_server = _normalise_runtime_path(
-                        embed_server,
-                        "llama-server binary",
-                        executable=True,
-                        allow_missing=opts.dry_run,
-                    )
-                if embed_model:
-                    ui.ok("Embedding model configured for MCP clients")
-                    report.metadata["embed_model"] = embed_model
-                elif opts.embed_auto:
-                    ui.warn("No embedding model detected; semantic embedding features remain disabled")
-                if embed_server:
-                    report.metadata["embed_server_bin"] = embed_server
-                rerank_model = _resolve_reranker_for_install(
-                    opts,
-                    install_root,
-                    report,
-                    ui,
-                    semantic_enabled=bool(embed_model),
-                )
-                if rerank_model:
-                    rerank_model = _normalise_runtime_path(
-                        rerank_model, "Reranker model", allow_missing=opts.dry_run
-                    )
-                if (embed_model or embed_server or rerank_model) and not opts.dry_run:
-                    try:
-                        from ida_pro_mcp.host.intelligence.core import write_embedder_state
-                        state_target = install_root / "embedder.json"
-                        backup_file(state_target, report, dry_run=False)
-                        # An explicit decline (opts.rerank_disabled) must not
-                        # pin any rerank profile into state — that would make
-                        # the host resolve the default profile and silently
-                        # activate the reranker whenever a GGUF exists.
-                        rerank_state = {"profile": opts.rerank_profile}
-                        if rerank_model:
-                            rerank_state["model_path"] = rerank_model
-                        rerank_arg = None if opts.rerank_disabled else (rerank_state if (rerank_model or opts.rerank_profile) else None)
-                        state_path = write_embedder_state(
-                            install_root,
-                            model_path=embed_model,
-                            server_bin=embed_server,
-                            profile=opts.embed_profile,
-                            rerank=rerank_arg,
-                        )
-                        report.metadata["embedder_state"] = str(state_path)
-                        report.add_modified(Path(state_path))
-                    except Exception as exc:
-                        ui.warn(f"Could not persist embedder.json: {exc}")
-                server_cfg = build_stdio_config(
-                    python_exe,
-                    install_root,
-                    embed_model=embed_model,
-                    embed_server_bin=embed_server,
-                    embed_profile=opts.embed_profile,
-                    embed_backend="local",
-                    rerank_model=rerank_model,
-                    rerank_profile=opts.rerank_profile,
-                    ida_install=getattr(opts, "_ida_install", None),
-                    disable_policy=opts.disable_policy,
-                    rerank_disabled=opts.rerank_disabled,
-                    ida_runtime=opts.ida_runtime,
-                )
-                configured = configure_clients(
-                    source_root=source_root,
-                    server_cfg=server_cfg,
-                    report=report,
-                    dry_run=opts.dry_run,
-                )
-                report.metadata["configured_clients"] = configured
-                _report_client_configuration(
-                    source_root, configured, report, ui, dry_run=opts.dry_run
-                )
+            server_cfg = build_stdio_config(
+                python_exe,
+                install_root,
+                intelligence_mode=opts.intelligence_mode,
+                jev_model=opts.jev_model,
+                custom_base_url=opts.custom_base_url,
+                custom_allowed_origins=opts.custom_allowed_origins,
+                custom_model=opts.custom_model,
+                custom_protocol=opts.custom_protocol,
+                custom_api_key_env=opts.custom_api_key_env,
+                custom_api_key_file=opts.custom_api_key_file,
+                custom_local_http=opts.custom_local_http,
+                ida_install=getattr(opts, "_ida_install", None),
+                disable_policy=opts.disable_policy,
+                ida_runtime=opts.ida_runtime,
+            )
+            configured = configure_clients(
+                source_root=source_root,
+                server_cfg=server_cfg,
+                report=report,
+                dry_run=opts.dry_run,
+            )
+            report.metadata["configured_clients"] = configured
+            report.metadata["intelligence_mode"] = opts.intelligence_mode
+            _report_client_configuration(
+                source_root, configured, report, ui, dry_run=opts.dry_run
+            )
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 
@@ -1684,8 +1008,6 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
 def main(argv: list[str] | None = None) -> int:
     ui = UI()
     opts = parse_args(argv)
-    if opts.embedder_doctor:
-        return run_embedder_doctor(opts, ui)
     return run_install(opts, ui)
 
 

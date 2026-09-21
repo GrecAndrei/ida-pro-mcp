@@ -11,7 +11,7 @@ report and a matching Markdown summary under `benchmark-results/` by default.
 | `contract` | schema integrity, lint, generated-doc synchronization | Python + dev tools |
 | `host` | host and IDA-side fake-test throughput | Python + pytest |
 | `blackboard` | deterministic recall@1, recall@5, MRR, and query latency | Python only |
-| `retrieval` | indexing time and gold-query recall for a supplied corpus/model | corpus, queries, configured backend |
+| `retrieval` | deterministic lexical indexing time and gold-query recall for a supplied corpus | corpus, queries |
 | `ida` | the opt-in live operation surface | licensed IDA and target binary or fixture |
 
 Examples:
@@ -20,7 +20,7 @@ Examples:
 python benchmarks/run.py --scope contract host blackboard
 python benchmarks/run.py --scope retrieval \
   --corpus /path/to/functions.json --queries /path/to/queries.json \
-  --backend native --out results/retrieval-native
+  --backend lexical --out results/retrieval-lexical
 python benchmarks/run.py --scope ida --ida-dir /path/to/ida --binary /path/to/sample
 ```
 

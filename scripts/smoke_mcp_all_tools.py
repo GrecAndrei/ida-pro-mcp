@@ -57,7 +57,7 @@ BASE_ENV = {
     "IDA_MCP_COMPACT_MAX_STRING": "200",
     "IDA_MCP_COMPACT_CHAR_BUDGET": "8000",
 }
-for _key in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT", "IDA_MCP_EMBED_MODEL", "IDA_MCP_EMBED_SERVER_BIN"):
+for _key in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
     if os.environ.get(_key):
         BASE_ENV[_key] = os.environ[_key]
 

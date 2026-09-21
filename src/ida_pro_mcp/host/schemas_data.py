@@ -117,7 +117,7 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     ],
     "intelligence": [
         "index_fast", "index_batch", "semantic_search", "similar_functions",
-        "embedder_status", "intelligence_status",
+        "embedder_status", "intelligence_status", "usage_status", "usage_report",
     ],
     "blackboard": [
         "write", "read", "list", "search", "update", "delete",
@@ -212,7 +212,7 @@ TOOL_DESCRIPTIONS = {
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state, events, registers. events streams recent analysis/audit events; registers dumps the register state at an address (for debugger/emulator captures).",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
-     "intelligence": "Local embeddings index + behavior classification backend for search.nl. Prefer index_fast (quick) or index_batch (decompile-quality), then search(action=nl). Actions (core): index_fast, index_batch, semantic_search, similar_functions, embedder_status, intelligence_status.",
+     "intelligence": "Provider-backed advisory classification with Jev/custom/disabled modes plus deterministic lexical indexing/search. Actions: intelligence_status, usage_status, usage_report, classify_text, classify_function, semantic_search.",
     "knowledge": "Cross-session symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: symbol_lookup, import_symbols, export_session.",
 
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram.",
@@ -220,7 +220,7 @@ TOOL_DESCRIPTIONS = {
     "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, patch bytes/assembly, create data items/string literals, bracket edits in undo_begin/undo_end, and rename local variables in a decompiled function. All actions run a governance pre-check by default (governed=True); patch_asm/patch_bytes into executable segments are blocked unless explicitly acknowledged. Actions: rename, comment, set_type, patch_bytes, patch_asm, rename_local, create_data, create_strlit, undo_begin, undo_end.",
 
 
-    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like) — pass kind='strings' for a dedicated string-literal search, kind='names' for symbols only. Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. data_value: locate raw byte/word values or ASCII strings in memory. query_lang: structured query-language search over names/strings/imports (lenient grammar — free text falls back to unified find). Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze, data_value, query_lang.",
+    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like) — pass kind='strings' for a dedicated string-literal search, kind='names' for symbols only. Always returns items[].addr. nl: deterministic lexical signature search (index_fast first; mode=quick|expand) with optional Jev/custom advisory scoring. analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses lexical index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. data_value: locate raw byte/word values or ASCII strings in memory. query_lang: structured query-language search over names/strings/imports (lenient grammar — free text falls back to unified find). Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze, data_value, query_lang.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge, sreg_get, sreg_set, sreg_list. sreg_get/sreg_set/sreg_list read, write, and enumerate segment-register (segmented-mode) mappings for a code address.",
      "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. create is blocking and waits until IDA auto-analysis completes, so the returned session is fully analyzed (safe_mode off). create_background (ida_open_background) is EXPERIMENTAL and DISABLED by default — it fails with FEATURE_DISABLED unless IDA_MCP_BACKGROUND_OPEN=1. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. Actions (core): create, switch, close, list, status, state, logs, health, kill.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
@@ -573,7 +573,7 @@ TOOL_ARG_SCHEMAS = {
         "kind": {"type": "string", "enum": ["all", "names", "strings", "imports", "comments", "instructions", "refs"], "description": "Restrict action='find' to one category. kind='strings' is a dedicated string-literal search; kind='names' a symbol-only search. Default 'all'."},
         # Combinator / NL kwargs (must be admitted — host rejects unknown keys)
         "mode": {"type": "string", "description": "nl mode: quick|expand (default expand)"},
-        "rerank": {"type": "boolean", "description": "Re-score recalled candidates with the cross-encoder reranker (auto in expand mode, off in quick; no-op when no rerank model is installed)."},
+        "rerank": {"type": "boolean", "description": "Optionally score bounded lexical signatures with the configured Jev/custom provider; disabled or unavailable providers preserve lexical order."},
 
         "target": {"type": "string", "description": "Alias for pattern/addr for ref searches"},
         "ea": {"type": "string", "description": "Address alias for pattern/addr"},
@@ -927,7 +927,7 @@ TOOL_ARG_SCHEMAS = {
         "threshold": {"type": "number", "description": "Similarity threshold for semantic retrieval"},
         "include_resolved": {"type": "boolean", "description": "Include resolved entries in semantic retrieval"},
         "include_contradicted": {"type": "boolean", "description": "Include contradicted entries in semantic retrieval"},
-        "force": {"type": "boolean", "description": "Force re-embedding of matching entries during semantic recall"},
+        "force": {"type": "boolean", "description": "Force a fresh deterministic lexical recall of matching entries"},
         "offset": {"type": "integer", "description": "Pagination offset"},
         "db_path": {"type": "string", "description": "Override path to blackboard SQLite DB"},
     },

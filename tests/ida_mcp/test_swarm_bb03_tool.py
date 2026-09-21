@@ -387,7 +387,7 @@ def test_intelligence_blackboard_search_routes_through_related_by_behavior(monke
 
     assert resp["ok"] is True
     assert resp["query"] == "socket recv packet"
-    assert resp["backend"] == "fake"
+    assert resp["backend"] == "lexical"
     blackboard = resp["blackboard"]
     # The thin bridge keeps the pinned related_by_behavior shape: a list of
     # results, never a joined string.

@@ -1,94 +1,39 @@
-# Search, embeddings, and reranking
+# Search and retrieval
 
-Use lexical search for known names and indicators. Use semantic retrieval when
-the question is behavioral and naming is incomplete.
+Use deterministic lexical search for names, strings, imports, signatures, and
+bounded function metadata. The compatibility operation `ida_semantic_search`
+uses lexical signatures and may ask the explicitly configured Jev/custom
+provider to score a small candidate set; it never requires a vector model.
 
-## Start with deterministic discovery
+## Function indexing
 
-`ida_find` is the normal first choice for a symbol, string, import, comment, or
-reference. It does not require retrieval models.
+`ida_index_functions` stores bounded names, disassembly-derived signatures,
+structural metadata, and token lists in the per-IDB index. It does not store raw
+decompilation and does not download or start a model. `ida_index_status` and
+`ida_cancel_index` report or stop background work.
 
-For a broader inventory, use `ida_list_functions`, `ida_list_strings`, and
-`ida_list_imports`. This keeps ordinary reconnaissance independent of optional
-model setup.
+## Provider scoring
 
-## Build a semantic index
+Provider scoring is advisory and optional. `ida_intelligence_status` reports
+whether Jev, custom, or disabled mode is selected. A disabled, unavailable,
+malformed, timed-out, or budget-blocked provider leaves lexical order intact and
+returns a structured advisory status rather than inventing a score.
 
-`ida_index_functions` creates a scoped index. Useful controls include:
+`ida_reranker_status` remains a compatibility alias for the typed-question
+scoring capability. Vector-family clustering is intentionally not part of the
+current public operation surface; use lexical search and structural filters.
 
-- `query`, ranges, `start`/`end`, or an address plus radius;
-- `min_size` and `max_size`;
-- `quality="fast"` for metadata and disassembly;
-- `quality="full"` when decompilation should improve retrieval;
-- `background=true` and `ida_index_status` for long jobs;
-- `ida_cancel_index` to stop a running job.
+## Privacy and network rules
 
-Indexing is gated while the session is in safe mode. It is interruptible and
-resumable; a partial index is retained if a batch fails.
+Provider requests carry only compact metadata, bytes/disassembly samples, and
+signatures. Credentials, prompts, completions, raw decompilation, and provider
+bodies are not logged or persisted. Jev uses the fixed TypeSafe endpoint.
+Custom cloud origins require an explicit HTTPS allowlist; HTTP is restricted to
+explicitly enabled loopback endpoints.
 
-## Search and rerank
+## Usage
 
-`ida_semantic_search` can search for intent such as “function that decrypts
-strings.” `quick` keeps the operation bounded; `expand` adds behavior-driven
-matches. Use range filters to keep the search focused.
-
-Retrieval has two stages:
-
-1. A bi-encoder embeds the query and indexed function documents for broad
-   recall.
-2. An optional cross-encoder reranks only the recalled pool.
-
-The response reports whether reranking was applied. If no reranker is
-available, or it produces non-discriminating scores, recall order is preserved
-and the response says so. Do not interpret an unavailable result as a semantic
-match.
-
-The index stores model identity and dimension. It rebuilds when the model,
-dimension, or prompt format changes; incompatible vector spaces are not
-silently mixed.
-
-## Local backends
-
-Depending on the installation, local retrieval uses a GGUF model through
-`llama-server`, or the optional in-process native backend when
-`libmcp_llama.so` and a matching model are installed. The native backend can be selected explicitly with
-`IDA_MCP_BACKEND=native`; `IDA_MCP_BACKEND=http` forces the subprocess path.
-
-The native library is optional and must be built from a caller-supplied
-llama.cpp checkout. See the [README](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md)
-and the repository's [technical intelligence guide](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/wiki/core/intelligence.md)
-for model profiles and backend knobs.
-
-To install the default local profile and the optional `llama-server` helper:
-
-```bash
-python install.py --embed-profile qwen3-embedding-0.6b \
-  --download-embed-model --install-llama-server
-python install.py --embedder-doctor
-```
-
-The first session does not need either component. Keep the model and server
-configuration in the managed install root rather than in the repository.
-
-## Gemini, explicitly opt in
-
-The Gemini embedding backend is not selected automatically. Select it with
-`IDA_MCP_EMBED_BACKEND=gemini` or installer configuration. It uploads the
-compact behavioral signature of each function—not the full decompilation—to
-Google. If no code may leave the machine, use a local backend.
-
-For Google AI Studio, the installer form is:
-
-```bash
-python install.py --embed-backend gemini --gemini-access aistudio \
-  --gemini-api-key "$GEMINI_API_KEY"
-```
-
-Credentials and model settings are environment/configuration concerns; consult
-the [installer options](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md)
-rather than placing secrets in source control. The optional threat corpus is
-also not downloaded by a normal install.
-
-References: [generated intelligence operations](`ida_help`),
-[intelligence implementation](https://github.com/GrecAndrei/ida-pro-mcp/tree/master/src/ida_pro_mcp/host/intelligence),
-[installer options](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/install.py).
+`ida_usage_status` reports safe request/token/cost totals. `ida_usage_report`
+returns bounded metadata records for auditing. Unknown pricing is fail-closed
+by default, and session/daily token and cost budgets are enforced before a
+provider request is sent.

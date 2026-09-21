@@ -60,10 +60,10 @@ _ANALYSIS_STATE_LOCK = threading.RLock()
 # binary; shared by the reuse-decision logic in create/create_background.
 _OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
 
-# Confidence floor for auto-applying an architecture inference to the spawn
-# options of an opaque blob (h02 q02). Cortex-M vector-table heuristics reach
-# 0.92 and RISC-V lopsided bitness calls reach ~1.0; ambiguous near-ties and
-# sub-0.9 guesses are deliberately NOT auto-applied.
+# Confidence floor for auto-applying a deterministic architecture inference
+# to the spawn options of an opaque blob (h02 q02). Provider answers are
+# advisory only and are never auto-applied; ambiguous and sub-0.9 guesses are
+# deliberately NOT auto-applied.
 _AUTO_APPLY_CONFIDENCE = 0.9
 
 # A resumed session whose persisted analysis-progress marker is older than this
@@ -85,14 +85,17 @@ _CHECKPOINT_STALENESS_SECONDS = 300
 # _session_action_* methods and map to a method-name string in _SESSION_ACTIONS.
 # ---------------------------------------------------------------------------
 
+
 def _sess_coerce_none(args):
     return {}, None
+
 
 def _sess_coerce_rename(args):
     name = args.get("name") or args.get("new_name")
     if not name:
         return None, make_error(MCPError.INVALID_ARGS, "name required")
     return {"new_name": str(name).strip()[:MAX_NAME_LEN]}, None
+
 
 def _sess_coerce_tag(args):
     tag = args.get("tag")
@@ -103,6 +106,7 @@ def _sess_coerce_tag(args):
         return None, make_error(MCPError.INVALID_ARGS, "tag required")
     return {"tag": tag}, None
 
+
 def _sess_coerce_untag(args):
     tag = args.get("tag")
     if not tag:
@@ -112,17 +116,20 @@ def _sess_coerce_untag(args):
         return None, make_error(MCPError.INVALID_ARGS, "tag required")
     return {"tag": tag}, None
 
+
 def _sess_coerce_note(args):
     note = args.get("note", "")
     if not note:
         return None, make_error(MCPError.INVALID_ARGS, "note required")
     return {"note": str(note)[:MAX_NOTE_LEN]}, None
 
+
 def _sess_coerce_query(args):
     query = args.get("query", "")
     if not query:
         return None, make_error(MCPError.INVALID_ARGS, "query required")
     return {"query": query}, None
+
 
 def _substitute_params(obj, params: dict):
     """Recursively substitute $param placeholders in a value.
@@ -142,6 +149,7 @@ def _substitute_params(obj, params: dict):
         return [_substitute_params(item, params) for item in obj]
     return obj
 
+
 class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     @staticmethod
     def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
@@ -150,19 +158,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         def _diff():
             try:
                 try:
-                    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
                 except ImportError:
                     return
-                embedder = BgeCodeEmbedder()
-                new_idx = FunctionEmbeddingIndex(new_idb + ".embeddings.db", embedder)
-                old_idx = FunctionEmbeddingIndex(old_idb + ".embeddings.db", embedder)
+                new_idx = LexicalFunctionIndex(new_idb + ".embeddings.db")
+                old_idx = LexicalFunctionIndex(old_idb + ".embeddings.db")
                 if new_idx.size == 0 or old_idx.size == 0:
                     return
-                new_only = []
-                for ea, vec in list(new_idx._cache.items())[:200]:
-                    matches = old_idx.similar_vec(vec, top_k=1, threshold=0.0)
-                    if not matches:
-                        new_only.append(ea)
+                with new_idx._conn() as new_conn, old_idx._conn() as old_conn:
+                    new_eas = {str(row[0]) for row in new_conn.execute("SELECT ea FROM func_embeddings")}
+                    old_eas = {str(row[0]) for row in old_conn.execute("SELECT ea FROM func_embeddings")}
+                new_only = sorted(new_eas - old_eas)[:200]
                 if new_only:
                     log_rpc(f"[session-diff] {len(new_only)} new functions in rebuilt IDB")
             except Exception:
@@ -172,7 +178,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     _SESSION_DIFF_INFLIGHT.discard((old_idb, new_idb))
 
         # Dedup concurrent identical diffs: frequent session switches each
-        # start a thread that builds two embedding indexes into RAM, so two
+        # start a thread that compares two deterministic signature indexes, so two
         # rapid A->B->A switches must not run three overlapping diffs.
         with _SESSION_DIFF_LOCK:
             if (old_idb, new_idb) in _SESSION_DIFF_INFLIGHT:
@@ -311,17 +317,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         raw_txt = str(raw_sid).strip()
         if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
             return raw_txt.upper(), None
-        return None, make_error(
-            MCPError.INVALID_ARGS, "Invalid session_id format"
-        )
+        return None, make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
 
     def _require_owned_session_id(self, sid: str) -> dict | None:
         """Reject mutating session actions against another client's session."""
         session = self.session_mgr.get_session(sid)
         if not session:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         return self._ensure_client_owns_session(session)
 
     def _session_action_health(self, args: dict) -> dict:
@@ -353,25 +355,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return ok
 
     def _session_action_create(self, args: dict) -> dict:
-        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (
-            self._prepare_open_args(args)
-        )
+        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = self._prepare_open_args(args)
         if prep_error:
             return prep_error
 
-        has_preload_request = any(
-            k in analysis_options and analysis_options.get(k) is not None
-            for k in _OPEN_PRELOAD_KEYS
-        )
+        has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in _OPEN_PRELOAD_KEYS)
 
-        existing = self._select_reuse_candidate(
-            binary_path, analysis_options, force_new
-        )
+        existing = self._select_reuse_candidate(binary_path, analysis_options, force_new)
 
         # Even when the caller passes loader/architecture preload options,
         # reuse the existing session if those options already match — this
-         # stops smoke runs from spawning a new idat child for the same
-         # binary on every restart. force_new=true still wins.
+        # stops smoke runs from spawning a new idat child for the same
+        # binary on every restart. force_new=true still wins.
         if existing and not force_new and has_preload_request and analysis_options:
             if self._preloads_match(existing, analysis_options):
                 # Pretend preload request was absent so the existing reuse
@@ -386,11 +381,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # analysis completes. Re-opening the same binary cannot escape safe
         # mode through the background route either: it marks the session
         # pending again.
-        if (
-            background_open_enabled()
-            and self._is_large_binary(binary_path)
-            and not (existing and not force_new and existing.idb_on_disk())
-        ):
+        if background_open_enabled() and self._is_large_binary(binary_path) and not (existing and not force_new and existing.idb_on_disk()):
             bg_args = dict(args)
             bg_args["_auto_backgrounded"] = True
             return self._session_action_create_background(bg_args)
@@ -404,9 +395,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 update_kwargs["analysis_options"] = merged_opts
             if ida_args is not None:
                 update_kwargs["ida_args"] = ida_args
-            updated = self.session_mgr.update_session(
-                existing.session_id, **update_kwargs
-            )
+            updated = self.session_mgr.update_session(existing.session_id, **update_kwargs)
             if updated is None:
                 return make_error(
                     MCPError.SESSION_NOT_FOUND,
@@ -427,13 +416,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             spawn_error = self._ensure_runtime_and_idb(updated)
             if spawn_error:
                 out["spawn_error"] = spawn_error
-                out["note"] = (
-                    "IDA runtime failed to start; safe mode is on until a "
-                    "runtime can be spawned. See spawn_error."
-                )
-            out["idb_exists"] = bool(
-                updated.idb_path and os.path.isfile(updated.idb_path)
-            )
+                out["note"] = "IDA runtime failed to start; safe mode is on until a runtime can be spawned. See spawn_error."
+            out["idb_exists"] = bool(updated.idb_path and os.path.isfile(updated.idb_path))
             out["is_running"] = self._session_is_running(updated.session_id)
             # Default opens are blocking: wait for a live runtime to confirm
             # auto-analysis completed so the caller gets a fully analyzed IDB,
@@ -441,21 +425,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # watcher keeps tracking the gate.
             analysis_state = self._wait_for_analysis_complete(updated)
             if analysis_state:
-                out["analysis_functions"] = analysis_state.get(
-                    "analysis_functions"
-                )
-            out["analysis_complete"] = self._analysis_is_complete(
-                updated.session_id
-            )
+                out["analysis_functions"] = analysis_state.get("analysis_functions")
+            out["analysis_complete"] = self._analysis_is_complete(updated.session_id)
             out["safe_mode"] = self._safe_mode_active(updated.session_id)
             return out
 
         create_note = None
         if existing and not force_new and has_preload_request:
-            create_note = (
-                "Created a fresh session because architecture/loader options were provided; "
-                "reusing an old IDB can preserve previous metapc/default analysis state."
-            )
+            create_note = "Created a fresh session because architecture/loader options were provided; reusing an old IDB can preserve previous metapc/default analysis state."
 
         if not analysis_options:
             analysis_options = None
@@ -489,39 +466,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if create_note:
             out["note"] = create_note
         if arch_meta:
-            inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
-            if isinstance(inferred, dict):
-                candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
-                if candidates:
-                    out["architecture_recommendations"] = [
-                        {
-                            "tool": "analysis",
-                            "arguments": {
-                                "action": "set_architecture",
-                                "processor": c.get("processor"),
-                                "bitness": c.get("bitness"),
-                                "endian": c.get("endian"),
-                            },
-                            "confidence": c.get("confidence"),
-                            "reason": c.get("reason"),
-                        }
-                        for c in candidates[:3]
-                        if isinstance(c, dict) and c.get("processor")
-                    ]
-                elif not candidates:
-                    out["architecture_recommendations"] = [
-                        {
-                            "tool": "analysis",
-                            "arguments": {
-                                "action": "set_architecture",
-                                "processor": "arm",
-                                "bitness": 32,
-                                "endian": "little",
-                            },
-                            "confidence": 0.2,
-                            "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
-                        }
-                    ]
+            recommendations = self._arch_recommendations(arch_meta)
+            if recommendations:
+                out["architecture_recommendations"] = recommendations
             # h02 q02: surface the auto-applied inference warning (when the
             # spawn options were modified by the inference) alongside the
             # recommendations.
@@ -537,14 +484,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         spawn_error = self._ensure_runtime_and_idb(self.current_session)
         if spawn_error:
             out["spawn_error"] = spawn_error
-            out["note"] = (
-                "IDA runtime failed to start; safe mode is on until a "
-                "runtime can be spawned. See spawn_error."
-            )
-        out["idb_exists"] = bool(
-            self.current_session.idb_path
-            and os.path.isfile(self.current_session.idb_path)
-        )
+            out["note"] = "IDA runtime failed to start; safe mode is on until a runtime can be spawned. See spawn_error."
+        out["idb_exists"] = bool(self.current_session.idb_path and os.path.isfile(self.current_session.idb_path))
         out["is_running"] = self._session_is_running(self.current_session.session_id)
 
         # Default opens are blocking: wait (up to the analysis timeout) for a
@@ -555,9 +496,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         analysis_state = self._wait_for_analysis_complete(self.current_session)
         if analysis_state:
             out["analysis_functions"] = analysis_state.get("analysis_functions")
-        out["analysis_complete"] = self._analysis_is_complete(
-            self.current_session.session_id
-        )
+        out["analysis_complete"] = self._analysis_is_complete(self.current_session.session_id)
         out["safe_mode"] = self._safe_mode_active(self.current_session.session_id)
         return out
 
@@ -567,18 +506,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not analysis_options:
             return True
         existing_opts = dict(existing.analysis_options or {})
-        return not any(
-            str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "")
-            for k in _OPEN_PRELOAD_KEYS
-            if k in analysis_options
-        )
+        return not any(str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "") for k in _OPEN_PRELOAD_KEYS if k in analysis_options)
 
     def _session_is_running(self, sid: str) -> bool:
         """True when the session has a live IDA runtime process."""
         runtime = self._runtime_record(sid)
-        return bool(
-            runtime and runtime.get("process") and runtime["process"].poll() is None
-        )
+        return bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
 
     def _open_result(
         self,
@@ -601,9 +534,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "session_id": session.session_id,
             "binary_path": session.binary_path or "",
             "idb_path": session.idb_path or "",
-            "idb_exists": bool(
-                session.idb_path and os.path.isfile(session.idb_path)
-            ),
+            "idb_exists": bool(session.idb_path and os.path.isfile(session.idb_path)),
             "is_running": self._session_is_running(session.session_id),
             "safe_mode": self._safe_mode_active(session.session_id),
             "analysis_complete": self._analysis_is_complete(session.session_id),
@@ -670,12 +601,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         the gate and safe_mode stays on) or the deadline passes.
         """
         sid = session.session_id
-        deadline = time.time() + (
-            timeout if timeout > 0 else BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS
-        )
-        poll_sec = max(
-            0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS))
-        )
+        deadline = time.time() + (timeout if timeout > 0 else BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS)
+        poll_sec = max(0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS)))
         while time.time() < deadline:
             runtime = self._runtime_record(sid)
             if not (runtime and self._runtime_alive(runtime)):
@@ -698,26 +625,30 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         binary_path = args.get("binary_path")
         if "idb_path" in args or "use_existing" in args:
             return (
-                None, None, None, False, None,
+                None,
+                None,
+                None,
+                False,
+                None,
                 make_error(
                     MCPError.INVALID_ARGS,
                     "The idb_path and use_existing parameters were removed from session create",
-                    details={
-                        "hint": "Use ida_open_binary(binary_path='...') instead; IDB creation/reuse is automatic."
-                    },
+                    details={"hint": "Use ida_open_binary(binary_path='...') instead; IDB creation/reuse is automatic."},
                 ),
             )
         force_new = bool(args.get("force_new"))
 
         if binary_path is not None and not isinstance(binary_path, str):
             return (
-                None, None, None, False, None,
+                None,
+                None,
+                None,
+                False,
+                None,
                 make_error(
                     MCPError.INVALID_ARGS,
                     "binary_path must be a string",
-                    details={
-                        "hint": "Provide a path string, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
-                    },
+                    details={"hint": "Provide a path string, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."},
                 ),
             )
 
@@ -725,7 +656,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         raw_analysis_options = args.get("analysis_options")
         if raw_analysis_options is not None and not isinstance(raw_analysis_options, dict):
             return (
-                None, None, None, False, None,
+                None,
+                None,
+                None,
+                False,
+                None,
                 make_error(
                     MCPError.INVALID_ARGS,
                     "analysis_options must be an object",
@@ -738,7 +673,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         architecture = args.get("architecture")
         if architecture is not None and not isinstance(architecture, dict):
             return (
-                None, None, None, False, None,
+                None,
+                None,
+                None,
+                False,
+                None,
                 make_error(
                     MCPError.INVALID_ARGS,
                     "architecture must be an object",
@@ -758,7 +697,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 if canon in ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value"):
                     if canon in analysis_options and analysis_options[canon] != v:
                         return (
-                            None, None, None, False, None,
+                            None,
+                            None,
+                            None,
+                            False,
+                            None,
                             make_error(
                                 MCPError.INVALID_ARGS,
                                 f"Conflicting architecture value for '{canon}'",
@@ -802,7 +745,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 top_val = args.get(key)
                 if key in analysis_options and analysis_options[key] != top_val:
                     return (
-                        None, None, None, False, None,
+                        None,
+                        None,
+                        None,
+                        False,
+                        None,
                         make_error(
                             MCPError.INVALID_ARGS,
                             f"Conflicting value for '{key}' between top-level and analysis_options/architecture",
@@ -821,13 +768,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 return (None, None, None, False, None, make_error(MCPError.INVALID_ARGS, str(e)))
 
         if binary_path:
-            binary_path = os.path.abspath(
-                os.path.expanduser(os.path.expandvars(binary_path))
-            )
+            binary_path = os.path.abspath(os.path.expanduser(os.path.expandvars(binary_path)))
             args["binary_path"] = binary_path
             if not os.path.exists(binary_path):
                 return (
-                    None, None, None, False, None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    None,
                     make_error(
                         MCPError.FILE_NOT_FOUND,
                         f"Binary not found: {binary_path}",
@@ -841,22 +790,24 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             inferred = infer_binary_arch_profile(binary_path)
             arch_meta["inferred_profile"] = inferred
             arch_meta["inference_applied"] = True
-            # h02 q02: auto-apply a high-confidence inference (Cortex-M >= 0.9,
-            # riscv ~1.0 non-ambiguous) into the spawn options before opening an
-            # opaque blob. The warning is surfaced in the open response.
+            # Auto-apply only deterministic, non-provider inferences such as a
+            # validated Cortex-M vector table. Provider architecture answers
+            # remain advisory and are never copied into IDA spawn options.
             warning = self._auto_apply_inferred_profile(analysis_options, inferred)
             if warning:
                 arch_meta["inference_warning"] = warning
 
         if not binary_path:
             return (
-                None, None, None, False, None,
+                None,
+                None,
+                None,
+                False,
+                None,
                 make_error(
                     MCPError.INVALID_ARGS,
                     "binary_path is required",
-                    details={
-                        "hint": "Provide a binary path, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
-                    },
+                    details={"hint": "Provide a binary path, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."},
                 ),
             )
         return binary_path, analysis_options, arch_meta, force_new, ida_args, None
@@ -872,22 +823,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not binary_path or force_new:
             return None
         candidates = self.session_mgr.find_sessions_by_path(binary_path)
-        candidates = [
-            cand for cand in candidates
-            if self._client_owns_session(cand.session_id)
-            or not self._session_is_busy(cand.session_id)
-        ]
+        candidates = [cand for cand in candidates if self._client_owns_session(cand.session_id) or not self._session_is_busy(cand.session_id)]
         existing = None
         for cand in candidates:
             if not cand.analysis_options:
                 existing = cand
                 break
             cand_opts = dict(cand.analysis_options or {})
-            mismatch = any(
-                str(cand_opts.get(k) or "") != str((analysis_options or {}).get(k) or "")
-                for k in _OPEN_PRELOAD_KEYS
-                if k in (analysis_options or {})
-            )
+            mismatch = any(str(cand_opts.get(k) or "") != str((analysis_options or {}).get(k) or "") for k in _OPEN_PRELOAD_KEYS if k in (analysis_options or {}))
             if not mismatch:
                 existing = cand
                 break
@@ -1086,9 +1029,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         calls = getattr(self, "_session_resume_calls", None)
         if not isinstance(calls, dict):
             return
-        if not (
-            lock is not None and hasattr(lock, "acquire") and hasattr(lock, "release")
-        ):
+        if not (lock is not None and hasattr(lock, "acquire") and hasattr(lock, "release")):
             return
         with lock:
             calls.pop(sid, None)
@@ -1140,16 +1081,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         with self._analysis_state_lock():
             stop_events = getattr(self, "_analysis_watcher_stop_events", None)
             threads = getattr(self, "_analysis_watcher_threads", None)
-            stop_event = (
-                stop_events.pop(sid, None)
-                if isinstance(stop_events, dict)
-                else None
-            )
-            thread = (
-                threads.pop(sid, None)
-                if isinstance(threads, dict)
-                else None
-            )
+            stop_event = stop_events.pop(sid, None) if isinstance(stop_events, dict) else None
+            thread = threads.pop(sid, None) if isinstance(threads, dict) else None
         if stop_event is not None:
             stop_event.set()
         if thread and thread.is_alive() and thread is not threading.current_thread():
@@ -1176,14 +1109,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
           gone. A permanently incomplete analysis is surfaced through status,
           not silently dropped.
         """
-        poll_sec = max(
-            0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS))
-        )
+        poll_sec = max(0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS)))
         # h05 handoff: the confirm-count knob lives on the concrete server;
         # a bare-mixin watcher host falls back to the design's N=2.
-        confirm_polls = max(
-            1, int(getattr(self, "analysis_confirm_polls", 2) or 2)
-        )
+        confirm_polls = max(1, int(getattr(self, "analysis_confirm_polls", 2) or 2))
         saw_runtime = False
         complete_consecutive = 0
         dead_consecutive = 0
@@ -1195,11 +1124,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     return  # explicit teardown stop (h02 h09)
                 if not self._safe_mode_active(sid):
                     return  # lifted by another path (e.g. a status confirm)
-                session = (
-                    self.session_mgr.get_session(sid)
-                    if hasattr(self, "session_mgr")
-                    else None
-                )
+                session = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else None
                 if session is None:
                     return  # session deleted/closed
                 runtime = self._runtime_record(sid)
@@ -1215,11 +1140,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                                 port,
                                 recv_timeout=10,
                             )
-                            if (
-                                isinstance(state_res, dict)
-                                and "error" not in state_res
-                                and state_res.get("analysis_complete") is True
-                            ):
+                            if isinstance(state_res, dict) and "error" not in state_res and state_res.get("analysis_complete") is True:
                                 complete_consecutive += 1
                                 if complete_consecutive >= confirm_polls:
                                     # D4-F10: the completion transition re-checks
@@ -1255,11 +1176,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 # Re-arm unless the spawn/teardown failure is already recorded
                 # (re-arming there would spin forever).
                 if self._safe_mode_active(sid):
-                    session = (
-                        self.session_mgr.get_session(sid)
-                        if hasattr(self, "session_mgr")
-                        else None
-                    )
+                    session = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else None
                     if session is not None:
                         bg_errors = getattr(self, "_background_load_errors", None)
                         if not (isinstance(bg_errors, dict) and sid in bg_errors):
@@ -1281,8 +1198,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 sid,
                 make_error(
                     MCPError.IDA_CRASHED,
-                    "IDA runtime exited before auto-analysis completed; "
-                    "safe mode stays on",
+                    "IDA runtime exited before auto-analysis completed; safe mode stays on",
                     details={"session_id": sid},
                 ),
             )
@@ -1318,11 +1234,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 return
             # Refetch under the lock so the transition never mutates bookkeeping
             # for a session that was deleted since the caller sampled it.
-            current = (
-                self.session_mgr.get_session(sid)
-                if hasattr(self, "session_mgr")
-                else session
-            )
+            current = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else session
             if current is None:
                 return
             inflight.add(sid)
@@ -1342,11 +1254,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # guard passed; never re-add bookkeeping for a gone session.
             if self._session_is_closing(sid):
                 return
-            current = (
-                self.session_mgr.get_session(sid)
-                if hasattr(self, "session_mgr")
-                else session
-            )
+            current = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else session
             if current is None:
                 return
             self._mark_analysis_complete(current)
@@ -1360,10 +1268,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             notices[sid] = {
                 "code": "analysis_complete",
                 "message": "IDA auto-analysis completed.",
-                "suggestion": (
-                    "Safe mode is lifted: decompilation, semantic search, and "
-                    "indexing are now available."
-                ),
+                "suggestion": ("Safe mode is lifted: decompilation, semantic search, and indexing are now available."),
             }
         # h02 h08: an analysis-stage transition (completion) checkpoints the DB
         # immediately, outside the lock, so the on-disk IDB reflects the settled
@@ -1401,11 +1306,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 port,
                 recv_timeout=10,
             )
-            if (
-                isinstance(state_res, dict)
-                and "error" not in state_res
-                and state_res.get("analysis_complete") is True
-            ):
+            if isinstance(state_res, dict) and "error" not in state_res and state_res.get("analysis_complete") is True:
                 self._on_analysis_complete(session, reload=False)
         except Exception:
             pass
@@ -1420,11 +1321,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         with self._analysis_state_lock():
             if self._session_is_closing(sid):
                 return
-            current = (
-                self.session_mgr.get_session(sid)
-                if hasattr(self, "session_mgr")
-                else None
-            )
+            current = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else None
             if current is None:
                 return
             errors = getattr(self, "_background_load_errors", None)
@@ -1463,9 +1360,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     ),
                 )
 
-        threading.Thread(
-            target=_run, daemon=True, name=f"ida-bg-{session.session_id}"
-        ).start()
+        threading.Thread(target=_run, daemon=True, name=f"ida-bg-{session.session_id}").start()
 
     def _session_action_create_background(self, args: dict) -> dict:
         """Create/open a session without blocking on IDA analysis.
@@ -1483,30 +1378,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 "Background open is an experimental feature and is disabled by default.",
                 details={
                     "flag": "IDA_MCP_BACKGROUND_OPEN",
-                    "hint": (
-                        "Set IDA_MCP_BACKGROUND_OPEN=1 to enable it. Without it, "
-                        "every open is blocking and waits until IDA analysis completes."
-                    ),
+                    "hint": ("Set IDA_MCP_BACKGROUND_OPEN=1 to enable it. Without it, every open is blocking and waits until IDA analysis completes."),
                 },
             )
 
-        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (
-            self._prepare_open_args(args)
-        )
+        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = self._prepare_open_args(args)
         if prep_error:
             return prep_error
 
-        has_preload_request = any(
-            k in analysis_options and analysis_options.get(k) is not None
-            for k in _OPEN_PRELOAD_KEYS
-        )
-        existing = self._select_reuse_candidate(
-            binary_path, analysis_options, force_new
-        )
+        has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in _OPEN_PRELOAD_KEYS)
+        existing = self._select_reuse_candidate(binary_path, analysis_options, force_new)
         auto = bool(args.get("_auto_backgrounded"))
-        if existing and not force_new and (
-            not has_preload_request or self._preloads_match(existing, analysis_options)
-        ):
+        if existing and not force_new and (not has_preload_request or self._preloads_match(existing, analysis_options)):
             update_kwargs = {"analysis_applied": False}
             if analysis_options:
                 merged_opts = dict(existing.analysis_options)
@@ -1514,9 +1397,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 update_kwargs["analysis_options"] = merged_opts
             if ida_args is not None:
                 update_kwargs["ida_args"] = ida_args
-            updated = self.session_mgr.update_session(
-                existing.session_id, **update_kwargs
-            )
+            updated = self.session_mgr.update_session(existing.session_id, **update_kwargs)
             if updated is None:
                 return make_error(
                     MCPError.SESSION_NOT_FOUND,
@@ -1525,13 +1406,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self.current_session = updated
             self._mark_analysis_pending(updated)
             note = (
-                "Binary is large; opened in background automatically. "
-                "Safe mode is on until analysis completes — poll ida_session_status."
+                "Binary is large; opened in background automatically. Safe mode is on until analysis completes — poll ida_session_status."
                 if auto
-                else (
-                    "Reusing existing session; its runtime is starting in the "
-                    "background. Poll ida_session_status for progress."
-                )
+                else ("Reusing existing session; its runtime is starting in the background. Poll ida_session_status for progress.")
             )
             out = self._open_result(
                 updated,
@@ -1565,13 +1442,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         )
         self._mark_analysis_pending(self.current_session)
         note = (
-            "Binary is large; opened in background automatically. "
-            "Safe mode is on until analysis completes — poll ida_session_status."
+            "Binary is large; opened in background automatically. Safe mode is on until analysis completes — poll ida_session_status."
             if auto
-            else (
-                "Analysis started in the background; this call did not wait "
-                "for IDA. Poll ida_session_status for progress."
-            )
+            else ("Analysis started in the background; this call did not wait for IDA. Poll ida_session_status for progress.")
         )
         out = self._open_result(
             self.current_session,
@@ -1592,9 +1465,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         architecture_recommendations, a spawn_error already recorded by the
         spawn thread, and an honest safe_mode/analysis_complete pair.
         """
-        out["idb_exists"] = bool(
-            session.idb_path and os.path.isfile(session.idb_path)
-        )
+        out["idb_exists"] = bool(session.idb_path and os.path.isfile(session.idb_path))
         out["is_running"] = self._session_is_running(session.session_id)
         recs = self._arch_recommendations(arch_meta)
         if recs:
@@ -1623,42 +1494,43 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
         if not isinstance(inferred, dict):
             return None
-        candidates = (
-            inferred.get("candidates")
-            if isinstance(inferred.get("candidates"), list)
-            else []
-        )
-        recs = []
-        if candidates:
-            recs = [
-                {
-                    "tool": "analysis",
-                    "arguments": {
-                        "action": "set_architecture",
-                        "processor": c.get("processor"),
-                        "bitness": c.get("bitness"),
-                        "endian": c.get("endian"),
-                    },
-                    "confidence": c.get("confidence"),
-                    "reason": c.get("reason"),
-                }
-                for c in candidates[:3]
-                if isinstance(c, dict) and c.get("processor")
-            ]
-        elif not candidates:
-            recs = [
-                {
-                    "tool": "analysis",
-                    "arguments": {
-                        "action": "set_architecture",
-                        "processor": "arm",
-                        "bitness": 32,
-                        "endian": "little",
-                    },
-                    "confidence": 0.2,
-                    "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
-                }
-            ]
+        if inferred.get("provider_error"):
+            # An unavailable/invalid advisory provider must never turn into a
+            # guessed processor recommendation.
+            return None
+        candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
+        recs = [
+            {
+                "tool": "analysis",
+                "arguments": {
+                    "action": "set_architecture",
+                    "processor": c.get("processor"),
+                    "bitness": c.get("bitness"),
+                    "endian": c.get("endian"),
+                },
+                "confidence": c.get("confidence"),
+                "reason": c.get("reason"),
+            }
+            for c in candidates[:3]
+            if isinstance(c, dict) and c.get("processor")
+        ]
+        if not recs and str(inferred.get("warning") or "").startswith("provider"):
+            processor = inferred.get("processor")
+            bitness = inferred.get("bitness")
+            if processor and bitness:
+                recs.append(
+                    {
+                        "tool": "analysis",
+                        "arguments": {
+                            "action": "set_architecture",
+                            "processor": processor,
+                            "bitness": bitness,
+                            "endian": inferred.get("endian"),
+                        },
+                        "confidence": inferred.get("confidence"),
+                        "reason": inferred.get("reason") or "provider advisory; verify explicitly",
+                    }
+                )
         return recs or None
 
     @staticmethod
@@ -1673,15 +1545,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         of an opaque blob (h02 q02).
 
         Policy: auto-apply only when the inference is NOT ambiguous and its
-        confidence is >= 0.9 AND it carries a definite processor + bitness
-        (Cortex-M vector-table heuristic -> 0.92; RISC-V lopsided bitness call
-        -> ~1.0). Ambiguous near-ties (rv32c vs rv64 at 1.0/1.0), native
-        containers that let the loader drive the arch (ELF/Mach-O), and
-        sub-0.9 guesses are never forced. Returns a warning string when options
-        were applied, else None.
+        confidence is >= 0.9 and it carries a definite processor + bitness.
+        Provider architecture answers are explicitly marked advisory and are
+        never forced. Native containers that let the loader drive the arch
+        (ELF/Mach-O), and sub-0.9 guesses are never forced. Returns a warning
+        string when options were applied, else None.
         """
         if not isinstance(inferred, dict):
             return None
+        if str(inferred.get("warning") or "").startswith("provider advisory"):
+            return "Provider architecture advisory is informational; pass explicit architecture options before IDA analysis."
         if inferred.get("ambiguous"):
             return None
         try:
@@ -1692,10 +1565,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return None
         processor = inferred.get("processor")
         bitness = inferred.get("bitness")
-        # Raw blobs rank a candidate list; the top-level processor/bitness stay
-        # None while the top candidate carries the definite call (e.g. rv64c ->
-        # riscv/64 at conf ~1.0). Lift it when the inference is unambiguous and
-        # high-confidence so a lopsided bitness call is actually applied.
+        # Raw blobs may rank a candidate list while the top-level
+        # processor/bitness stay None. Lift a deterministic top candidate only
+        # after the confidence and ambiguity checks above; provider advisories
+        # returned earlier are never passed through this compatibility path.
         if not processor or not bitness:
             candidates = inferred.get("candidates") or []
             top = candidates[0] if candidates else None
@@ -1714,12 +1587,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not analysis_options.get("endian") and inferred.get("endian"):
             applied["endian"] = inferred["endian"]
         load_base = inferred.get("load_base")
-        if (
-            load_base is not None
-            and not (
-                analysis_options.get("baseaddr") or analysis_options.get("load_base")
-            )
-        ):
+        if load_base is not None and not (analysis_options.get("baseaddr") or analysis_options.get("load_base")):
             # _build_ida_command reads baseaddr for the -b paragraph flag.
             applied["baseaddr"] = load_base
         if not applied:
@@ -1748,6 +1616,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return None
         try:
             import datetime as _dt
+
             ts = str(checkpointed)
             if ts.endswith("Z"):
                 ts = ts[:-1] + "+00:00"
@@ -1758,21 +1627,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         except Exception:
             return None
         if age_sec < 0 or age_sec > _CHECKPOINT_STALENESS_SECONDS:
-            return (
-                "Resumed session IDB may be stale: last analysis checkpoint was "
-                f"{checkpointed}. Re-run analysis or wait for a fresh checkpoint."
-            )
+            return f"Resumed session IDB may be stale: last analysis checkpoint was {checkpointed}. Re-run analysis or wait for a fresh checkpoint."
         return None
 
     def _session_action_discover(self, args: dict) -> dict:
         self.session_mgr._load_orphaned_idbs()
         q = args.get("query", "")
         binary_name = args.get("binary_name", "")
-        sessions = [
-            s.to_dict() for s in self.session_mgr.discover_sessions(
-                query=q, binary_name=binary_name
-            )
-        ]
+        sessions = [s.to_dict() for s in self.session_mgr.discover_sessions(query=q, binary_name=binary_name)]
         return {"ok": True, "sessions": sessions, "count": len(sessions)}
 
     def _session_action_get(self, args: dict) -> dict:
@@ -1789,9 +1651,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
                 sid = raw_txt.upper()
             else:
-                return make_error(
-                    MCPError.INVALID_ARGS, "Invalid session_id format"
-                )
+                return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
         session = self.session_mgr.get_session(sid)
         if not session:
             return make_error(
@@ -1808,11 +1668,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if ownership_error:
             return ownership_error
         runtime = self._runtime_record(sid)
-        is_running = bool(
-            runtime
-            and runtime.get("process")
-            and runtime["process"].poll() is None
-        )
+        is_running = bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
         result = session.to_dict()
         result["is_running"] = is_running
         result["safe_mode"] = self._safe_mode_active(sid)
@@ -1831,17 +1687,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
     def _session_action_list(self, args: dict) -> dict:
         # Use locked manager method instead of direct dict access
-        limit = _bounded_int(
-            args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT
-        )
-        offset = _bounded_int(
-            args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET
-        )
+        limit = _bounded_int(args.get("limit", 50), 50, min_value=0, max_value=MAX_LIST_LIMIT)
+        offset = _bounded_int(args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET)
         q = args.get("query", "")
         binary_name = args.get("binary_name", "")
-        result = self.session_mgr.list_sessions(
-            query=q, offset=offset, limit=limit, binary_name=binary_name
-        )
+        result = self.session_mgr.list_sessions(query=q, offset=offset, limit=limit, binary_name=binary_name)
 
         # Augment with runtime status and ownership forensics so a busy
         # session is identifiable (who holds it, and whether that owner is
@@ -1856,11 +1706,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if not self._client_owns_session(sid) and self._session_is_busy(sid):
                 continue
             runtime = self._runtime_record(sid)
-            d["is_running"] = bool(
-                runtime
-                and runtime.get("process")
-                and runtime["process"].poll() is None
-            )
+            d["is_running"] = bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
             d["safe_mode"] = self._safe_mode_active(d["session_id"])
             d["analysis_complete"] = self._analysis_is_complete(d["session_id"])
             report = self._session_ownership_report(d["session_id"])
@@ -1918,11 +1764,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if path:
                 owns = getattr(self, "_client_owns_session", None)
                 candidates = self.session_mgr.find_sessions_by_path(path)
-                candidates = [
-                    c for c in candidates
-                    if (callable(owns) and owns(c.session_id))
-                    or not self._session_is_busy(c.session_id)
-                ]
+                candidates = [c for c in candidates if (callable(owns) and owns(c.session_id)) or not self._session_is_busy(c.session_id)]
                 found = candidates[0] if candidates else None
                 if found:
                     sid = found.session_id
@@ -1940,14 +1782,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if raw_txt and re.fullmatch(r"[A-Za-z0-9]+", raw_txt):
                 sid = raw_txt.upper()
             else:
-                return make_error(
-                    MCPError.INVALID_ARGS, "Invalid session_id format"
-                )
+                return make_error(MCPError.INVALID_ARGS, "Invalid session_id format")
         session = self.session_mgr.get_session(sid)
         if not session:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         ownership_error = self._ensure_client_owns_session(session)
         if ownership_error:
             return ownership_error
@@ -1959,9 +1797,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # Decide if we need to spawn/replace the IDA runtime for this session.
         runtime = self._runtime_record(sid)
         runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
-        should_spawn = (
-            reopen or not runtime_alive
-        ) and os.path.isfile(getattr(session, "binary_path", "") or "")
+        should_spawn = (reopen or not runtime_alive) and os.path.isfile(getattr(session, "binary_path", "") or "")
         spawn_failed = False
         if should_spawn and hasattr(self, "_start_server"):
             # A fresh idat runs auto-analysis from the moment it spawns; re-enter
@@ -2013,11 +1849,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         idb_path = getattr(session, "idb_path", None)
         if idb_path and not os.path.isfile(idb_path) and not runtime_attached:
             response["idb_exists"] = False
-            response["hint"] = (
-                "IDB file not on disk at the recorded path. Try "
-                "ida_session_switch(session_id='...', reopen=true) "
-                "to spawn a new IDA runtime."
-            )
+            response["hint"] = "IDB file not on disk at the recorded path. Try ida_session_switch(session_id='...', reopen=true) to spawn a new IDA runtime."
         spawn_error = getattr(self, "_last_spawn_error", None)
         if isinstance(spawn_error, dict):
             response["spawn_error"] = spawn_error
@@ -2046,8 +1878,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 if not self._wait_for_idb(session, timeout=timeout):
                     return make_error(
                         MCPError.IDA_CRASHED,
-                        "IDA runtime is alive but the IDB was not written within "
-                        "the timeout",
+                        "IDA runtime is alive but the IDB was not written within the timeout",
                         details={"session_id": sid},
                     )
             return None
@@ -2069,8 +1900,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if not self._wait_for_idb(session, timeout=timeout):
                 return make_error(
                     MCPError.IDA_CRASHED,
-                    "IDA runtime started but the IDB was not written within "
-                    "the timeout",
+                    "IDA runtime started but the IDB was not written within the timeout",
                     details={"session_id": sid},
                 )
         return None
@@ -2116,9 +1946,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 sid_prefix = f"SID_{session.session_id}"
                 try:
                     for name in os.listdir(idb_dir or "."):
-                        if name.startswith(sid_prefix) and (
-                            name.endswith((".id0", ".nam"))
-                        ):
+                        if name.startswith(sid_prefix) and (name.endswith((".id0", ".nam"))):
                             # Absolute path, not the bare listdir entry: the
                             # callers below test os.path.isfile(existing) and
                             # store the result back into session.idb_path.
@@ -2181,11 +2009,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self._forget_analysis_state(sid)
             self._cleanup_runtime(sid)
             closed = self.session_mgr.delete_session(sid)
-            if (
-                closed
-                and self.current_session
-                and self.current_session.session_id == sid
-            ):
+            if closed and self.current_session and self.current_session.session_id == sid:
                 self.current_session = None
             if closed:
                 self._drop_sid_from_groups(sid)
@@ -2209,17 +2033,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return self.current_session, None
         sid = _normalize_session_id(raw)
         if not sid:
-            return None, make_error(
-                MCPError.INVALID_ARGS, "Invalid session idb reference"
-            )
+            return None, make_error(MCPError.INVALID_ARGS, "Invalid session idb reference")
         try:
             session = self.session_mgr.get_session(sid)
         except Exception:
             session = None
         if not session:
-            return None, make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return None, make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         ownership_error = self._ensure_client_owns_session(session)
         if ownership_error:
             return None, ownership_error
@@ -2243,25 +2063,22 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             )
         try:
             # h05 handoff: first-touch arming for a restored-pending session.
-            self._arm_analysis_watcher_if_needed(
-                getattr(self.current_session, "session_id", None) or ""
-            )
+            self._arm_analysis_watcher_if_needed(getattr(self.current_session, "session_id", None) or "")
             state_value = self._build_state_payload()
             # Always wrap in a uniform envelope so callers can reliably
             # check `ok` and find the state under a known key.
             if isinstance(state_value, dict):
-                state_value["safe_mode"] = self._safe_mode_active(
-                    getattr(self.current_session, "session_id", None) or ""
-                )
-                state_value["analysis_complete"] = self._analysis_is_complete(
-                    getattr(self.current_session, "session_id", None) or ""
-                )
-                report = self._session_ownership_report(
-                    getattr(self.current_session, "session_id", None) or ""
-                )
+                state_value["safe_mode"] = self._safe_mode_active(getattr(self.current_session, "session_id", None) or "")
+                state_value["analysis_complete"] = self._analysis_is_complete(getattr(self.current_session, "session_id", None) or "")
+                report = self._session_ownership_report(getattr(self.current_session, "session_id", None) or "")
                 for _k in (
-                    "locked", "holder", "owner_id", "owner_pid",
-                    "owner_alive", "idat_pid", "lease_age_seconds",
+                    "locked",
+                    "holder",
+                    "owner_id",
+                    "owner_pid",
+                    "owner_alive",
+                    "idat_pid",
+                    "lease_age_seconds",
                 ):
                     state_value[_k] = report.get(_k)
             return {"ok": True, "state": state_value}
@@ -2298,9 +2115,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if cached and now - cached["_ts"] < _SESSION_STATE_CACHE_TTL:
                 return cached["coverage"]
         try:
-            funcs = self._execute_tool(
-                "data", {"action": "functions", "count": 5000, "structured": True}
-            )
+            funcs = self._execute_tool("data", {"action": "functions", "count": 5000, "structured": True})
             func_list = funcs.get("items") if isinstance(funcs, dict) else []
             if not func_list and isinstance(funcs, dict):
                 # Older build without structured items: parse the compact
@@ -2311,14 +2126,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     if not line:
                         continue
                     parts = line.split()
-                    func_list.append(
-                        {"addr": parts[0] if parts else "", "name": parts[-1] if parts else ""}
-                    )
+                    func_list.append({"addr": parts[0] if parts else "", "name": parts[-1] if parts else ""})
             total = len(func_list)
-            named = sum(
-                1 for f in func_list
-                if not (str(f.get("name", "")).startswith("sub_")
-                        or str(f.get("name", "")).startswith("j_")))
+            named = sum(1 for f in func_list if not (str(f.get("name", "")).startswith("sub_") or str(f.get("name", "")).startswith("j_")))
             coverage = {
                 "total_functions": total,
                 "named_functions": named,
@@ -2332,7 +2142,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if len(cache) > 128:
                 # Bound the cache against session churn; never evict the
                 # just-written entry for the session being served.
-                overflow = [s for s in cache if s != sid][:len(cache) - 128]
+                overflow = [s for s in cache if s != sid][: len(cache) - 128]
                 for old_sid in overflow:
                     cache.pop(old_sid, None)
         return coverage
@@ -2351,10 +2161,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             meta = overview.get("meta", {}) if isinstance(overview, dict) else {}
             summary = overview.get("summary", {}) if isinstance(overview, dict) else {}
             arch_profile = overview.get("architecture_profile", {}) if isinstance(overview, dict) else {}
-            is_firmware = bool(
-                (overview.get("firmware_detected") if isinstance(overview, dict) else False)
-                or (arch_profile.get("raw_binary_mode") if isinstance(arch_profile, dict) else False)
-            )
+            is_firmware = bool((overview.get("firmware_detected") if isinstance(overview, dict) else False) or (arch_profile.get("raw_binary_mode") if isinstance(arch_profile, dict) else False))
             if not is_firmware:
                 # Fallback heuristic for older/partial IDB metadata payloads.
                 ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
@@ -2365,20 +2172,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 except Exception:
                     ft_num = None
                 proc = str(meta.get("processor") or meta.get("arch") or "").strip().lower()
-                imports = (
-                    summary.get("imports")
-                    if isinstance(summary, dict) and summary.get("imports") is not None
-                    else meta.get("import_count", 0)
-                )
+                imports = summary.get("imports") if isinstance(summary, dict) and summary.get("imports") is not None else meta.get("import_count", 0)
                 try:
                     imports = int(imports or 0)
                 except Exception:
                     imports = 0
-                is_firmware = bool(
-                    ft_name in {"", "raw", "unknown", "bin", "binary", "obj"}
-                    or ft_num in {0, 2, 17}
-                    or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and imports == 0)
-                )
+                is_firmware = bool(ft_name in {"", "raw", "unknown", "bin", "binary", "obj"} or ft_num in {0, 2, 17} or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and imports == 0))
             state["binary"] = {
                 "name": meta.get("binary_path") or meta.get("filename") or meta.get("input_file", ""),
                 "arch": meta.get("processor") or meta.get("arch", ""),
@@ -2394,9 +2193,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             is_firmware = False
 
         # 2. Coverage (cached with 30s TTL — expensive on large binaries)
-        state["coverage"] = self._get_cached_coverage(
-            getattr(self.current_session, "session_id", None) or ""
-        )
+        state["coverage"] = self._get_cached_coverage(getattr(self.current_session, "session_id", None) or "")
 
         # 3. Blackboard summary
         try:
@@ -2404,28 +2201,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if bb:
                 stats = bb.stats()
                 targets = bb.next_target(limit=5)
-                hypotheses = bb.list(category="hypothesis", limit=5,
-                                     include_resolved=False, include_contradicted=False)
+                hypotheses = bb.list(category="hypothesis", limit=5, include_resolved=False, include_contradicted=False)
                 iocs = bb.list(category="ioc", limit=10, include_resolved=True)
                 vulns = bb.list(category="vuln", limit=5, include_resolved=False)
                 state["blackboard"] = {
                     "stats": stats,
                     "next_targets": targets,
-                    "top_hypotheses": [
-                        {"title": h["title"], "addr": h.get("addr"),
-                         "confidence": h.get("confidence")}
-                        for h in hypotheses
-                    ],
-                    "iocs": [
-                        {"type": i.get("ioc_type"), "value": i.get("ioc_value"),
-                         "addr": i.get("addr")}
-                        for i in iocs
-                    ],
-                    "vulns": [
-                        {"title": v["title"], "addr": v.get("addr"),
-                         "confidence": v.get("confidence")}
-                        for v in vulns
-                    ],
+                    "top_hypotheses": [{"title": h["title"], "addr": h.get("addr"), "confidence": h.get("confidence")} for h in hypotheses],
+                    "iocs": [{"type": i.get("ioc_type"), "value": i.get("ioc_value"), "addr": i.get("addr")} for i in iocs],
+                    "vulns": [{"title": v["title"], "addr": v.get("addr"), "confidence": v.get("confidence")} for v in vulns],
                 }
         except Exception:
             state["blackboard"] = {}
@@ -2441,34 +2225,23 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # 5. KnowledgeGraph summary
         try:
             import importlib.util as _ilu
-            _kg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "..", "stores", "knowledge_graph.py")
+
+            _kg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "stores", "knowledge_graph.py")
             _spec = _ilu.spec_from_file_location("_state_kg", _kg_path)
             _kgmod = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_kgmod)
-            bb_path = self._session_blackboard_path(session_obj=self.current_session) \
-                if hasattr(self, "_session_blackboard_path") else None
+            bb_path = self._session_blackboard_path(session_obj=self.current_session) if hasattr(self, "_session_blackboard_path") else None
             kg = _kgmod.KnowledgeGraph(bb_path) if bb_path else None
             if kg:
                 state["knowledge_graph"] = kg.summary()
                 # Open gaps
                 gaps = kg.list_gaps(resolved=False)
                 if gaps:
-                    state["knowledge_graph"]["top_gaps"] = [
-                        {"expected": g["expected"],
-                         "candidates": g.get("candidates", [])[:2],
-                         "priority": g.get("priority")}
-                        for g in gaps[:5]
-                    ]
+                    state["knowledge_graph"]["top_gaps"] = [{"expected": g["expected"], "candidates": g.get("candidates", [])[:2], "priority": g.get("priority")} for g in gaps[:5]]
                 # Systems
                 systems = kg.list_systems()
                 if systems:
-                    state["knowledge_graph"]["systems"] = [
-                        {"name": s["name"],
-                         "members": len(s.get("members", [])),
-                         "coverage_pct": s.get("coverage_pct", 0)}
-                        for s in systems[:8]
-                    ]
+                    state["knowledge_graph"]["systems"] = [{"name": s["name"], "members": len(s.get("members", [])), "coverage_pct": s.get("coverage_pct", 0)} for s in systems[:8]]
         except Exception:
             pass
 
@@ -2477,17 +2250,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         try:
             bb = self._bb_store()
             if bb:
-                narratives = bb.list(category="narrative", limit=1,
-                                     include_resolved=True)
+                narratives = bb.list(category="narrative", limit=1, include_resolved=True)
                 if narratives:
                     narrative_text = narratives[0].get("content", "")
                     if narrative_text and len(narrative_text) > 50:
                         import json as _json
-                        header = _json.dumps({
-                            "binary": state.get("binary", {}),
-                            "coverage": state.get("coverage", {}),
-                            "knowledge_graph": state.get("knowledge_graph", {}),
-                        }, separators=(",", ":"))
+
+                        header = _json.dumps(
+                            {
+                                "binary": state.get("binary", {}),
+                                "coverage": state.get("coverage", {}),
+                                "knowledge_graph": state.get("knowledge_graph", {}),
+                            },
+                            separators=(",", ":"),
+                        )
                         return f"<!-- state:{header} -->\n\n{narrative_text}"
         except Exception:
             pass
@@ -2527,15 +2303,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             import importlib.util
             import sys as _sys
             import types as _types
+
             path = os.path.join(SCRIPT_DIR, "..", "..", "ida_mcp", "tools", "blackboard.py")
             path = os.path.abspath(path)
             spec = importlib.util.spec_from_file_location("_res_bb", path)
             mod = importlib.util.module_from_spec(spec)
-            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
-                                  "idawrite": lambda f: f, "IDAError": Exception})
-            _stubs = ["idaapi","idc","idautils","ida_funcs","ida_bytes","ida_segment",
-                      "ida_name","ida_typeinf","ida_nalt","ida_hexrays","ida_frame",
-                      "ida_struct","ida_lines"]
+            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f, "idawrite": lambda f: f, "IDAError": Exception})
+            _stubs = ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment", "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame", "ida_struct", "ida_lines"]
             _saved = {m: _sys.modules.get(m) for m in _stubs}
             for m in _stubs:
                 if m not in _sys.modules:
@@ -2550,8 +2324,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         _sys.modules.pop(m, None)
                     else:
                         _sys.modules[m] = orig
-            bb_path = self._session_blackboard_path(session_obj=self.current_session) \
-                if hasattr(self, "_session_blackboard_path") else None
+            bb_path = self._session_blackboard_path(session_obj=self.current_session) if hasattr(self, "_session_blackboard_path") else None
             return mod.BlackboardStore(db_path=bb_path)
         except Exception:
             return None
@@ -2611,15 +2384,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             fresh_session = self.session_mgr.get_session(self.current_session.session_id) or self.current_session
             result = fresh_session.to_dict()
             runtime = self._runtime_record(fresh_session.session_id)
-            result["is_running"] = bool(
-                runtime
-                and runtime.get("process")
-                and runtime["process"].poll() is None
-            )
+            result["is_running"] = bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
             result["safe_mode"] = self._safe_mode_active(fresh_session.session_id)
-            result["analysis_complete"] = self._analysis_is_complete(
-                fresh_session.session_id
-            )
+            result["analysis_complete"] = self._analysis_is_complete(fresh_session.session_id)
             # h05 handoff: a restored-pending session's first touch arms its
             # completion watcher (restore-at-startup deliberately never spawns).
             self._arm_analysis_watcher_if_needed(fresh_session.session_id)
@@ -2627,9 +2394,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # watcher missed the transition: confirm from a live runtime.
             self._maybe_resolve_analysis_state(fresh_session)
             result["safe_mode"] = self._safe_mode_active(fresh_session.session_id)
-            result["analysis_complete"] = self._analysis_is_complete(
-                fresh_session.session_id
-            )
+            result["analysis_complete"] = self._analysis_is_complete(fresh_session.session_id)
             bg_errors = getattr(self, "_background_load_errors", None)
             if isinstance(bg_errors, dict) and fresh_session.session_id in bg_errors:
                 result["background_error"] = bg_errors[fresh_session.session_id]
@@ -2655,9 +2420,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 result["analysis_active"] = bool(analysis.get("active"))
                 fqty = inventory.get("functions_qty")
                 try:
-                    result["analysis_functions_qty"] = (
-                        int(fqty) if fqty is not None else None
-                    )
+                    result["analysis_functions_qty"] = int(fqty) if fqty is not None else None
                 except Exception:
                     result["analysis_functions_qty"] = None
             else:
@@ -2703,6 +2466,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # Inject recent blackboard into session status so LLM sees it by default
             try:
                 import importlib.util
+
                 # SCRIPT_DIR is host/server/; blackboard.py is at ida_pro_mcp/ida_mcp/tools/.
                 bb_path = os.path.join(SCRIPT_DIR, "..", "..", "ida_mcp", "tools", "blackboard.py")
                 bb_path = os.path.abspath(bb_path)
@@ -2774,10 +2538,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         )
         result["post_kill_state"] = snapshot
         with contextlib.suppress(Exception):
-            log_rpc(
-                f"session.kill sid={sid} signaled={result.get('signaled')} "
-                f"terminated={result.get('terminated')} exit={result.get('exit_code')}"
-            )
+            log_rpc(f"session.kill sid={sid} signaled={result.get('signaled')} terminated={result.get('terminated')} exit={result.get('exit_code')}")
         # Drop stale runtime metadata so the next tool call can respawn cleanly.
         with contextlib.suppress(Exception):
             self._cleanup_runtime(sid)
@@ -2788,10 +2549,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return make_error(
                 MCPError.IDA_ERROR,
                 f"Failed to terminate the IDA process for session '{sid}'.",
-                hint=(
-                    "The process may still hold the IDB lock. Check the "
-                    "reported pid and terminate it manually before reopening."
-                ),
+                hint=("The process may still hold the IDB lock. Check the reported pid and terminate it manually before reopening."),
                 details=result,
             )
         return {"ok": True, **result}
@@ -2811,9 +2569,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return owned_err
         session = self.session_mgr.get_session(sid)
         if not session:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
 
         analysis_options = {}
         for key in (
@@ -2847,14 +2603,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 try:
                     os.remove(session.idb_path)
                 except Exception as e:
-                    return make_error(
-                        MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}"
-                    )
+                    return make_error(MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}")
 
             # Update the REAL session via manager, not the deepcopy
-            self.session_mgr.update_session(
-                sid, analysis_options=analysis_options or {}, analysis_applied=False
-            )
+            self.session_mgr.update_session(sid, analysis_options=analysis_options or {}, analysis_applied=False)
             # Refetch so we have the canonical object for _start_server
             session = self.session_mgr.get_session(sid)
             if session is None:
@@ -2908,10 +2660,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # inject metadata/ida_args that later session-actions trust. Reject
         # anything else instead of silently ignoring it.
         _UPDATE_FIELDS = ("tags", "notes", "auto_name", "name", "phase")
-        unknown = [
-            k for k in args
-            if k not in ("action", "session_id") and k not in _UPDATE_FIELDS
-        ]
+        unknown = [k for k in args if k not in ("action", "session_id") and k not in _UPDATE_FIELDS]
         if unknown:
             return make_error(
                 MCPError.INVALID_ARGS,
@@ -2925,30 +2674,22 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if "tags" in args:
             raw_tags = args.get("tags")
             if isinstance(raw_tags, str):
-                update_kwargs["tags"] = [
-                    t.strip() for t in raw_tags.split(",") if t.strip()
-                ]
+                update_kwargs["tags"] = [t.strip() for t in raw_tags.split(",") if t.strip()]
             else:
                 update_kwargs["tags"] = raw_tags
         if "notes" in args:
             update_kwargs["notes"] = str(args.get("notes", ""))[:MAX_NOTE_LEN]
         if "auto_name" in args:
-            update_kwargs["auto_name"] = str(
-                args.get("auto_name", "")
-            ).strip()[:MAX_NAME_LEN]
+            update_kwargs["auto_name"] = str(args.get("auto_name", "")).strip()[:MAX_NAME_LEN]
         elif "name" in args:
-            update_kwargs["auto_name"] = str(
-                args.get("name", "")
-            ).strip()[:MAX_NAME_LEN]
+            update_kwargs["auto_name"] = str(args.get("name", "")).strip()[:MAX_NAME_LEN]
         if "phase" in args:
             update_kwargs["phase"] = str(args.get("phase", "")).strip()[:MAX_NAME_LEN]
         if not update_kwargs:
             return make_error(MCPError.INVALID_ARGS, "No updatable field provided")
         result = self.session_mgr.update_session(sid, **update_kwargs)
         if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         return {
             "ok": True,
             "session": result.to_dict(),
@@ -2971,9 +2712,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         exported_hypotheses = self._export_session_hypotheses_to_symbol_db(sid)
         result = self.session_mgr.export_session(sid)
         if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         return {"ok": True, "exported": result, "exported_hypotheses": int(exported_hypotheses)}
 
     def _session_action_import_session(self, args: dict) -> dict:
@@ -2998,9 +2737,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return {"ok": True, "session": result.to_dict()}
 
     def _session_action_cleanup_stale(self, args: dict) -> dict:
-        max_age = _bounded_int(
-            args.get("max_age_days", 30), 30, min_value=1, max_value=3650
-        )
+        max_age = _bounded_int(args.get("max_age_days", 30), 30, min_value=1, max_value=3650)
         # Age-stale deletion must honor the same ownership rule the orphan
         # sub-path below applies: never delete another client's session
         # (multiplexed connections enforce subagent isolation). The manager's
@@ -3022,9 +2759,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if not last_accessed:
                 continue
             try:
-                last_used_epoch = datetime.fromisoformat(
-                    last_accessed.replace("Z", "+00:00")
-                ).timestamp()
+                last_used_epoch = datetime.fromisoformat(last_accessed.replace("Z", "+00:00")).timestamp()
             except Exception:
                 continue
             if last_used_epoch >= cutoff_epoch:
@@ -3037,10 +2772,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if self.session_mgr.delete_session(sid):
                 deleted.append(sid)
                 self._forget_analysis_state(sid)
-                if (
-                    self.current_session
-                    and self.current_session.session_id == sid
-                ):
+                if self.current_session and self.current_session.session_id == sid:
                     self.current_session = None
 
         # Also prune sessions whose binary path no longer exists — those
@@ -3186,10 +2918,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             deleted = self.session_mgr.delete_session(sid)
             if deleted:
                 self._forget_analysis_state(sid)
-                if (
-                    self.current_session
-                    and self.current_session.session_id == sid
-                ):
+                if self.current_session and self.current_session.session_id == sid:
                     self.current_session = None
                 closed_sids.append(sid)
 
@@ -3284,21 +3013,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return sid_err
         result = self.session_mgr.validate_session(sid)
         if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         return {"ok": True, "validation": result}
 
     def _session_action_bulk_delete(self, args: dict) -> dict:
         sids = args.get("session_ids", [])
         if not sids:
-            return make_error(
-                MCPError.INVALID_ARGS, "session_ids list required"
-            )
+            return make_error(MCPError.INVALID_ARGS, "session_ids list required")
         if not isinstance(sids, list):
-            return make_error(
-                MCPError.INVALID_ARGS, "session_ids must be a list"
-            )
+            return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
         cleaned_sids = []
         for raw_sid in sids[:MAX_BATCH_CALLS]:
             sid = _normalize_session_id(raw_sid)
@@ -3317,10 +3040,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 self._cleanup_runtime(sid)
         results = self.session_mgr.bulk_delete(cleaned_sids)
         # Clear current session if it was deleted
-        if (
-            self.current_session
-            and self.current_session.session_id in cleaned_sids
-        ):
+        if self.current_session and self.current_session.session_id in cleaned_sids:
             self.current_session = None
         # Drop safe-mode bookkeeping and keep multi-session groups consistent
         # with the deletions.
@@ -3333,15 +3053,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sids = args.get("session_ids", [])
         tag = args.get("tag")
         if not sids:
-            return make_error(
-                MCPError.INVALID_ARGS, "session_ids list required"
-            )
+            return make_error(MCPError.INVALID_ARGS, "session_ids list required")
         if not tag:
             return make_error(MCPError.INVALID_ARGS, "tag required")
         if not isinstance(sids, list):
-            return make_error(
-                MCPError.INVALID_ARGS, "session_ids must be a list"
-            )
+            return make_error(MCPError.INVALID_ARGS, "session_ids must be a list")
         cleaned_sids = []
         for raw_sid in sids[:MAX_BATCH_CALLS]:
             sid = _normalize_session_id(raw_sid)
@@ -3366,9 +3082,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return owned_err
         snapshot_res = self.session_mgr.snapshot_session(sid)
         if snapshot_res is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         return {"ok": True, "session_id": sid, "snapshot_id": snapshot_res.get("snapshot_id"), "message": snapshot_res.get("message", "")}
 
     def _session_action_restore_snapshot(self, args: dict) -> dict:
@@ -3382,9 +3096,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not snapshot_id:
             return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
         if not self.session_mgr.session_exists(sid):
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         result = self.session_mgr.restore_snapshot(sid, snapshot_id)
         if result is None:
             return make_error(
@@ -3394,9 +3106,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return {"ok": True, "session": result.to_dict()}
 
     def _session_action_merge(self, args: dict) -> dict:
-        sid1 = _normalize_session_id(
-            args.get("session_id") or args.get("target_id")
-        )
+        sid1 = _normalize_session_id(args.get("session_id") or args.get("target_id"))
         sid2 = _normalize_session_id(args.get("source_id"))
         if not sid1 or not sid2:
             return make_error(
@@ -3416,9 +3126,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 return owned_err
         result = self.session_mgr.merge_sessions(sid1, sid2)
         if result is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, "One or both sessions not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
         return {"ok": True, "session": result.to_dict()}
 
     def _session_action_rate_skill(self, args: dict) -> dict:
@@ -3679,13 +3387,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         )
 
     def _session_action_macro_set(self, args: dict) -> dict:
-        macro_name = self._normalize_macro_name(
-            args.get("name") or args.get("macro")
-        )
+        macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
         if not macro_name:
-            return make_error(
-                MCPError.INVALID_ARGS, "name required for macro_set"
-            )
+            return make_error(MCPError.INVALID_ARGS, "name required for macro_set")
         macro_payload = args.get("data")
         if macro_payload is None:
             macro_payload = args.get("macro_data")
@@ -3704,9 +3408,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 )
             }
         if not isinstance(macro_payload, dict):
-            return make_error(
-                MCPError.INVALID_ARGS, "macro payload must be an object"
-            )
+            return make_error(MCPError.INVALID_ARGS, "macro payload must be an object")
         macro_key = macro_name.lower()
         self._session_macros[macro_key] = {
             "name": macro_name,
@@ -3722,18 +3424,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         }
 
     def _session_action_macro_get(self, args: dict) -> dict:
-        macro_name = self._normalize_macro_name(
-            args.get("name") or args.get("macro")
-        )
+        macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
         if not macro_name:
-            return make_error(
-                MCPError.INVALID_ARGS, "name required for macro_get"
-            )
+            return make_error(MCPError.INVALID_ARGS, "name required for macro_get")
         entry = self._session_macros.get(macro_name.lower())
         if not entry:
-            return make_error(
-                MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
-            )
+            return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
         return {"ok": True, "action": "macro_get", **entry}
 
     def _session_action_macro_list(self, args: dict) -> dict:
@@ -3757,47 +3453,31 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         }
 
     def _session_action_macro_delete(self, args: dict) -> dict:
-        macro_name = self._normalize_macro_name(
-            args.get("name") or args.get("macro")
-        )
+        macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
         if not macro_name:
-            return make_error(
-                MCPError.INVALID_ARGS, "name required for macro_delete"
-            )
+            return make_error(MCPError.INVALID_ARGS, "name required for macro_delete")
         removed = self._session_macros.pop(macro_name.lower(), None)
         if removed is None:
-            return make_error(
-                MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
-            )
+            return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
         self._save_session_macros()
         return {"ok": True, "action": "macro_delete", "name": macro_name}
 
     def _session_action_macro_run(self, args: dict) -> dict:
-        macro_name = self._normalize_macro_name(
-            args.get("name") or args.get("macro")
-        )
+        macro_name = self._normalize_macro_name(args.get("name") or args.get("macro"))
         if not macro_name:
-            return make_error(
-                MCPError.INVALID_ARGS, "name required for macro_run"
-            )
+            return make_error(MCPError.INVALID_ARGS, "name required for macro_run")
         entry = self._session_macros.get(macro_name.lower())
         if not entry:
-            return make_error(
-                MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
-            )
+            return make_error(MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found")
         base_args = dict(entry.get("data") or {})
         # Check if this is a workflow (sequence of calls)
         calls = base_args.get("calls")
         if isinstance(calls, list) and calls:
             return self._run_workflow_sequence(macro_name, calls, args)
         # Single-call macro with $param substitution
-        run_action = (
-            args.get("run_action") or base_args.get("action") or "create"
-        )
+        run_action = args.get("run_action") or base_args.get("action") or "create"
         if not isinstance(run_action, str) or not run_action.strip():
-            return make_error(
-                MCPError.INVALID_ARGS, "invalid run_action for macro_run"
-            )
+            return make_error(MCPError.INVALID_ARGS, "invalid run_action for macro_run")
         run_action = run_action.strip()
         if run_action.startswith("macro_"):
             return make_error(
@@ -3838,10 +3518,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         results = []
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
-                results.append({
-                    "step": i,
-                    "result": make_error(MCPError.INVALID_ARGS, "step must be a dict"),
-                })
+                results.append(
+                    {
+                        "step": i,
+                        "result": make_error(MCPError.INVALID_ARGS, "step must be a dict"),
+                    }
+                )
                 continue
             # Check conditional
             condition = call.get("if")
@@ -3868,10 +3550,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             tool = str(_substitute_params(call.get("tool", "session"), params))
             action = str(_substitute_params(call.get("action", ""), params))
             if not action:
-                results.append({
-                    "step": i,
-                    "result": make_error(MCPError.INVALID_ARGS, "action required"),
-                })
+                results.append(
+                    {
+                        "step": i,
+                        "result": make_error(MCPError.INVALID_ARGS, "action required"),
+                    }
+                )
                 continue
             call_args = {"action": action}
             for k, v in call.items():
@@ -3897,9 +3581,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 "session_id required (or have an active session)",
             )
         if not self.session_mgr.session_exists(sid):
-            return make_error(
-                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-            )
+            return make_error(MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found")
         n = _bounded_int(args.get("n", 20), 20, min_value=1, max_value=200)
         include_bookmarks = _coerce_bool(args.get("include_bookmarks"), True)
         include_items = _coerce_bool(args.get("include_items"), False)
@@ -3909,6 +3591,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             include_bookmarks=include_bookmarks,
             include_items=include_items,
         )
+
 
 # Register session actions so the tool registry can derive TOOL_ACTIONS
 # without duplicating the literal in schemas_data.py.

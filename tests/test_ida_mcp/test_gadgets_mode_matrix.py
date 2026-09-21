@@ -285,13 +285,17 @@ def test_positive_chain_classification_and_semantic_scoring_modes(monkeypatch):
     monkeypatch.setattr(gadgets_module, "_get_arch", lambda: "x64")
 
     scored = _score_gadgets_behavior([{"gadget": "pop rdi ; ret"}], "rop")
-    assert scored["top_primitive"] == "code_exec"
+    # Legacy injected classifiers are not selected by the explicit provider
+    # boundary; disabled mode keeps gadget discovery deterministic and leaves
+    # semantic classification unavailable.
+    assert scored is None
 
     result = gadgets_module._classify_gadget_chain(None, 20, 5, None)
     assert result["exploit_assessment"].startswith("HIGH:")
     assert result["primitives_found"]["rop"] == 1
-    assert result["backend"] == "offline-test"
-    assert classifier.calls
+    assert result["backend"] == "provider_advisory"
+    assert result["behavior_classifications"] == []
+    assert not classifier.calls
 
 
 def test_pivot_chain_categories_seh_and_elf_mitigation_branches(monkeypatch):

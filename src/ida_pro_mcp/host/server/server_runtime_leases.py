@@ -997,7 +997,7 @@ class ServerRuntimeLeasesMixin:
             self._shutdown_requested = True
             self._lease_thread_stop.set()
             # A stdio client may have to terminate a host blocked on input.
-            # Release owned IDA and embedding subprocesses before that forced
+            # Release owned IDA and child runtimes before that forced
             # exit can orphan them.
             self.shutdown()
 
@@ -1018,14 +1018,14 @@ class ServerRuntimeLeasesMixin:
             if callable(stop_watchers):
                 with contextlib.suppress(Exception):
                     stop_watchers()
-            # Stop host-owned inference first. Runtime cleanup can wait on IDA
-            # long enough for stdio clients to escalate to SIGTERM; leaving
-            # this until the end allowed llama-server to be orphaned.
+            # Stop the host-owned intelligence observer first. Runtime cleanup
+            # can wait on IDA long enough for stdio clients to escalate to
+            # SIGTERM; keep teardown ordering explicit.
             try:
                 if hasattr(self, "assembler") and self.assembler is not None:
                     self.assembler.stop()
             except Exception as e:
-                log_rpc(f"Failed to stop intelligence embedder: {e}")
+                log_rpc(f"Failed to stop intelligence observer: {e}")
             self._cleanup_all_runtimes()
             # Stop usage intelligence
             if getattr(self, "_usage_intel", None):

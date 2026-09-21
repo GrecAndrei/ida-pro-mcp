@@ -14,7 +14,7 @@ Examples:
 
   python benchmarks/run.py --scope contract host blackboard
   python benchmarks/run.py --scope retrieval --corpus /data/functions.json \
-      --queries /data/queries.json --backend native
+      --queries /data/queries.json --backend lexical
   python benchmarks/run.py --scope ida --ida-dir /opt/ida --binary /data/sample
 
 Results are written as ``.json`` and ``.md`` beside ``--out``. No benchmark
@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import platform
 import re
 import subprocess
@@ -220,13 +219,10 @@ def benchmark_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     queries_path = Path(args.queries).expanduser().resolve()
     if not corpus_path.is_file() or not queries_path.is_file():
         return {"status": "failed", "reason": "corpus or queries file does not exist"}
+    if args.backend != "lexical":
+        return {"status": "failed", "reason": "retrieval benchmark supports only the deterministic lexical backend"}
 
-    if args.backend == "gemini":
-        os.environ["IDA_MCP_EMBED_BACKEND"] = "gemini"
-    else:
-        os.environ["IDA_MCP_BACKEND"] = args.backend
-    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
-    from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex
+    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
 
     corpus = _load_json(corpus_path)
     functions = [row for row in corpus.get("functions", []) if row.get("ea") and row.get("pseudocode")]
@@ -235,18 +231,7 @@ def benchmark_retrieval(args: argparse.Namespace) -> dict[str, Any]:
         return {"status": "failed", "reason": "corpus or queries contain no usable rows"}
 
     with tempfile.TemporaryDirectory(prefix="ida-mcp-retrieval-") as temp_dir:
-        embedder = BgeCodeEmbedder()
-        # The production indexing tool explicitly activates the HTTP server
-        # before handing work to FunctionEmbeddingIndex. Do the same here so
-        # a benchmark measures inference throughput instead of reporting an
-        # instant all-failed run against a deliberately cold backend.
-        if hasattr(embedder, "ensure_ready") and not embedder.ensure_ready():
-            return {
-                "status": "failed",
-                "backend": args.backend,
-                "reason": "embedding backend did not become ready",
-            }
-        index = FunctionEmbeddingIndex(str(Path(temp_dir) / "functions.db"), embedder)
+        index = LexicalFunctionIndex(str(Path(temp_dir) / "functions.db"))
         started = time.perf_counter()
         index_result = index.index_many([
             (str(row["ea"]), str(row.get("name") or row["ea"]), str(row["pseudocode"]), None)
@@ -263,11 +248,10 @@ def benchmark_retrieval(args: argparse.Namespace) -> dict[str, Any]:
                     rank = pos
                     break
             ranks.append(rank)
-        embedder.stop()
 
     return {
         "status": "passed" if not index_result.get("failed") else "failed",
-        "backend": args.backend,
+        "backend": "lexical",
         "corpus": {"path": str(corpus_path), "sha256": _sha256(corpus_path), "functions": len(functions)},
         "queries": {"path": str(queries_path), "sha256": _sha256(queries_path), "count": len(queries)},
         "indexed": index_result,
@@ -317,7 +301,7 @@ def main() -> int:
     parser.add_argument("--scope", nargs="+", choices=("contract", "host", "blackboard", "retrieval", "ida", "all"), default=["all"])
     parser.add_argument("--corpus", help="Function corpus JSON for the retrieval scope")
     parser.add_argument("--queries", help="Gold query JSON for the retrieval scope")
-    parser.add_argument("--backend", choices=("native", "http", "gemini"), default="native")
+    parser.add_argument("--backend", choices=("lexical",), default="lexical", help="deterministic retrieval backend")
     parser.add_argument("--query-limit", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--ida-dir")

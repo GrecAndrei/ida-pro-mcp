@@ -42,10 +42,9 @@ release descriptions are prohibited. The template requires:
 - **Integrity & Provenance**: `sha256sum` and `gh attestation verify` commands.
 - **Canonical Links**: Direct references to the Wiki, Tools Reference, and Safety model.
 
-The native backend workflow is path-triggered for source changes and can also
-be dispatched manually before a release to verify the pinned llama.cpp build
-and quantizer smoke test. A skipped path-triggered run is not a native build
-result; use the manual dispatch when that evidence is required.
+Provider live checks are intentionally opt-in and are not part of ordinary
+release CI. Offline CI validates the disabled mode, deterministic lexical
+retrieval, provider schemas, privacy boundaries, and budget enforcement.
 
 ## GitHub alpha artifacts
 
@@ -60,7 +59,7 @@ the release notes.
 The published auto-installers (`install.sh`, `install.bat`, and standalone binary)
 provide zero-friction automated installation across all supported AI coding agents.
 The workflow never creates a tag from the default branch and does not include IDA,
-proprietary files, native model weights, or credentials.
+proprietary files, model weights, or credentials.
 
 Benchmark output records the package version, commit, runtime, and inputs at
 run time; benchmark results do not carry hand-maintained version numbers.

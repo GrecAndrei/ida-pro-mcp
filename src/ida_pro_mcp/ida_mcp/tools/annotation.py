@@ -156,26 +156,15 @@ def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> bool:
 def _classify_crypto_function(func_ea: int) -> Optional[str]:
     """Return the crypto algorithm label for a function, or None.
 
-    Hoists the decompile + BehaviorClassifier + _detect_crypto_algorithm
-    work that auto_comment_function previously repeated for every
-    instruction in the function.
+    Hoists the deterministic crypto detector that auto_comment_function
+    previously repeated for every instruction in the function.  Provider
+    advisories are never used to authorize or trigger this mutation.
     """
     try:
-        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
-        pseudo = ""
-        try:
-            pseudo = str(idaapi.decompile(func_ea) or "")
-        except Exception:
-            pseudo = ""
-        if not pseudo:
-            return None
-        clf = BehaviorClassifier.instance(BgeCodeEmbedder())
-        hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
-        if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
-            return _detect_crypto_algorithm(func_ea)
+        algorithm = _detect_crypto_algorithm(func_ea)
+        return algorithm if algorithm and algorithm != "unknown" else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
@@ -235,18 +224,10 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
                     reason = "crypto"
             else:
                 try:
-                    from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
-                    pseudo = ""
-                    try:
-                        pseudo = str(idaapi.decompile(fn_start) or "")
-                    except Exception:
-                        pseudo = ""
-                    if pseudo:
-                        clf = BehaviorClassifier.instance(BgeCodeEmbedder())
-                        hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
-                        if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
-                            comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn_start)}"
-                            reason = "crypto"
+                    algorithm = _detect_crypto_algorithm(fn_start)
+                    if algorithm and algorithm != "unknown":
+                        comment = f"{prefix}CRYPTO: {algorithm}"
+                        reason = "crypto"
                 except Exception:
                     pass
 

@@ -532,28 +532,6 @@ def test_module_entrypoints_delegate_to_server_main(monkeypatch):
     assert seen == ["called"]
 
 
-def test_installer_reranker_validation_and_python_warning(tmp_path, monkeypatch):
-    from ida_pro_mcp.installer import main as installer
-
-    monkeypatch.setattr(installer, "find_rerank_model", lambda *_a, **_k: "")
-    opts = InstallerOptions(download_rerank_model=True, rerank_profile="not-a-profile")
-    with pytest.raises(RuntimeError, match="Unknown rerank profile"):
-        installer._resolve_reranker_for_install(opts, tmp_path, InstallReport(), installer.UI(), semantic_enabled=True)
-
-    opts = InstallerOptions(download_rerank_model=True, rerank_profile="bge-reranker-v2-m3")
-    with pytest.raises(RuntimeError, match="non-commercial|license"):
-        installer._resolve_reranker_for_install(opts, tmp_path, InstallReport(), installer.UI(), semantic_enabled=True)
-
-    report = InstallReport()
-    modern = types.SimpleNamespace(version=(9, 4))
-    monkeypatch.setattr(installer._runtime, "python_environment_kind", lambda: "conda")
-    monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.installer.runtime", installer._runtime)
-    installer._warn_ida_python_compat(modern, report, installer.UI())
-    assert report.metadata["python_kind"] == "conda"
-    installer._warn_ida_python_compat(types.SimpleNamespace(version=(9, 3)), InstallReport(), installer.UI())
-    installer._warn_ida_python_compat(types.SimpleNamespace(version=("bad",)), InstallReport(), installer.UI())
-
-
 def test_installer_uninstall_removes_plugins_and_reports(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import clients as client_module, main as installer
 

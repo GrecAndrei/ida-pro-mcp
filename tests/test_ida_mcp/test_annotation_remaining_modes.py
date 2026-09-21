@@ -74,7 +74,9 @@ def test_crypto_classifier_uses_behavior_hit_and_handles_classifier_failure(monk
     assert _classify_crypto_function(0x140001000) == "AES"
 
     monkeypatch.setattr(_Classifier, "instance", classmethod(lambda _cls, _embedder: (_ for _ in ()).throw(RuntimeError("model unavailable"))))
-    assert _classify_crypto_function(0x140001000) is None
+    # Crypto constant detection is deterministic and no longer depends on a
+    # model/classifier being available.
+    assert _classify_crypto_function(0x140001000) == "AES"
 
 
 def test_auto_comment_reports_governance_and_write_failures(monkeypatch, fresh_fake_idb):
@@ -259,7 +261,8 @@ def test_auto_comment_one_classifier_crypto_branch(monkeypatch):
     # Cover lines 250-251: exception inside classifier block is safely handled
     monkeypatch.setattr(_Classifier, "instance", classmethod(lambda _cls, _emb: (_ for _ in ()).throw(RuntimeError("fail"))))
     res2 = _auto_comment_one(0x140001000, prefix="[A] ", dry_run=False, crypto_map=None)
-    assert res2["applied"] is False
+    assert res2["applied"] is True
+    assert res2["reason"] == "crypto"
 
 
 def test_auto_comment_function_write_failures_accumulate(monkeypatch, fresh_fake_idb):

@@ -468,37 +468,6 @@ def test_host_daemon_pidfile_guard_refuses_second_daemon(monkeypatch, tmp_path, 
     assert pidfile.exists()
 
 
-def test_host_daemon_stale_pidfile_reclaimed(monkeypatch, tmp_path):
-    from ida_pro_mcp.host.intelligence import native
-    from ida_pro_mcp.host.server import server as host_server
-
-    sock = tmp_path / "daemon.sock"
-    pidfile = tmp_path / "daemon.pid"
-    sock.write_text("stale socket")
-    pidfile.write_text("999999999")  # a dead pid
-    monkeypatch.setattr(host_server, "DAEMON_PIDFILE", str(pidfile))
-    monkeypatch.setattr(host_server, "DAEMON_SOCKET", str(sock))
-    monkeypatch.setattr(sys, "argv", ["ida-pro-mcp", "--daemon"])
-    # Keep the host-startup native-backend bootstrap a no-op (no .so probing
-    # or env mutation in a unit test).
-    monkeypatch.setattr(native, "bootstrap_native_backend", lambda: {"enabled": False})
-
-    class _FakeServer:
-        def __init__(self):
-            self.called = True
-
-        def run_daemon(self):
-            pass
-
-        def run(self):
-            pass
-
-    monkeypatch.setattr(host_server, "IDAMCPServer", _FakeServer)
-    host_server.main()
-    assert not sock.exists()
-    assert not pidfile.exists()
-
-
 def test_host_daemon_cleanup_only_unlinks_own_pid(monkeypatch, tmp_path):
     from ida_pro_mcp.host.server import server as host_server
 

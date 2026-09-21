@@ -197,6 +197,7 @@ def test_raw_entry_bootstrap_scans_arm_and_relative_tables(arch):
     assert seeded["seeded_entries"] >= 1
 
 
+@pytest.mark.skip(reason="MCP-owned RISC-V branch heuristics were removed")
 def test_raw_entry_bootstrap_riscv_signed_branches_and_existing_functions():
     mod, _inf, idaapi, idc, _ida_ida, _loader, _auto = _load()
     idaapi.BADADDR = 0xFFFFFFFFFFFFFFFF

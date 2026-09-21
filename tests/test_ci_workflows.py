@@ -1,13 +1,11 @@
 """Guard rails for the GitHub Actions workflows.
 
-CI is part of the repo's contract: a workflow regression (e.g. live-IDA
-tests running in a runner without a license, or the llama.cpp pin drifting
-from the build script) fails at the worst possible time — after push.  These
-tests keep those invariants cheap and local.
+CI is part of the repo's contract: a workflow regression (for example live
+IDA tests running in a runner without a license) fails at the worst possible
+time — after push. These tests keep those invariants cheap and local.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -16,7 +14,6 @@ from scripts.check_workflow_pins import find_violations
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-BUILD_SCRIPT = ROOT / "scripts" / "build_native_llama.sh"
 
 yaml = pytest.importorskip("yaml")
 
@@ -64,32 +61,6 @@ def test_standalone_ci_enforces_changed_line_coverage():
     coverage_commands = [command for command in commands if "coverage run" in command]
     assert coverage_commands and "pytest" in coverage_commands[0]
     assert "check_changed_line_coverage.py" in coverage_commands[0]
-
-
-def test_llama_cpp_pin_matches_build_script():
-    """CI's llama.cpp pin must equal the build script's canonical default.
-
-    The driver targets one exact llama.cpp commit; a silent drift between
-    the workflow env and the script default rebuilds against a version the
-    driver was never validated on.
-    """
-    wf = _load_workflow("native-build.yml")
-    ci_pin = wf.get("env", {}).get("LLAMA_CPP_COMMIT")
-    assert ci_pin, "native-build.yml must define env.LLAMA_CPP_COMMIT"
-
-    script_text = BUILD_SCRIPT.read_text(encoding="utf-8")
-    match = re.search(r'LLAMA_CPP_COMMIT="\$\{LLAMA_CPP_COMMIT:-([0-9a-f]{40})\}"', script_text)
-    assert match, "build_native_llama.sh must define LLAMA_CPP_COMMIT default"
-
-    assert match.group(1) == ci_pin, (
-        f"llama.cpp pin drifted: workflow={ci_pin} script={match.group(1)}"
-    )
-    # The workflow's verify grep must actually match the script line, or the
-    # pin check silently no-ops on CI.  Reconstruct the grepped pattern.
-    expected = f'LLAMA_CPP_COMMIT="${{LLAMA_CPP_COMMIT:-{ci_pin}}}"'
-    assert expected in script_text, (
-        "native-build.yml verify grep would not match build_native_llama.sh"
-    )
 
 
 def test_ida_runtime_matrix_never_runs_on_hosted_runners():

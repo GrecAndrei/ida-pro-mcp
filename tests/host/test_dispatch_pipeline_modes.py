@@ -111,7 +111,7 @@ def test_call_tool_composes_schema_rpc_stamp_and_postprocess(monkeypatch):
     )
     assert result == {"answer": 1, "ok": True, "processed": True}
     assert seed_calls == ["ABC12345"]
-    assert embedding_calls == [True]
+    assert embedding_calls == []
     assert postprocess_calls == [{"limit": 2, "_forwarded_offset": 1}]
     assert host._session_inflight_calls == {}
 

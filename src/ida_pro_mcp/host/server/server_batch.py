@@ -35,13 +35,10 @@ _LAZY_STATE_LOCK = threading.RLock()
 # behind a stuck worker (cancel() cannot free a running pool slot either).
 # Cap the effective wait so a stuck task degrades to a status poll instead.
 # Override with IDA_MCP_BG_WAIT_MAX_SECONDS.
-_BG_WAIT_MAX_SECONDS = _env_float(
-    "IDA_MCP_BG_WAIT_MAX_SECONDS", 3600.0, min_value=1.0
-)
+_BG_WAIT_MAX_SECONDS = _env_float("IDA_MCP_BG_WAIT_MAX_SECONDS", 3600.0, min_value=1.0)
 
 
 class BackgroundMixin(ServerClientStateMixin):
-
     def _bind_background_run(self, run_fn, *, session: Any = None):
         """Preserve submitting-client ownership for ThreadPoolExecutor workers."""
         ctx = contextvars.copy_context()
@@ -61,13 +58,8 @@ class BackgroundMixin(ServerClientStateMixin):
                         vertex_compat=bool(getattr(self, "default_vertex_compat", False)),
                     )
                     worker.owned_session_ids = set(getattr(parent, "owned_session_ids", set()) or set())
-                    worker.owned_sessions_by_agent = {
-                        name: set(ids)
-                        for name, ids in (getattr(parent, "owned_sessions_by_agent", {}) or {}).items()
-                    }
-                    worker.current_session_by_agent = dict(
-                        getattr(parent, "current_session_by_agent", {}) or {}
-                    )
+                    worker.owned_sessions_by_agent = {name: set(ids) for name, ids in (getattr(parent, "owned_sessions_by_agent", {}) or {}).items()}
+                    worker.current_session_by_agent = dict(getattr(parent, "current_session_by_agent", {}) or {})
                     # A background submission may be made while one agent is
                     # bound for the current call. Preserve that identity in
                     # the private worker state so its session and ownership
@@ -81,12 +73,8 @@ class BackgroundMixin(ServerClientStateMixin):
                             # retrieve the task's status/result via _bg_*.
                             active_agent = getattr(parent, "active_agent", None)
                             if active_agent:
-                                parent.owned_sessions_by_agent.setdefault(
-                                    active_agent, set()
-                                ).add(sid)
-                                worker.owned_sessions_by_agent.setdefault(
-                                    active_agent, set()
-                                ).add(sid)
+                                parent.owned_sessions_by_agent.setdefault(active_agent, set()).add(sid)
+                                worker.owned_sessions_by_agent.setdefault(active_agent, set()).add(sid)
                             else:
                                 parent.owned_session_ids.add(sid)
                                 worker.owned_session_ids.add(sid)
@@ -112,8 +100,15 @@ class BackgroundMixin(ServerClientStateMixin):
     @staticmethod
     def _semantic_load_profiles_compatible(left: Any, right: Any) -> bool:
         keys = {
-            "processor", "loader", "base", "base_address", "load_address",
-            "image_base", "bitness", "bits", "endian",
+            "processor",
+            "loader",
+            "base",
+            "base_address",
+            "load_address",
+            "image_base",
+            "bitness",
+            "bits",
+            "endian",
         }
         left_options = dict(getattr(left, "analysis_options", None) or {})
         right_options = dict(getattr(right, "analysis_options", None) or {})
@@ -148,16 +143,10 @@ class BackgroundMixin(ServerClientStateMixin):
             try:
                 with contextlib.closing(sqlite3.connect(path)) as conn:
                     total = int(conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()[0])
-                    columns = {
-                        str(row[1]) for row in conn.execute("PRAGMA table_info(func_embeddings)")
-                    }
+                    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(func_embeddings)")}
                     full = 0
                     if "index_quality" in columns:
-                        full = int(
-                            conn.execute(
-                                "SELECT COUNT(*) FROM func_embeddings WHERE index_quality='full'"
-                            ).fetchone()[0]
-                        )
+                        full = int(conn.execute("SELECT COUNT(*) FROM func_embeddings WHERE index_quality='full'").fetchone()[0])
                     return total, full
             except (OSError, sqlite3.Error, TypeError, ValueError):
                 return 0, 0
@@ -213,9 +202,7 @@ class BackgroundMixin(ServerClientStateMixin):
             source.backup(target)
             if os.path.isfile(session.idb_path):
                 idb_stat = os.stat(session.idb_path)
-                source_fingerprint = hashlib.sha256(
-                    f"{session.idb_path}:{idb_stat.st_size}:{idb_stat.st_mtime_ns}".encode()
-                ).hexdigest()
+                source_fingerprint = hashlib.sha256(f"{session.idb_path}:{idb_stat.st_size}:{idb_stat.st_mtime_ns}".encode()).hexdigest()
             else:
                 source_fingerprint = hashlib.sha256(str(session.idb_path).encode()).hexdigest()
             metadata = {
@@ -234,18 +221,20 @@ class BackgroundMixin(ServerClientStateMixin):
                 metadata.items(),
             )
             target.commit()
-        assembler = getattr(self, "assembler", None)
-        embedder = getattr(assembler, "_embedder", None)
-        if embedder is not None:
-            # FunctionEmbeddingIndex performs the authoritative model format,
-            # dimension, schema, and source-fingerprint compatibility check.
-            from ..intelligence.embeddings import FunctionEmbeddingIndex
-
-            validated = FunctionEmbeddingIndex(target_db, embedder)
-            if validated.size == 0 and total:
+        if total:
+            # Validate only that the copied SQLite store still contains
+            # deterministic signature rows. Do not reopen it with a model
+            # identity or delete legacy vector/evidence columns as a side
+            # effect of session reuse.
+            try:
+                with contextlib.closing(sqlite3.connect(target_db)) as check_conn:
+                    copied_count = int(check_conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()[0])
+            except (OSError, sqlite3.Error, TypeError, ValueError):
+                copied_count = 0
+            if copied_count == 0:
                 return {
                     "reused": False,
-                    "reason": "incompatible_embedding_profile",
+                    "reason": "incompatible_signature_index",
                     "from_session": str(source_session.session_id),
                     "binary_sha256": target_digest,
                 }
@@ -372,11 +361,7 @@ class BackgroundMixin(ServerClientStateMixin):
             total_limit = int(raw_total_limit) if raw_total_limit is not None else None
             initial_cursor = request_args.pop("start_after", None)
             request_args.pop("index_limit", None)
-            scope = {
-                key: request_args[key]
-                for key in ("start", "end", "addr", "radius", "ranges", "query", "min_size", "max_size")
-                if request_args.get(key) is not None
-            }
+            scope = {key: request_args[key] for key in ("start", "end", "addr", "radius", "ranges", "query", "min_size", "max_size") if request_args.get(key) is not None}
 
             def _run(task):
                 cursor = str(initial_cursor) if initial_cursor else None
@@ -465,10 +450,10 @@ class BackgroundMixin(ServerClientStateMixin):
                         if next_cursor == cursor and pass_attempted == 0:
                             raise RuntimeError("semantic index made no progress at the resume cursor")
                         if next_cursor == cursor:
-                            # The embedder failed every candidate in this pass
+                            # The signature index failed every candidate in this pass
                             # and returned the same resume cursor. Give the
                             # backend a bounded number of recovery passes (it
-                            # recycles a timed-out llama-server) before
+                            # recycles a timed-out child runtime) before
                             # abandoning the job as a partial, resumable
                             # result instead of spinning forever.
                             stall_count += 1
@@ -525,9 +510,7 @@ class BackgroundMixin(ServerClientStateMixin):
                                 "document_chars": document_chars,
                             },
                             "message": (
-                                "Semantic indexing stalled: the embedding backend made no "
-                                "forward progress for 3 consecutive passes. Resume with "
-                                f"start_after={cursor!r} once the embedder recovers."
+                                f"Signature indexing stalled: no forward progress for 3 consecutive passes. Resume with start_after={cursor!r} once the index is available."
                             ),
                         }
                     result = {
@@ -606,9 +589,7 @@ class BackgroundMixin(ServerClientStateMixin):
             "message": "Semantic indexing is running in the background; use ida_index_status with this task_id.",
         }
 
-    def _background_policy_preflight(
-        self, *, script: Any, tool_call: Any, purpose: Any = None
-    ) -> dict | None:
+    def _background_policy_preflight(self, *, script: Any, tool_call: Any, purpose: Any = None) -> dict | None:
         # Evaluate against the session's resolved policy mode (operator
         # baseline merged with the session's policy_mode), matching the gate
         # the synchronous dispatch path applies. Hardcoding "assist" made a
@@ -688,8 +669,7 @@ class BackgroundMixin(ServerClientStateMixin):
         if not script and not tool_call:
             return make_error(
                 MCPError.INVALID_ARGS,
-                "background submit requires 'script' (Python source) or 'tool_call' "
-                "(dict with 'tool', 'action', 'args' keys)",
+                "background submit requires 'script' (Python source) or 'tool_call' (dict with 'tool', 'action', 'args' keys)",
             )
         # Background work runs in a worker thread, which deliberately does
         # not inherit a daemon connection's context. Capture the submitting
@@ -717,9 +697,7 @@ class BackgroundMixin(ServerClientStateMixin):
             ownership_error = self._ensure_client_owns_session(target_session)
             if ownership_error:
                 return ownership_error
-        policy_error = self._background_policy_preflight(
-            script=script, tool_call=tool_call, purpose=args.get("_purpose")
-        )
+        policy_error = self._background_policy_preflight(script=script, tool_call=tool_call, purpose=args.get("_purpose"))
         if policy_error:
             return policy_error
         # Scripts are always rejected by _background_policy_preflight above, so
@@ -753,11 +731,7 @@ class BackgroundMixin(ServerClientStateMixin):
             session_id=session_id,
             run_fn=self._bind_background_run(
                 _run,
-                session=(
-                    target_session
-                    if target_session is not None
-                    else getattr(self, "current_session", None)
-                ),
+                session=(target_session if target_session is not None else getattr(self, "current_session", None)),
             ),
         )
         return {"task_id": task_id, "state": "pending"}

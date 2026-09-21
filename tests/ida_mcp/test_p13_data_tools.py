@@ -422,11 +422,12 @@ class TestRiscvGpRecommendation(unittest.TestCase):
             "is_be": False,
         }
         result = self.mod.idb_architecture_profile(meta=meta, summary={"imports": 0})
-        gp_recs = [r for r in result["recommendations"] if "set_reg_value" in r]
+        gp_recs = [r for r in result["recommendations"] if "analysis(action='set_gp'" in r]
         self.assertTrue(gp_recs, result["recommendations"])
         rec = gp_recs[0]
-        self.assertIn('idc.set_reg_value("gp", 0x2a1000, idc.BADADDR)', rec)
-        # The old double-format emitted a stray `.format(0x...)` at the end.
+        self.assertIn("analysis(action='set_gp', gp='0x2a1000')", rec)
+        # The recommendation is advisory; applying GP remains an explicit
+        # operator-reviewed action.
         self.assertNotIn(".format(", rec)
 
 
@@ -543,14 +544,14 @@ class TestIdbGpProbeKeyedOffProcessorName(unittest.TestCase):
         for processor in ("riscv", "riscv64"):
             result = self.mod.idb_architecture_profile(meta=self._meta(processor),
                                                        summary={"imports": 0})
-            gp_recs = [r for r in result["recommendations"] if "set_reg_value" in r]
+            gp_recs = [r for r in result["recommendations"] if "analysis(action='set_gp'" in r]
             self.assertTrue(gp_recs, (processor, result["recommendations"]))
-            self.assertIn('idc.set_reg_value("gp", 0x2a1000, idc.BADADDR)', gp_recs[0])
+            self.assertIn("analysis(action='set_gp', gp='0x2a1000')", gp_recs[0])
 
     def test_no_gp_probe_for_non_riscv_processor(self):
         result = self.mod.idb_architecture_profile(meta=self._meta("arm"),
                                                    summary={"imports": 0})
-        gp_recs = [r for r in result["recommendations"] if "set_reg_value" in r]
+        gp_recs = [r for r in result["recommendations"] if "analysis(action='set_gp'" in r]
         self.assertFalse(gp_recs)
 
 

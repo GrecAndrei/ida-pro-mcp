@@ -9,14 +9,14 @@ Choose the page that matches the job.
 | Move from discovery to a defensible conclusion | [A practical reverse-engineering workflow](reverse-engineering-workflow) |
 | Preserve evidence, uncertainty, and disagreement | [Findings, evidence, and conflicts](findings-and-evidence) |
 | Rename, annotate, patch, or reshape an IDB | [Safe IDB edits and rollback](safe-idb-edits) |
-| Search by names, strings, or behavior | [Search, embeddings, and reranking](search-and-retrieval) |
+| Search by names, strings, or behavior | [Search and retrieval](search-and-retrieval) |
 | Diagnose sessions, ownership, timeouts, or safe mode | [Sessions and troubleshooting](sessions-troubleshooting) |
 | Check behavior with a real IDA installation | [Live IDA validation](live-ida-validation) |
 | Find terminology and configuration pointers | [Reference and FAQ](reference-faq) |
 
 ## Tool Reference Manuals
 
-- [Discovery Operations (31 ops)](tools/discovery.md)
+- [Discovery Operations (24 ops)](tools/discovery.md)
 - [Code Operations (11 ops)](tools/code.md)
 - [Edit Operations (33 ops)](tools/edit.md)
 - [Types Operations](tools/types.md)

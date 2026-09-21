@@ -10,7 +10,8 @@ import round-trip.
 This module is deliberately small. It only keeps the three integration seams
 that other IDA-side modules call directly:
 
-  ``BlackboardStore``       - the IDA-side subclass (embedder wiring) that
+  ``BlackboardStore``       - the IDA-side subclass (deterministic lexical
+                              fallback wiring) that
                               calc/gadgets/code_helpers/search/intelligence
                               import via ``from .blackboard import BlackboardStore``
                               (and the guarded flat fallback form).
@@ -36,30 +37,30 @@ import json
 from typing import Any, Dict, List, Optional
 
 try:
-    from ._common import (
-        Any,
-        IDAError,
-        MCPError,
-        Optional,
-        idaread,
-        idawrite,
-        make_error,
-        tool
-    )
+    from ._common import Any, IDAError, MCPError, Optional, idaread, idawrite, make_error, tool
 except ImportError:
     # Host loads this file via spec_from_file_location as `_host_blackboard`,
     # which has no package parent — relative `_common` cannot resolve.
     pass
 
 if "tool" not in globals():
+
     def tool(f):
         return f  # type: ignore
+
+
 if "idaread" not in globals():
+
     def idaread(f):
         return f  # type: ignore
+
+
 if "idawrite" not in globals():
+
     def idawrite(f):
         return f  # type: ignore
+
+
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
@@ -68,14 +69,19 @@ if "IDAError" not in globals():
 # error envelope the real `_common` exports so the thin bridge and the
 # crawler-probe adapter degrade cleanly instead of raising NameError.
 if "make_error" not in globals():
+
     def make_error(code, message, **kw):  # type: ignore[no-redef]
         return {"ok": False, "code": code, "message": message, **kw}
+
+
 if "MCPError" not in globals():
+
     class MCPError:  # type: ignore[no-redef]  # noqa: D401
         INVALID_ARGS = "INVALID_ARGS"
         ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
         NOT_FOUND = "NOT_FOUND"
         IDA_ERROR = "IDA_ERROR"
+
 
 try:
     from ida_pro_mcp.services import BlackboardStore as _BaseBlackboardStore
@@ -87,15 +93,9 @@ except ImportError:
 
 
 def _get_embedder():
-    try:
-        from ida_pro_mcp.services import BgeCodeEmbedder
-        return BgeCodeEmbedder()
-    except ImportError:
-        try:
-            from host.intelligence.core import BgeCodeEmbedder  # type: ignore
-            return BgeCodeEmbedder()
-        except ImportError:
-            return None
+    # Blackboard retrieval must keep its lexical fallback and must not create a
+    # legacy local/Gemini/native model as a side effect.
+    return None
 
 
 class BlackboardStore(_BaseBlackboardStore):
@@ -106,6 +106,7 @@ class BlackboardStore(_BaseBlackboardStore):
 # ─────────────────────────────────────────────────────────────────────────────
 # related_by_behavior — internal recall action used by intelligence.search
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _related_by_behavior(
     store,
@@ -167,6 +168,7 @@ def _related_by_behavior(
 # MCP tool — thin bridge
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @tool
 def blackboard(
     action: str = "related_by_behavior",
@@ -213,6 +215,7 @@ def blackboard(
 # ─────────────────────────────────────────────────────────────────────────────
 # Crawler-probe adapter — in-IDA xref/symbol probes for the host orchestrator
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _probe_addr(addr: Any) -> str:
     """Normalize an address to a canonical ``0x...`` string, or ``""``."""

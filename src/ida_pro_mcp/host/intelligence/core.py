@@ -1,939 +1,29 @@
-"""
-Intelligence layer for IDA Pro MCP.
+"""Provider-only intelligence compatibility facade.
 
-Provides local embedding models through llama-server.
+The host no longer discovers, downloads, starts, or falls back to local,
+Gemini, or native inference models.  Intelligence questions go through the
+explicit provider registry; retrieval remains deterministic/lexical when a
+provider is disabled or unavailable.
 
-Architecture:
-  BgeCodeEmbedder      — compatibility name for the model-profile embedder
-  FunctionEmbeddingIndex — per-binary SQLite embedding store
-  BehaviorClassifier   — zero-shot via cosine sim to anchor descriptions
-  ContextAssembler     — orchestrates everything, produces context_pack per call
-
-Environment variables:
-  IDA_MCP_EMBED_SERVER_BIN   path to llama-server binary
-  IDA_MCP_EMBED_MODEL        path to .gguf file
-  IDA_MCP_EMBED_PORT         port (default: random 18100-19000)
-  IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
-  IDA_MCP_EMBED_BATCH_THREADS CPU threads for batched indexing (default: up to 16)
-  IDA_MCP_EMBED_PARALLEL     llama.cpp embedding slots (default: CPU-adaptive, up to 4)
-  IDA_MCP_EMBED_CTX          context tokens (default: 2048)
-  IDA_MCP_EMBED_IDLE_TIMEOUT seconds to retain an idle embedding server (default: 15)
-  IDA_MCP_EMBED_CACHE        bounded exact-text embedding cache (default: 4096)
-  IDA_MCP_DECOMP_DOCUMENT_FRACTION fraction of context used by full-decomp documents (default: 0.20)
-  IDA_MCP_DECOMP_DOCUMENT_CHARS explicit full-decomp document character budget
-  IDA_MCP_EMBED_DISABLED     set to 1 to disable semantic embeddings
-
-Manual override:
-  The installer (or a user) may write an `embedder.json` file under the
-  install root / cache dir / user config dir to pin a specific model and
-  server binary. This is the only way to override discovery when the
-  defaults are not on PATH and env vars cannot be set. See
-  `write_embedder_state()` and `_read_embedder_state()` for the schema.
-
-Discovery:
-  `_find_llama_server()` and `_find_model()` are fully cross-platform.
-  On Windows they look under the install root, %LOCALAPPDATA%\\Programs,
-  %USERPROFILE%\\scoop\\apps\\llama.cpp, %ProgramFiles%\\llama.cpp\\bin
-  and other conventional locations, and they accept `llama-server.exe`
-  alongside the bare `llama-server` name everywhere.
+``BgeCodeEmbedder`` and ``BehaviorClassifier`` remain import-compatible names
+for the indexing and session layers.  They deliberately never manufacture
+vectors or select a legacy backend.
 """
 
 from __future__ import annotations
 
-import atexit
-import contextlib
-import glob
-import hashlib
-import json
-import math
-import os
 import re
-import shutil
-import socket
-import stat
-import subprocess
-import sys
-import tempfile
-import threading
-import time
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any
 
 from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
-from .gemini import GEMINI_MAX_DIM, GEMINI_MIN_DIM, GeminiEmbedBackend
-from .helpers import _EmbedResult, cosine_similarity, decomp_document_char_budget
-from .model_profiles import (
-    BGE_CODE_V1,
-    EmbeddingModelProfile,
-    get_model_profile,
-    model_dimension,
-    profile_from_model,
-)
+from .helpers import _EmbedResult, cosine_similarity
+from .providers import provider_error_payload, provider_status, resolve_provider
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────────────────────────────────────
+# Kept as a runtime feature flag for callers that use the old symbol.  The
+# provider architecture intentionally never enables embedding-first ranking.
+INTEL_PROFILE = False
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-
-try:
-    from ..config import CACHE_DIR
-except ImportError:
-    try:
-        from host.config import CACHE_DIR
-    except ImportError:
-        CACHE_DIR = os.path.join(os.path.expanduser("~"), ".local", "state", "ida-pro-mcp")
-
-os.makedirs(CACHE_DIR, exist_ok=True)
-_EMBED_LEASE_FILE = os.path.join(CACHE_DIR, "ida-mcp-embed-server-lease.json")
-_MODEL_PATH_CACHE: tuple[str, str] | None = None
-_EMBED_CACHE_INIT_LOCK = threading.Lock()
-
-
-def hash_file(path: str, max_bytes: int | None = None) -> str:
-    h = hashlib.sha256()
-    read_bytes = 0
-    with open(path, "rb") as f:
-        while True:
-            chunk_size = 1024 * 1024
-            if max_bytes is not None:
-                remaining = max_bytes - read_bytes
-                if remaining <= 0:
-                    break
-                chunk_size = min(chunk_size, remaining)
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-            read_bytes += len(chunk)
-    return h.hexdigest()
-
-
-def _file_fingerprint(path: str, deep_hash: bool = False) -> dict:
-    out = {
-        "path": path,
-        "exists": False,
-        "size": 0,
-        "mtime_ns": 0,
-        "sha256_head_16mb": "",
-    }
-    if not path or not os.path.isfile(path):
-        return out
-    st = os.stat(path)
-    out["exists"] = True
-    out["size"] = int(st.st_size)
-    out["mtime_ns"] = int(st.st_mtime_ns)
-    try:
-        out["sha256_head_16mb"] = hash_file(path, max_bytes=16 * 1024 * 1024)
-    except OSError:
-        out["sha256_head_16mb"] = ""
-    if deep_hash:
-        try:
-            out["sha256_full"] = hash_file(path)
-        except OSError:
-            out["sha256_full"] = ""
-    return out
-
-
-def model_fingerprint(path: str, deep_hash: bool = False) -> dict:
-    return _file_fingerprint(path, deep_hash=deep_hash)
-
-
-def server_fingerprint(path: str, deep_hash: bool = False) -> dict:
-    return _file_fingerprint(path, deep_hash=deep_hash)
-
-def _install_root() -> str:
-    """Compute the installer-managed install root.
-
-    Mirrors `installer.runtime.get_install_root()` but is inlined here so the
-    host does not pull in installer (which would create a circular import —
-    the installer itself imports this module).
-    """
-    override = os.environ.get("IDA_PRO_MCP_HOME")
-    if override:
-        return os.path.realpath(os.path.expanduser(override))
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(
-            str(Path.home()), "AppData", "Local"
-        )
-        return os.path.realpath(os.path.join(base, "ida-pro-mcp"))
-    return os.path.realpath(
-        os.path.join(str(Path.home()), ".local", "share", "ida-pro-mcp")
-    )
-
-
-def _llama_server_binary_names() -> tuple[str, ...]:
-    """Return the platform-appropriate binary name variants for llama-server."""
-    if sys.platform == "win32":
-        return ("llama-server.exe", "llama-server")
-    return ("llama-server", "llama-server.exe")
-
-
-def _is_executable(path: str) -> bool:
-    """Cross-platform 'is this a runnable binary' check.
-
-    On Windows `os.access(path, os.X_OK)` is a no-op (any existing file
-    passes), so we also require a recognized executable extension.
-    """
-    if not path or not os.path.isfile(path):
-        return False
-    if sys.platform == "win32":
-        low = path.lower()
-        return low.endswith((".exe", ".bat", ".cmd"))
-    return os.access(path, os.X_OK)
-
-
-def _detect_gpu_device(server_bin: str) -> str:
-    """Return a llama.cpp device name to offload embeddings to, or ``""``.
-
-    ``llama-server --list-devices`` prints lines like
-    ``Vulkan0: Intel(R) UHD Graphics 620 (WHL GT2) (... MiB, ... MiB free)``.
-    We prefer the first Vulkan device — GPU prefill/encode on a modern
-    embedding model is typically an order of magnitude faster than CPU on a
-    shared-memory laptop, and frees the CPU threads.  ``""`` means "let
-    llama.cpp use its default (CPU) device" and is what callers fall back to
-    when the binary is CPU-only or the probe fails.
-
-    The probe runs the binary with ``--list-devices`` once and caches nothing:
-    it is cheap (the process exits immediately) and avoids a stale device list
-    if the GPU stack changes while the host is running.
-    """
-    if not server_bin or not _is_executable(server_bin):
-        return ""
-    try:
-        proc = subprocess.run(
-            [server_bin, "--list-devices"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except Exception:
-        return ""
-    for line in (proc.stdout or "").splitlines():
-        line = line.strip()
-        # "Vulkan0: Intel(R) UHD Graphics 620 ..."
-        if line.lower().startswith("vulkan") and ":" in line:
-            dev = line.split(":", 1)[0].strip()
-            if dev:
-                return dev
-    return ""
-
-
-EMBEDDER_STATE_FILE = "embedder.json"
-
-
-def _split_env_paths(value: str) -> list[str]:
-    """Split a path-list environment value without breaking Windows drives."""
-    if not value:
-        return []
-    # On Windows, `:` is part of a drive-qualified path and the native path
-    # list separator is `;`. POSIX keeps accepting both forms for compatibility
-    # with existing configs and shell conventions.
-    if os.pathsep == ";":
-        return value.split(";")
-    return re.split(r"[;:]", value)
-
-
-def _read_embedder_state() -> dict:
-    """Load the optional manual-override `embedder.json` config file.
-
-    The file may live in any of (first match wins):
-      1. <install_root>/embedder.json      — written by the installer
-      2. <cache_dir>/embedder.json         — runtime override
-      3. <user-config>/ida-pro-mcp/embedder.json
-         - Windows: %APPDATA%\\ida-pro-mcp
-         - POSIX:   $XDG_CONFIG_HOME/ida-pro-mcp  or  ~/.config/ida-pro-mcp
-    """
-    candidates: list[str] = []
-    with contextlib.suppress(Exception):
-        candidates.append(os.path.join(_install_root(), EMBEDDER_STATE_FILE))
-    with contextlib.suppress(Exception):
-        candidates.append(os.path.join(CACHE_DIR, EMBEDDER_STATE_FILE))
-    try:
-        if sys.platform == "win32":
-            appdata = os.environ.get("APPDATA") or os.path.join(
-                str(Path.home()), "AppData", "Roaming"
-            )
-            candidates.append(os.path.join(appdata, "ida-pro-mcp", EMBEDDER_STATE_FILE))
-        else:
-            xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-                str(Path.home()), ".config"
-            )
-            candidates.append(os.path.join(xdg, "ida-pro-mcp", EMBEDDER_STATE_FILE))
-    except Exception:
-        pass
-    for p in candidates:
-        if not p or not os.path.isfile(p):
-            continue
-        try:
-            with open(p, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(data, dict):
-            data.setdefault("_source", p)
-            return data
-    return {}
-
-
-def _select_state_path(value: Any) -> str:
-    """Resolve a `embedder.json` override into a concrete file path.
-
-    Accepts a single string or a list of strings (the first existing file
-    wins). Expands ~ and env vars. Returns "" if nothing usable.
-    """
-    if value is None or value is False:
-        return ""
-    if isinstance(value, str):
-        candidates: list[str] = [value]
-    elif isinstance(value, list):
-        candidates = [str(x) for x in value if x]
-    else:
-        return ""
-    for c in candidates:
-        try:
-            expanded = os.path.expandvars(os.path.expanduser(c))
-        except Exception:
-            continue
-        if os.path.isfile(expanded):
-            return os.path.abspath(expanded)
-    return ""
-
-
-def _reject_symlinked_state_path(path: str) -> None:
-    """Reject a state path or existing parent that is a symlink."""
-    current = os.path.abspath(os.path.expanduser(path))
-    while True:
-        if os.path.islink(current):
-            raise RuntimeError(f"Refusing symlinked embedder state path: {current}")
-        parent = os.path.dirname(current)
-        if parent == current:
-            return
-        current = parent
-
-
-def write_embedder_state(
-    install_root: str | os.PathLike,
-    *,
-    model_path: str = "",
-    server_bin: str = "",
-    profile: str = "",
-    backend: str = "",
-    gemini_model: str = "",
-    gemini_dimension: int = 0,
-    gemini_vertex_project: str = "",
-    gemini_vertex_location: str = "",
-    disabled: bool | None = None,
-    rerank: dict[str, Any] | None = None,
-) -> str:
-    """Persist a manual embedder override to `<install_root>/embedder.json`.
-
-    Mirrors the installer pattern used for `ida-install.json` so a user (or
-    a future installer subcommand) can pin the llama-server binary and an
-    embedding GGUF (e.g. qwen3-embedding-0.6b) without relying on env vars or
-    PATH.
-
-    ``backend="gemini"`` opts into the cloud Gemini embedder; the gemini_*
-    fields carry model/dimension/Vertex routing only — **the API key is never
-    written to this file** (it lives in the environment or the MCP client
-    config env block).
-
-    ``rerank`` is an optional nested dict ({model_path, profile, enabled})
-    pinning the cross-encoder reranker; the host reads it via
-    ``rerank._read_rerank_state()``.
-
-    Returns the path of the written file.
-    """
-    root = os.path.abspath(os.path.expanduser(os.fspath(install_root)))
-    _reject_symlinked_state_path(root)
-    os.makedirs(root, exist_ok=True)
-    state_path = os.path.join(root, EMBEDDER_STATE_FILE)
-    _reject_symlinked_state_path(state_path)
-    payload: dict[str, Any] = {
-        "updated_at": __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc
-        ).isoformat(),
-    }
-    if model_path:
-        payload["model_path"] = os.path.abspath(os.path.expanduser(model_path))
-    if server_bin:
-        payload["server_bin"] = os.path.abspath(os.path.expanduser(server_bin))
-    if profile:
-        selected = get_model_profile(profile)
-        if selected is None and profile != "custom":
-            raise ValueError(f"unknown embedding model profile: {profile}")
-        payload["profile"] = profile
-    if backend:
-        backend_key = str(backend).strip().lower()
-        if backend_key not in ("local", "gemini", "cloud"):
-            raise ValueError(f"unknown embedding backend: {backend}")
-        payload["backend"] = "gemini" if backend_key == "cloud" else backend_key
-    if gemini_model:
-        payload["gemini_model"] = str(gemini_model)
-    if gemini_dimension:
-        payload["gemini_dimension"] = max(GEMINI_MIN_DIM, min(GEMINI_MAX_DIM, int(gemini_dimension)))
-    if gemini_vertex_project:
-        payload["gemini_vertex_project"] = str(gemini_vertex_project)
-    if gemini_vertex_location:
-        payload["gemini_vertex_location"] = str(gemini_vertex_location)
-    if disabled is not None:
-        payload["disabled"] = bool(disabled)
-    if rerank is not None:
-        payload["rerank"] = {k: v for k, v in rerank.items() if v is not None and v != ""}
-    temporary_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            delete=False,
-            dir=root,
-            prefix=".embedder.",
-            suffix=".tmp",
-        ) as handle:
-            temporary_path = handle.name
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(temporary_path, state_path)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(temporary_path)
-    return state_path
-
-
-def _find_llama_server() -> str:
-    """Locate llama-server binary.
-
-    Resolution order:
-      1. `IDA_MCP_EMBED_SERVER_BIN` env var (string or `;`-separated list)
-      2. Manual override in `embedder.json` (`server_bin`)
-      3. Install root: `<install_root>/bin/llama-server[.exe]`,
-         `<install_root>/llama-server[.exe]`
-      4. Per-platform conventional install dirs
-         - Linux:  `~/.local/bin`, `/usr/local/bin`, `/usr/bin`
-         - macOS:  `/usr/local/bin`, `/opt/homebrew/bin`, `/opt/local/bin`
-         - Windows: %ProgramFiles%\\llama.cpp\\bin,
-                    %ProgramFiles(x86)%\\llama.cpp\\bin,
-                    %LOCALAPPDATA%\\Programs\\llama.cpp\\bin,
-                    %USERPROFILE%\\scoop\\apps\\llama.cpp\\current,
-                    %USERPROFILE%\\scoop\\apps\\llama.cpp\\current\\bin
-      5. `shutil.which()` for both `llama-server` and `llama-server.exe`
-      6. Project-local: `<project>/bin/llama-server[.exe]`,
-         `<project>/llama-server[.exe]`
-    """
-    def _accept(path: str) -> str:
-        if not path:
-            return ""
-        try:
-            expanded = os.path.expandvars(os.path.expanduser(path))
-        except Exception:
-            return ""
-        if _is_executable(expanded):
-            return os.path.abspath(expanded)
-        # Allow directory pointers: if a directory is supplied, scan it.
-        if os.path.isdir(expanded):
-            for n in _llama_server_binary_names():
-                cand = os.path.join(expanded, n)
-                if _is_executable(cand):
-                    return os.path.abspath(cand)
-        return ""
-
-    # 1) explicit env var (string or list)
-    env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
-    if env_val:
-        for piece in _split_env_paths(env_val):
-            out = _accept(piece.strip())
-            if out:
-                return out
-
-    # 2) embedder.json manual override
-    state = _read_embedder_state()
-    manual = _select_state_path(state.get("server_bin"))
-    if manual:
-        return manual
-
-    # 3–4) install root and per-platform conventional directories
-    install_root = _install_root()
-    home = str(Path.home())
-    roots: list[str] = [install_root, os.path.join(install_root, "bin")]
-    if sys.platform == "win32":
-        roots.extend(
-            [
-                os.path.join(home, "scoop", "apps", "llama.cpp", "current"),
-                os.path.join(home, "scoop", "apps", "llama.cpp", "current", "bin"),
-                os.path.join(
-                    os.environ.get("ProgramFiles", r"C:\Program Files"),
-                    "llama.cpp",
-                    "bin",
-                ),
-                os.path.join(
-                    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                    "llama.cpp",
-                    "bin",
-                ),
-                os.path.join(
-                    os.environ.get("LOCALAPPDATA", ""), "Programs", "llama.cpp", "bin"
-                ),
-                os.path.join(
-                    os.environ.get("LOCALAPPDATA", ""), "Programs", "llama.cpp"
-                ),
-            ]
-        )
-    elif sys.platform == "darwin":
-        roots.extend(
-            [
-                os.path.join(home, ".local", "bin"),
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-                "/opt/local/bin",
-                "/usr/bin",
-            ]
-        )
-    else:
-        roots.extend(
-            [
-                os.path.join(home, ".local", "bin"),
-                "/usr/local/bin",
-                "/usr/bin",
-            ]
-        )
-
-    seen: set[str] = set()
-    for root in roots:
-        if not root or not os.path.isdir(root):
-            continue
-        for n in _llama_server_binary_names():
-            cand = os.path.join(root, n)
-            ap = os.path.abspath(cand)
-            if ap in seen:
-                continue
-            seen.add(ap)
-            if _is_executable(cand):
-                return ap
-
-    # 5) PATH lookup for both name variants
-    for n in _llama_server_binary_names():
-        resolved = shutil.which(n)
-        if resolved and _is_executable(resolved):
-            return os.path.abspath(resolved)
-
-    # 6) project-local candidates
-    for n in _llama_server_binary_names():
-        for c in (
-            os.path.join(_PROJECT_ROOT, "bin", n),
-            os.path.join(_PROJECT_ROOT, n),
-        ):
-            if _is_executable(c):
-                return os.path.abspath(c)
-
-    return ""  # semantic embeddings remain unavailable
-
-
-def _prefer_q4() -> bool:
-    """Prefer Q4_K_M weight files over Q8_0 when both are installed.
-
-    Q4_K_M is ~1.6x smaller than Q8_0 for the 0.6B embed/rerank models, so on
-    the bandwidth-bound CPU decode path it streams ~1.6x fewer weight bytes —
-    at a small retrieval-quality cost.  Set ``IDA_MCP_Q4=0`` to force the
-    higher-precision Q8_0 files instead.  Explicit ``IDA_MCP_*_MODEL`` and
-    state-file model paths are always honored as-is (this only ranks the
-    glob-discovered candidates).
-    """
-    return os.environ.get("IDA_MCP_Q4", "1").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
-def _model_quant_rank(path: str) -> int:
-    """Sort key for glob-discovered GGUF candidates: preferred quant first.
-
-    Returns 0 for the preferred quant (Q4_K_M by default, Q8_0 when
-    ``_prefer_q4()`` is off), 1 for the other known quant, 2 for anything
-    else.  Keeps model selection deterministic regardless of glob order.
-    """
-    low = path.lower()
-    q4 = "q4_k_m" in low or "q4km" in low
-    q8 = "q8_0" in low or "q8" in low
-    if _prefer_q4():
-        return 0 if q4 else (1 if q8 else 2)
-    return 0 if q8 else (1 if q4 else 2)
-
-
-def _find_model() -> str:
-    """Locate the embedding GGUF model.
-
-    Resolution order:
-      1. `IDA_MCP_EMBED_MODEL` env var (string or `;`-separated list)
-      2. Manual override in `embedder.json` (`model_path`)
-      3. Project-local model files matching the selected profile
-      4. Install-root model files matching the selected profile
-      5. User home: `~/models`, `~/Downloads`, `~/Documents`
-      6. Hugging Face cache snapshots matching the selected profile
-
-    Glob-discovered candidates prefer the Q4_K_M quant when both it and Q8_0
-    are present (see ``_prefer_q4``).
-    """
-    global _MODEL_PATH_CACHE
-    state = _read_embedder_state()
-    requested_profile = str(
-        os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "qwen3-embedding-0.6b"
-    ).strip().lower()
-    requested_profile = (get_model_profile(requested_profile) or BGE_CODE_V1).key
-    # Discovery inputs are part of the identity: a path cached before the
-    # user switches IDA_MCP_EMBED_MODEL, changes embedder.json, or enables Q4
-    # must not be served. Never reuse a negative result either; installers and
-    # model downloaders commonly create the GGUF after the first probe.
-    cache_key = repr(
-        (
-            requested_profile,
-            _prefer_q4(),
-            os.environ.get("IDA_MCP_EMBED_MODEL", ""),
-            str(state.get("model_path") or ""),
-            str(state.get("profile") or ""),
-        )
-    )
-    if _MODEL_PATH_CACHE is not None and _MODEL_PATH_CACHE[0] == cache_key:
-        cached_path = _MODEL_PATH_CACHE[1]
-        if cached_path and os.path.isfile(cached_path):
-            return cached_path
-
-    # 1) explicit env var
-    env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "")
-    if env_val:
-        for piece in _split_env_paths(env_val):
-            cand = piece.strip()
-            if not cand:
-                continue
-            try:
-                expanded = os.path.expandvars(os.path.expanduser(cand))
-            except Exception:
-                continue
-            if os.path.isfile(expanded):
-                selected = os.path.abspath(expanded)
-                _MODEL_PATH_CACHE = (cache_key, selected)
-                return selected
-
-    # 2) embedder.json manual override
-    manual = _select_state_path(state.get("model_path"))
-    state_profile = str(state.get("profile") or "").strip().lower()
-    if state_profile:
-        state_profile = (get_model_profile(state_profile) or BGE_CODE_V1).key
-    if manual and (
-        (
-            not state_profile
-            and profile_from_model(manual).key == requested_profile
-        )
-        or state_profile == requested_profile
-    ):
-        _MODEL_PATH_CACHE = (cache_key, manual)
-        return manual
-
-    home = str(Path.home())
-    install_root = _install_root()
-    candidates: list[str] = []
-    profile = get_model_profile(requested_profile) or BGE_CODE_V1
-    model_filenames = profile.filename_patterns
-    if not model_filenames:
-        _MODEL_PATH_CACHE = (cache_key, "")
-        return ""
-    bases = [_PROJECT_ROOT, install_root, os.path.join(install_root, "models"),
-             os.path.join(home, "models"),
-             os.path.join(home, "Downloads"),
-             os.path.join(home, "Documents")]
-    for base in bases:
-        if not base:
-            continue
-        for pattern in model_filenames:
-            candidates.extend(glob.glob(os.path.join(base, pattern)))
-    candidates.sort(key=_model_quant_rank)
-
-    seen: set[str] = set()
-    for c in candidates:
-        try:
-            p = os.path.abspath(c)
-        except Exception:
-            continue
-        if p in seen:
-            continue
-        seen.add(p)
-        if os.path.isfile(p):
-            _MODEL_PATH_CACHE = (cache_key, p)
-            return p
-
-    # 6) Hugging Face cache snapshots for local model files
-    hf_root = os.path.join(home, ".cache", "huggingface", "hub")
-    if os.path.isdir(hf_root):
-        for p in glob.glob(
-            os.path.join(hf_root, "models--*", "snapshots", "*", model_filenames[0])
-        ):
-            if os.path.isfile(p):
-                selected = os.path.abspath(p)
-                _MODEL_PATH_CACHE = (cache_key, selected)
-                return selected
-
-    # 7) Legacy fallback: if the selected (default) profile has no model yet,
-    # accept an older bge-code-v1 install so embedding keeps working instead of
-    # silently going unavailable.  Explicitly-requested profiles still win above.
-    if requested_profile != BGE_CODE_V1.key:
-        for base in bases:
-            if not base:
-                continue
-            for pattern in BGE_CODE_V1.filename_patterns:
-                candidates.extend(glob.glob(os.path.join(base, pattern)))
-        candidates.sort(key=_model_quant_rank)
-        for c in candidates:
-            try:
-                p = os.path.abspath(c)
-            except Exception:
-                continue
-            if os.path.isfile(p):
-                _MODEL_PATH_CACHE = (cache_key, p)
-                return p
-
-    _MODEL_PATH_CACHE = (cache_key, "")
-    return ""
-
-
-def _safe_int_env(key: str, default: str) -> int:
-    try:
-        return int(os.environ.get(key, default))
-    except (ValueError, TypeError):
-        return int(default)
-
-
-def _safe_float_env(key: str, default: str) -> float:
-    try:
-        value = float(os.environ.get(key, default))
-    except (ValueError, TypeError):
-        return float(default)
-    return value if math.isfinite(value) else float(default)
-
-
-def _llama_context_layout(
-    per_sequence_ctx: int,
-    requested_parallel: int,
-    *,
-    max_total_ctx: int = 32768,
-) -> tuple[int, int, int]:
-    """Return ``(slot_ctx, parallel, total_ctx)`` for llama-server.
-
-    llama.cpp divides ``--ctx-size`` across ``--parallel`` slots. Keeping the
-    per-sequence budget as the source of truth prevents the server from
-    silently shrinking a requested context when the two flags disagree.
-    ``batch-size`` and ``ubatch-size`` use the resulting slot size as well.
-    """
-    total_limit = max(1, int(max_total_ctx))
-    slot_ctx = min(total_limit, max(512, int(per_sequence_ctx)))
-    parallel = max(1, int(requested_parallel))
-    if slot_ctx * parallel > total_limit:
-        parallel = max(1, total_limit // slot_ctx)
-    return slot_ctx, parallel, slot_ctx * parallel
-
-
-# Bounded cold-start for block=True anchor classification.  Embedding all
-# ~60 behavior anchors inline costs ~5-8s each on a CPU box (minutes total),
-# which a caller experiences as a hang.  classify() embeds anchors only up to
-# this budget and returns the partial classification; the persistent anchor
-# cache (keyed by model identity) makes that cost one-time per model.
-ANCHOR_EMBED_BUDGET_SEC = max(1.0, _safe_float_env("IDA_MCP_ANCHOR_EMBED_BUDGET_SEC", "20.0"))
-
-
-def _available_cpu_count() -> int:
-    """Return CPUs usable by this process, respecting Linux CPU affinity."""
-    get_affinity = getattr(os, "sched_getaffinity", None)
-    if get_affinity is not None:
-        try:
-            count = len(get_affinity(0))
-            if count > 0:
-                return count
-        except OSError:
-            pass
-    return max(1, os.cpu_count() or 1)
-
-
-_EMBED_CPU_COUNT = _available_cpu_count()
-EMBED_CTX = _safe_int_env("IDA_MCP_EMBED_CTX", "2048")
-EMBED_CHARS_PER_TOKEN = _safe_float_env("IDA_MCP_EMBED_CHARS_PER_TOKEN", "3.0")
-DECOMP_DOCUMENT_FRACTION = _safe_float_env("IDA_MCP_DECOMP_DOCUMENT_FRACTION", "0.20")
-DECOMP_DOCUMENT_CHARS = _safe_int_env("IDA_MCP_DECOMP_DOCUMENT_CHARS", "0")
-EMBED_THREADS = _safe_int_env(
-    "IDA_MCP_EMBED_THREADS",
-    str(max(1, _EMBED_CPU_COUNT // 2))
-)
-# Indexing submits multiple full function signatures at once.  llama.cpp can
-# use more CPU threads for that batch work than for latency-sensitive one-off
-# semantic queries.  Cap the default so high-core machines remain usable.
-EMBED_BATCH_THREADS = _safe_int_env(
-    "IDA_MCP_EMBED_BATCH_THREADS",
-    str(min(16, _EMBED_CPU_COUNT)),
-)
-# An array sent to llama.cpp's /embeddings endpoint only runs concurrently
-# when it has multiple sequence slots.  ``--parallel 1`` made our client-side
-# batches effectively serial and could turn a small fast-index commit into a
-# minute-long request. Four slots is a good CPU default for the small local
-# models, while the env var remains an explicit escape hatch for tight boxes.
-EMBED_PARALLEL = max(1, min(4, _safe_int_env(
-    "IDA_MCP_EMBED_PARALLEL", str(max(1, _EMBED_CPU_COUNT // 2))
-)))
-EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "15.0")
-# A batch contains full decompilations, so it can legitimately take longer
-# than the interactive single-query deadline.  Keep the two independently
-# tunable: search stays responsive while indexing can complete on CPU-only
-# hosts.
-EMBED_BATCH_REQUEST_TIMEOUT = _safe_float_env(
-    "IDA_MCP_EMBED_BATCH_REQUEST_TIMEOUT", "60.0"
-)
-EMBED_LOCK_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_LOCK_TIMEOUT", "30.0")
-EMBED_MAX_REQUESTS = _safe_int_env("IDA_MCP_EMBED_MAX_REQUESTS", "512")
-EMBED_MAX_RSS_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_MB", "0")
-EMBED_MAX_RSS_GROWTH_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_GROWTH_MB", "768")
-EMBED_MAX_FAILURES = _safe_int_env("IDA_MCP_EMBED_MAX_FAILURES", "2")
-# Exact embedding results are cheap to retain (a 1024-dimension vector is
-# only a few KB) and repeated semantic queries are common in an agent loop.
-# Keep this bounded; 0 disables the compatibility-path cache.
-EMBED_CACHE_MAX = max(0, _safe_int_env("IDA_MCP_EMBED_CACHE", "4096"))
-# Keep the large CPU model process only while it is useful.  Some llama.cpp
-# builds can retain a busy worker after a cancelled request, so an idle
-# server is both unnecessary memory pressure and a reliability risk.
-EMBED_IDLE_TIMEOUT = max(0.0, _safe_float_env("IDA_MCP_EMBED_IDLE_TIMEOUT", "15.0"))
-# An explicit operation can spend a little time decompiling before its first
-# embedding request.  Give that first request a longer grace period; every
-# completed request switches back to the normal short idle timeout above.
-EMBED_ACTIVATION_GRACE_TIMEOUT = max(
-    EMBED_IDLE_TIMEOUT,
-    _safe_float_env("IDA_MCP_EMBED_ACTIVATION_GRACE_TIMEOUT", "60.0"),
-)
-EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
-INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
-
-_EMBED_LEASE_SCHEMA = 2
-
-
-def _embed_request_lock_path() -> str:
-    """Keep the queue lock colocated with an overridable lease file."""
-    return _EMBED_LEASE_FILE + ".request.lock"
-
-
-def _embed_start_lock_path() -> str:
-    """Serialize lease check/start across independent MCP host processes."""
-    return _EMBED_LEASE_FILE + ".startup.lock"
-
-
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def _lease_pid(value: object) -> int:
-    """Parse a persisted subprocess PID without truncating unsafe values."""
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return value if value > 0 else 0
-    if isinstance(value, str):
-        value = value.strip()
-        if value.isascii() and value.isdigit():
-            with contextlib.suppress(ValueError):
-                return int(value)
-    return 0
-
-
-def _process_command(pid: int) -> str:
-    if sys.platform.startswith("linux"):
-        try:
-            return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(
-                "utf-8", errors="replace"
-            ).strip()
-        except OSError:
-            return ""
-    return ""
-
-
-def _process_start_token(pid: int) -> str:
-    if sys.platform.startswith("linux"):
-        try:
-            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
-            return fields[21] if len(fields) > 21 else ""
-        except OSError:
-            return ""
-    return ""
-
-
-def _process_rss_bytes(pid: int) -> int:
-    if sys.platform.startswith("linux"):
-        try:
-            for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) * 1024
-        except (OSError, ValueError, IndexError):
-            pass
-    return 0
-
-
-class EmbeddingQueueTimeout(TimeoutError):
-    """The shared embedder is busy, but has not failed or been abandoned."""
-
-
-class _InterProcessLock:
-    """Small cross-platform advisory file lock with a bounded wait."""
-
-    def __init__(self, path: str, timeout: float):
-        self.path = path
-        self.timeout = max(0.0, timeout)
-        self.handle = None
-
-    def __enter__(self):
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        self.handle = open(self.path, "a+b")
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                if sys.platform == "win32":
-                    import msvcrt
-                    self.handle.seek(0)
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return self
-            except (BlockingIOError, OSError):
-                if time.monotonic() >= deadline:
-                    self.handle.close()
-                    self.handle = None
-                    raise EmbeddingQueueTimeout("embedding request queue is busy") from None
-                time.sleep(0.05)
-
-    def __exit__(self, exc_type, exc, tb):
-        if self.handle is None:
-            return False
-        try:
-            if sys.platform == "win32":
-                import msvcrt
-                self.handle.seek(0)
-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            self.handle.close()
-            self.handle = None
-        return False
-
-
-_IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
+_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
@@ -942,1454 +32,215 @@ def _identifier_terms(ident: str) -> list[str]:
     for chunk in re.split(r"[_\W]+", str(ident or "")):
         if not chunk:
             continue
-        split = [p for p in _CAMEL_BOUNDARY_RE.split(chunk) if p]
-        if len(split) == 1:
-            terms.append(chunk)
-        else:
-            terms.extend(split)
-    return terms
+        terms.extend(part for part in _CAMEL_BOUNDARY_RE.split(chunk) if part)
+    return terms or ([ident] if ident else [])
 
 
 def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
-    """
-    Extract a compact behavioral signature from decompiled pseudocode.
-
-    Keeps only meaningful identifiers (function calls, constants, API names)
-    and drops noise tokens so the embedding focuses on behavioral content.
-    This gives ~5-10x better cosine similarity against short behavior anchors
-    than embedding the full pseudocode.
-
-    Example: "int aes_encrypt(uint8_t *buf, uint32_t *rk) { sub_bytes(state); ..."
-    → "aes_encrypt sub_bytes shift_rows mix_columns add_round_key key_schedule"
-    """
-    idents = _IDENT_RE.findall(pseudocode)
-    seen: set = set()
-    out: list = []
-    for ident in idents:
+    """Return a bounded identifier/API signature without retaining code text."""
+    seen: set[str] = set()
+    output: list[str] = []
+    # Do not forward literal contents (which may contain credentials or
+    # operator data); signatures use identifiers and API names only.
+    text = re.sub(r"(?s)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')", " ", str(pseudocode or ""))
+    for ident in _IDENT_RE.findall(text):
         for term in _identifier_terms(ident):
-            lo = term.lower()
-            if lo in NOISE_WORDS or lo in seen:
+            value = term.lower()
+            if len(value) < 2 or value in NOISE_WORDS or value in seen:
                 continue
-            seen.add(lo)
-            out.append(term)
-            if len(out) >= max_idents:
-                return " ".join(out)
-    return " ".join(out)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Embedding result + backend selection
-# ─────────────────────────────────────────────────────────────────────────────
-# ``_EmbedResult`` lives in ``helpers.py`` (shared with the opt-in Gemini
-# cloud backend in ``gemini.py``).  The production invariant is unchanged:
-# when ``ok`` is False, ``vector`` is None and callers MUST surface the
-# failure rather than proceed as if nothing happened.
+            seen.add(value)
+            output.append(term[:96])
+            if len(output) >= max(1, int(max_idents)):
+                return " ".join(output)
+    return " ".join(output)
 
 
 def _resolve_backend() -> str:
-    """Return the requested embedding backend.
+    """Compatibility helper returning the validated explicit mode."""
+    try:
+        from .providers.config import resolve_provider_config
 
-    ``"gemini"`` when the user explicitly opts in via ``IDA_MCP_EMBED_BACKEND``
-    or ``embedder.json`` ``{"backend": "gemini"}``; otherwise ``"local"`` (the
-    profile-aware llama-server path).  Never selected automatically, and never
-    selected when ``IDA_MCP_EMBED_DISABLED`` is set.
-    """
-    if EMBED_DISABLED:
-        return "local"
-    state = _read_embedder_state()
-    requested = str(
-        os.environ.get("IDA_MCP_EMBED_BACKEND") or state.get("backend") or ""
-    ).strip().lower()
-    if requested in ("gemini", "cloud", "google"):
-        return "gemini"
-    return "local"
+        return resolve_provider_config().mode
+    except Exception:
+        return "invalid"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# BgeCodeEmbedder — profile-aware llama-server subprocess manager
-# ─────────────────────────────────────────────────────────────────────────────
 
 class BgeCodeEmbedder:
-    """
-    Manages a llama-server subprocess for the selected embedding profile.
-    Lazy start on first embed() call.  Thread-safe singleton per process.
+    """Compatibility facade with no local embedding implementation."""
 
-    No silent fallback: if the model binary or server is unavailable,
-    ``embed()`` returns an ``_EmbedResult`` with ``ok=False`` so that
-    callers can surface the degraded state to the user rather than
-    proceeding with garbage vectors.
-    """
+    _instance: "BgeCodeEmbedder | None" = None
+    _provider_only = True
 
-    _instance: BgeCodeEmbedder | None = None
-    _lock = threading.Lock()
-    # Set explicitly in ``_init``; the class default keeps ``__new__``-constructed
-    # instances (used by tests that stub attributes directly) on the local path.
-    _gemini: GeminiEmbedBackend | None = None
+    def __init__(self) -> None:
+        self._provider = None
+        self._config_error: dict[str, Any] | None = None
+        try:
+            self._provider = resolve_provider(with_ledger=True)
+            config = self._provider.config
+            self._mode = config.mode
+            self.backend = config.provider_id if config.mode != "disabled" else "disabled"
+            self._model = config.model
+        except Exception as exc:
+            self._mode = "invalid"
+            self.backend = "invalid"
+            self._model = None
+            self._config_error = provider_error_payload(exc)
+        self._dimension = 0
+        self.dim = 0
+        self._profile = None
+        self.embedding_format = f"provider-only:{self.backend}:{self._model or ''}"
 
-    def __new__(cls) -> BgeCodeEmbedder:
-        # Native in-process backend (host bootstrap sets IDA_MCP_NATIVE=1 when
-        # libmcp_llama.so is present).  Routing here means every existing
-        # ``BgeCodeEmbedder()`` call site transparently uses native; the HTTP
-        # llama-server machinery below is the fallback.  Tests never set the
-        # flag, so they keep exercising the HTTP path.
-        if cls is BgeCodeEmbedder:
-            try:
-                from .native import NativeEmbedder, prefer_native_embed
+    @classmethod
+    def reset(cls) -> "BgeCodeEmbedder":
+        cls._instance = None
+        return cls()
 
-                if prefer_native_embed():
-                    return NativeEmbedder()
-            except Exception:
-                pass
-        with cls._lock:
-            if cls._instance is None:
-                obj = super().__new__(cls)
-                obj._init()
-                cls._instance = obj
+    @classmethod
+    def instance(cls) -> "BgeCodeEmbedder":
+        if cls._instance is None:
+            cls._instance = cls()
         return cls._instance
 
-    def _init(self) -> None:
-        # Opt-in cloud backend (Gemini).  Routed first so the local llama-server
-        # machinery below is never touched when the user selected a cloud model.
-        if _resolve_backend() == "gemini":
-            gem = GeminiEmbedBackend(state=_read_embedder_state())
-            self._gemini: GeminiEmbedBackend | None = gem
-            self._use_llama = False
-            self._profile = None
-            self._dimension = gem.dim
-            self._server_bin = ""
-            self._model_path = ""
-            self._port: int | None = None
-            self._proc = None
-            self._ready = gem.ready
-            self._owns_proc = False
-            self._batch_size = gem.batch_size
-            self._max_batch_size = gem.max_batch_size
-            self._batch_lock = threading.Lock()
-            self._anchor_cache: dict[str, list[float]] = {}
-            return
-
-        self._gemini: GeminiEmbedBackend | None = None
-        self._server_bin   = _find_llama_server()
-        self._model_path   = _find_model()
-        state = _read_embedder_state()
-        requested_profile = os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile")
-        self._profile: EmbeddingModelProfile = profile_from_model(
-            self._model_path, str(requested_profile or "")
-        )
-        self._dimension = model_dimension(self._model_path, self._profile)
-        self._port: int | None = None
-        self._proc: subprocess.Popen | None = None
-        self._ready        = False
-        self._start_lock   = threading.Lock()
-        self._use_llama    = (bool(self._server_bin) and bool(self._model_path)
-                              and not EMBED_DISABLED)
-        # Cached anchor embeddings for BehaviorClassifier
-        self._anchor_cache: dict[str, list[float]] = {}
-        self._embedding_cache: dict[
-            tuple[int, tuple[str, str, int], str, str], list[float]
-        ] = {}
-        self._embedding_cache_lock = threading.Lock()
-        self._embedding_inflight: dict[
-            tuple[int, tuple[str, str, int], str, str], threading.Event
-        ] = {}
-        self._embedding_cache_generation = 0
-        # Full decompilations are much longer than search snippets, so keep
-        # the cap CPU-adaptive.  Start at the server's slot count, though: a
-        # 1/2/3/4 ramp wastes RPCs without making a batch safer.
-        adaptive_max_batch = max(1, min(4, _EMBED_CPU_COUNT // 2))
-        self._max_batch_size = max(
-            1,
-            min(32, _safe_int_env("IDA_MCP_EMBED_MAX_BATCH", str(adaptive_max_batch))),
-        )
-        self._batch_size = max(
-            1,
-            min(
-                self._max_batch_size,
-                _safe_int_env(
-                    "IDA_MCP_EMBED_BATCH", str(min(self._max_batch_size, EMBED_PARALLEL))
-                ),
-            ),
-        )
-        self._batch_lock = threading.Lock()
-        self._owns_proc = False
-        self._stop_registered = False
-        self._consecutive_rpc_failures = 0
-        self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
-        self._last_batch_timeout = False
-        self._last_recycle_reason = ""
-        self._identity_cache: dict[str, Any] | None = None
-        # Monotonic clock of the last server (re)start/attach.  Health reports
-        # "ok" while the model is still lazily loading, so the first embed
-        # request after start can legitimately exceed EMBED_REQUEST_TIMEOUT.
-        # Requests inside the activation-grace window get the longer grace
-        # timeout and a timeout there is treated as cold-start latency, never
-        # as evidence that the server is wedged.
-        self._server_started_at = 0.0
-        self._idle_lock = threading.Lock()
-        self._idle_timer: threading.Timer | None = None
-        self._idle_generation = 0
-
-    def status(self, probe: bool = False, deep_hash: bool = False) -> dict:
-        if self._gemini is not None:
-            return self._gemini.status(probe=probe, deep_hash=deep_hash)
-        server_ready = bool(self._ready)
-        probe_error = ""
-        if probe:
-            if not server_ready and self._use_llama:
-                server_ready = bool(self._start_server())
-            elif self._port:
-                try:
-                    req = urllib.request.urlopen(f"http://127.0.0.1:{self._port}/health", timeout=2)
-                    _hr = req.read()
-                    server_ready = b'"status":"ok"' in _hr or b'"ok"' in _hr
-                    self._ready = server_ready
-                except Exception as exc:
-                    server_ready = False
-                    probe_error = str(exc)
-            else:
-                try:
-                    if os.path.isfile(_EMBED_LEASE_FILE):
-                        with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
-                            lease = json.load(f)
-                        lease_port = int(lease.get("port") or 0)
-                        if lease_port > 0:
-                            req = urllib.request.urlopen(
-                                f"http://127.0.0.1:{lease_port}/health", timeout=2
-                            )
-                            if b'"status":"ok"' in req.read():
-                                self._port = lease_port
-                                self._ready = True
-                                self._owns_proc = False
-                                self._use_llama = True
-                                server_ready = True
-                except Exception as exc:
-                    probe_error = str(exc)
-
-        return {
-            "backend": self.backend,
-            "use_llama": bool(self._use_llama),
-            "disabled_by_env": bool(EMBED_DISABLED),
-            "server_bin": self._server_bin,
-            "server_bin_exists": bool(self._server_bin and os.path.isfile(self._server_bin)),
-            "model_path": self._model_path,
-            "model_exists": bool(self._model_path and os.path.isfile(self._model_path)),
-            "ready": bool(server_ready),
-            "port": self._port,
-            "owns_process": bool(self._owns_proc),
-            "dim": self.dim,
-            "profile": self._profile.key,
-            "profile_name": self._profile.display_name,
-            "model_license": self._profile.license,
-            "query_document_prompts": bool(
-                self._profile.query_prefix or self._profile.document_prefix
-            ),
-            "batch_size": int(self._batch_size),
-            "max_batch_size": int(self._max_batch_size),
-            "max_input_chars": self.max_input_chars,
-            "decomp_document_chars": self.decomp_document_chars,
-            "consecutive_rpc_failures": int(self._consecutive_rpc_failures),
-            "last_recycle_reason": self._last_recycle_reason,
-            "fingerprints": {
-                "model": model_fingerprint(self._model_path, deep_hash=deep_hash),
-                "server": server_fingerprint(self._server_bin, deep_hash=deep_hash),
-            },
-            "probe_error": probe_error,
-        }
-
-    # ── subprocess management ──────────────────────────────────────────────
-
-    def _pick_port(self) -> int:
-        env = os.environ.get("IDA_MCP_EMBED_PORT", "")
-        if env and env.isdigit():
-            return int(env)
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
-    def _lease_identity(self) -> dict[str, Any]:
-        cached = getattr(self, "_identity_cache", None)
-        if cached is not None:
-            return dict(cached)
-        model = model_fingerprint(self._model_path)
-        server = server_fingerprint(self._server_bin)
-        identity = {
-            "profile": self._profile.key,
-            "dimension": self.dim,
-            "model_path": os.path.realpath(self._model_path) if self._model_path else "",
-            "model_size": int(model.get("size") or 0),
-            "model_mtime_ns": int(model.get("mtime_ns") or 0),
-            "model_sha256_head": str(model.get("sha256_head_16mb") or ""),
-            "server_path": os.path.realpath(self._server_bin) if self._server_bin else "",
-            "server_size": int(server.get("size") or 0),
-            "server_mtime_ns": int(server.get("mtime_ns") or 0),
-        }
-        self._identity_cache = identity
-        return dict(identity)
-
-    @staticmethod
-    def _read_lease() -> dict[str, Any]:
+    def status(self, probe: bool = False, deep_hash: bool = False) -> dict[str, Any]:
+        del probe, deep_hash
+        if self._config_error:
+            return {"backend": "invalid", "ready": False, **self._config_error}
         try:
-            with open(_EMBED_LEASE_FILE, encoding="utf-8") as handle:
-                lease = json.load(handle)
-            return lease if isinstance(lease, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
-
-    @staticmethod
-    def _write_lease(lease: dict[str, Any]) -> None:
-        """Atomically publish a lease so readers never observe partial JSON."""
-        directory = os.path.dirname(_EMBED_LEASE_FILE) or "."
-        os.makedirs(directory, exist_ok=True)
-        temporary = (
-            f"{_EMBED_LEASE_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
-        )
-        try:
-            with open(temporary, "w", encoding="utf-8") as handle:
-                json.dump(lease, handle)
-            os.replace(temporary, _EMBED_LEASE_FILE)
-        finally:
-            with contextlib.suppress(OSError):
-                os.unlink(temporary)
-
-    @staticmethod
-    def _server_json(port: int, endpoint: str, timeout: float = 2.0) -> Any:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/{endpoint.lstrip('/')}", timeout=timeout
-        ) as response:
-            return json.loads(response.read())
-
-    def _lease_matches(self, lease: dict[str, Any]) -> bool:
-        if not isinstance(lease, dict):
-            return False
-        try:
-            if int(lease.get("schema") or 0) != _EMBED_LEASE_SCHEMA:
-                return False
-            pid = _lease_pid(lease.get("pid"))
-            owner_pid = _lease_pid(lease.get("owner_pid"))
-            port = int(lease.get("port") or 0)
-        except (TypeError, ValueError):
-            return False
-        if not _pid_alive(pid) or not _pid_alive(owner_pid) or port <= 0:
-            return False
-        expected_start = str(lease.get("process_start_token") or "").strip()
-        if expected_start and _process_start_token(pid) != expected_start:
-            return False
-        expected_owner_start = str(lease.get("owner_start_token") or "").strip()
-        if expected_owner_start and _process_start_token(owner_pid) != expected_owner_start:
-            return False
-        identity = self._lease_identity()
-        for key, expected in identity.items():
-            if lease.get(key) != expected:
-                return False
-        if lease.get("recycle_requested"):
-            return False
-        try:
-            health = self._server_json(port, "health")
-            if not isinstance(health, dict) or health.get("status") != "ok":
-                return False
-            props = self._server_json(port, "props")
-            served_model = os.path.realpath(str(props.get("model_path") or ""))
-            if served_model != identity["model_path"]:
-                return False
+            current = provider_status()
+            if current.get("ok"):
+                result = dict(current.get("provider") or {})
+                result.setdefault("backend", self.backend)
+                result["embedding_supported"] = False
+                result["semantic_search"] = "lexical_fallback"
+                return result
+            return {"backend": self.backend, "ready": False, **current}
         except Exception:
-            return False
-        return True
+            return {"backend": self.backend, "ready": False}
 
-    def _pid_is_expected_server(self, pid: int, lease: dict[str, Any] | None = None) -> bool:
-        command = _process_command(pid)
-        if not command:
-            # A lease proves that a server existed, not that this PID still
-            # belongs to it. Refuse to signal when process identity cannot be
-            # inspected; the next startup can reclaim the lease without
-            # risking an unrelated process.
-            return False
-        server_path = str((lease or {}).get("server_path") or self._server_bin or "")
-        model_path = str((lease or {}).get("model_path") or self._model_path or "")
-        return bool(
-            "llama-server" in command
-            and "--embedding" in command
-            and (not server_path or server_path in command)
-            and (not model_path or model_path in command)
-        )
-
-    def _retire_lease_process(self, lease: dict[str, Any], reason: str) -> None:
-        try:
-            pid = _lease_pid(lease.get("pid"))
-        except (TypeError, ValueError):
-            pid = 0
-        can_remove_lease = pid <= 0 or not _pid_alive(pid)
-        if pid > 0 and not can_remove_lease and self._pid_is_expected_server(pid, lease):
-            with contextlib.suppress(OSError):
-                os.kill(pid, 15)
-            deadline = time.monotonic() + 3.0
-            while _pid_alive(pid) and time.monotonic() < deadline:
-                time.sleep(0.05)
-            if _pid_alive(pid):
-                with contextlib.suppress(OSError):
-                    os.kill(pid, 9)
-            can_remove_lease = not _pid_alive(pid)
-        if can_remove_lease:
-            with contextlib.suppress(OSError):
-                current = self._read_lease()
-                if not current or current == lease:
-                    os.unlink(_EMBED_LEASE_FILE)
-        self._last_recycle_reason = reason
-        self._invalidate_embedding_cache()
-        self._ready = False
-        if getattr(self, "_proc", None) is not None and getattr(self._proc, "pid", None) == pid:
-            # Popen.poll() reaps a terminated direct child.  Without it, a
-            # timeout/recycle path can leave zombies under a long-lived host.
-            with contextlib.suppress(Exception):
-                self._proc.wait(timeout=0.1)
-            self._proc = None
-        self._owns_proc = False
-
-    def _cancel_idle_shutdown(self) -> None:
-        """Cancel a pending idle retirement before embedding work begins."""
-        lock = getattr(self, "_idle_lock", None)
-        if lock is None:
-            return
-        with lock:
-            self._idle_generation += 1
-            timer = self._idle_timer
-            self._idle_timer = None
-        if timer is not None:
-            timer.cancel()
-
-    def _schedule_idle_shutdown(self, timeout: float | None = None) -> None:
-        """Retire an unused local server without affecting another host's lease."""
-        delay = EMBED_IDLE_TIMEOUT if timeout is None else max(0.0, timeout)
-        if delay <= 0.0:
-            return
-        lock = getattr(self, "_idle_lock", None)
-        if lock is None:
-            return
-        with lock:
-            self._idle_generation += 1
-            generation = self._idle_generation
-            previous = self._idle_timer
-            timer = threading.Timer(delay, self._shutdown_if_idle, args=(generation,))
-            timer.daemon = True
-            self._idle_timer = timer
-        if previous is not None:
-            previous.cancel()
-        timer.start()
-
-    def _shutdown_if_idle(self, generation: int) -> None:
-        lock = getattr(self, "_idle_lock", None)
-        if lock is None:
-            return
-        with lock:
-            if generation != self._idle_generation:
-                return
-            self._idle_timer = None
-        # A request can have crossed the process boundary immediately before
-        # this callback.  Ask llama.cpp before stopping anything.
-        if self._server_has_active_slots():
-            self._schedule_idle_shutdown()
-            return
-        self.stop()
-
-    def _server_has_active_slots(self) -> bool:
-        if not self._port or not self._read_lease():
-            return False
-        try:
-            slots = self._server_json(self._port, "slots")
-            return bool(
-                isinstance(slots, list)
-                and any(bool(slot.get("is_processing")) for slot in slots if isinstance(slot, dict))
-            )
-        except Exception:
-            return False
-
-    def _rss_limit_bytes(self) -> int:
-        if EMBED_MAX_RSS_MB > 0:
-            return EMBED_MAX_RSS_MB * 1024 * 1024
-        try:
-            model_size = os.path.getsize(self._model_path)
-        except OSError:
-            model_size = 0
-        # The Qwen3-0.6B embed server plateaus at ~1.9 GB RSS (0.9 GB after
-        # loading + the first batch's compute graph); a 2 GB floor recycled a
-        # healthy server mid-index.  Floor at 3 GB so a batch's transient peak
-        # stays clear of the limit while the differential growth check catches
-        # real leaks.
-        return max(3 * 1024**3, int(model_size * 2.0) + 1024 * 1024**2)
-
-    def _record_success_and_maybe_recycle(self) -> None:
-        lease = self._read_lease()
-        if not lease or not self._lease_matches(lease):
-            return
-        pid = _lease_pid(lease.get("pid"))
-        rss = _process_rss_bytes(pid)
-        prev_rss = int(lease.get("rss") or 0)
-        count = int(lease.get("request_count") or 0) + 1
-        lease.update({"request_count": count, "rss": rss, "updated_at": time.time()})
-        reason = ""
-        if EMBED_MAX_REQUESTS > 0 and count >= EMBED_MAX_REQUESTS:
-            reason = f"request limit reached ({count})"
-        elif rss and rss > self._rss_limit_bytes():
-            reason = f"RSS limit exceeded ({rss // (1024 * 1024)} MiB)"
-        elif prev_rss and rss - prev_rss > EMBED_MAX_RSS_GROWTH_MB * 1024 * 1024:
-            # Differential growth since the PREVIOUS request, not startup: the
-            # first batch legitimately allocates the compute graph (measured
-            # 0.9 GB -> 1.6 GB, then flat), so comparing against the startup
-            # baseline false-positives and recycles a healthy server mid-index
-            # (the benchmark indexed only 16/33 corpus functions for exactly
-            # this reason).  Catches leaks, tolerates one-time graph allocation.
-            reason = (
-                f"RSS grew {(rss - prev_rss) // (1024 * 1024)} MiB "
-                f"since last request"
-            )
-        if reason:
-            self._retire_lease_process(lease, reason)
-            return
-        with contextlib.suppress(OSError):
-            self._write_lease(lease)
-
-    def _start_server(self) -> bool:
-        with self._start_lock:
-            try:
-                with _InterProcessLock(_embed_start_lock_path(), EMBED_LOCK_TIMEOUT):
-                    return self._start_server_locked()
-            except EmbeddingQueueTimeout:
-                # A peer is starting or replacing the shared server.  Do not
-                # race it by spawning another process; a later call can attach.
-                return False
-
-    def _start_server_locked(self) -> bool:
-        with contextlib.nullcontext():
-            if self._ready:
-                return True
-            # Reuse existing shared embed server when available.
-            # Check this regardless of _use_llama — paths may not have
-            # been available at init time but a server is already running.
-            lease = self._read_lease()
-            if lease and self._lease_matches(lease):
-                self._port = int(lease["port"])
-                self._ready = True
-                self._owns_proc = False
-                self._use_llama = True
-                # A server we just attached to may still be cold; grant it the
-                # same activation grace as a locally-started process.
-                self._server_started_at = time.monotonic()
-                return True
-            # Only retire a peer lease when we hold a real identity to compare
-            # it against.  When our own model/server paths are unresolved the
-            # mismatch means "we cannot validate the peer yet", not "the peer
-            # is stale" — retiring it then could kill a valid server that
-            # belongs to another process.  The path re-check below happens
-            # regardless.
-            if lease and (self._model_path and self._server_bin):
-                self._retire_lease_process(lease, "stale or incompatible lease")
-            # Re-check paths: they may not have been available at init
-            # (e.g. embedder.json written after singleton creation).
-            if not self._use_llama:
-                self._server_bin = _find_llama_server()
-                self._model_path = _find_model()
-                state = _read_embedder_state()
-                requested_profile = os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile")
-                self._profile = profile_from_model(self._model_path, str(requested_profile or ""))
-                self._dimension = model_dimension(self._model_path, self._profile)
-                self._identity_cache = None
-                self._use_llama = (
-                    bool(self._server_bin) and bool(self._model_path)
-                    and not EMBED_DISABLED
-                )
-            if not self._use_llama:
-                return False
-            self._port = self._pick_port()
-            # Keep EMBED_CTX as the per-slot budget. The shared layout helper
-            # prevents ctx/parallel changes from drifting from reranking.
-            slot_ctx, parallel, total_ctx = _llama_context_layout(
-                EMBED_CTX, min(EMBED_PARALLEL, self._max_batch_size)
-            )
-            cmd = [
-                self._server_bin,
-                "--model",    self._model_path,
-                "--embedding",
-                "--port",     str(self._port),
-                "--ctx-size", str(total_ctx),
-                "--batch-size", str(slot_ctx),
-                "--ubatch-size", str(slot_ctx),
-                "--pooling", str(getattr(self._profile, "pooling", None) or "mean"),
-                "--parallel", str(parallel),
-                "--threads",  str(EMBED_THREADS),
-                "--threads-batch", str(EMBED_BATCH_THREADS),
-                "--n-predict", "0",
-                "--log-disable",
-            ]
-            # Offloading to a GPU is opt-in (`IDA_MCP_EMBED_GPU=1`).  A Vulkan
-            # build AUTO-SELECTS the GPU when no --device is given, so CPU must
-            # be forced explicitly (`--device none`) rather than assumed — this
-            # is the same bug the reranker had, verified on this box: the embed
-            # server silently loaded libggml-vulkan + libvulkan_intel and ran on
-            # the iGPU.  On some iGPUs (e.g. Intel UHD 620 / gen9) the Vulkan
-            # path is fast for short inputs but pathological on real
-            # decompilations — shader compilation per sequence length can make
-            # full-function embeds hang or take minutes.  CPU on a 0.6B model is
-            # the reliable default; the env var lets users on a capable GPU opt
-            # in.
-            if os.environ.get("IDA_MCP_EMBED_GPU", "").strip().lower() in ("1", "true", "yes"):
-                gpu_device = _detect_gpu_device(self._server_bin)
-                if gpu_device:
-                    cmd.append("--device")
-                    cmd.append(gpu_device)
-                else:
-                    cmd.append("--device")
-                    cmd.append("none")
-            else:
-                cmd.append("--device")
-                cmd.append("none")
-            try:
-                # Ensure shared libraries are findable (e.g. libllama-server-impl.so
-                # in non-standard locations like /usr/local/lib/ollama).
-                _env = os.environ.copy()
-                _lib_dir = os.path.dirname(self._server_bin)
-                _existing = _env.get("LD_LIBRARY_PATH", "")
-                _paths = [p for p in (_existing.split(":") + [_lib_dir]) if p]
-                _env["LD_LIBRARY_PATH"] = ":".join(_paths)
-                # Also search common install dirs for the shared lib
-                for _d in ("/usr/local/lib/ollama", "/usr/local/lib"):
-                    _so = os.path.join(_d, "libllama-server-impl.so")
-                    if os.path.isfile(_so) and _d not in _paths:
-                        _paths.append(_d)
-                _env["LD_LIBRARY_PATH"] = ":".join(_paths)
-                self._proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=_env,
-                )
-                self._owns_proc = True
-                # Begin the activation-grace window now: health may report ok
-                # before the model is fully ready, so the first requests need
-                # a longer deadline than EMBED_REQUEST_TIMEOUT.
-                self._server_started_at = time.monotonic()
-                if isinstance(self._proc.pid, int) and not self._stop_registered:
-                    atexit.register(self.stop)
-                    self._stop_registered = True
-            except OSError:
-                self._ready = False
-                return False
-
-            # Wait for server ready (up to 60s — model load takes ~10s on this CPU)
-            deadline = time.time() + 60.0
-            while time.time() < deadline:
-                time.sleep(1.0)
-                try:
-                    req = urllib.request.urlopen(
-                        f"http://127.0.0.1:{self._port}/health", timeout=2
-                    )
-                    if b'"status":"ok"' in req.read():
-                        self._ready = True
-                        try:
-                            pid = self._proc.pid if self._proc else 0
-                            payload = {
-                                "schema": _EMBED_LEASE_SCHEMA,
-                                "pid": pid,
-                                "owner_pid": os.getpid(),
-                                "owner_start_token": _process_start_token(os.getpid()),
-                                "process_start_token": _process_start_token(pid),
-                                "port": self._port,
-                                "baseline_rss": _process_rss_bytes(pid),
-                                "request_count": 0,
-                                "updated_at": time.time(),
-                            }
-                            payload.update(self._lease_identity())
-                            self._write_lease(payload)
-                        except Exception:
-                            pass
-                        return True
-                except Exception:
-                    pass
-                if self._proc.poll() is not None:
-                    self._ready = False
-                    return False
-
-            self._ready = False
-            return False
-
-    def stop(self) -> None:
-        if self._gemini is not None:
-            self._gemini.stop()
-            return
-        self._invalidate_embedding_cache()
-        self._cancel_idle_shutdown()
-        owned_pid = self._proc.pid if self._owns_proc and self._proc else None
-        try:
-            with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
-                lease = json.load(f)
-            if not isinstance(lease, dict):
-                lease = {}
-            lease_pid = _lease_pid(lease.get("pid"))
-            owner_pid = _lease_pid(lease.get("owner_pid"))
-            owner_start = str(lease.get("owner_start_token") or "").strip()
-            owner_matches = owner_pid == os.getpid() and (
-                not owner_start or _process_start_token(owner_pid) == owner_start
-            )
-            if owner_matches and lease_pid > 0:
-                owned_pid = owned_pid or lease_pid
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            lease_pid = 0
-        lease_process_stopped = False
-        if owned_pid and self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=5)
-                lease_process_stopped = True
-            except Exception:
-                self._proc.kill()
-                try:
-                    self._proc.wait(timeout=2)
-                except Exception:
-                    pass
-                else:
-                    lease_process_stopped = True
-        elif owned_pid and self._proc:
-            lease_process_stopped = True
-        elif owned_pid and self._proc is None and self._pid_is_expected_server(owned_pid, lease):
-            try:
-                os.kill(owned_pid, 15)
-                deadline = time.monotonic() + 2.0
-                while time.monotonic() < deadline:
-                    try:
-                        os.kill(owned_pid, 0)
-                    except OSError:
-                        break
-                    time.sleep(0.05)
-                else:
-                    os.kill(owned_pid, 9)
-            except OSError:
-                pass
-            else:
-                lease_process_stopped = not _pid_alive(owned_pid)
-        if owned_pid:
-            try:
-                if (
-                    lease_process_stopped
-                    and lease_pid == owned_pid
-                    and lease
-                    and self._read_lease() == lease
-                ):
-                    os.unlink(_EMBED_LEASE_FILE)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                pass
-        self._ready = False
-        self._proc = None
-        self._owns_proc = False
-
-    def ensure_ready(self) -> bool:
-        """Explicitly start or attach to the shared embedding server.
-
-        Routine tool enrichment must not make a cold model start.  Callers
-        that genuinely need semantic work (indexing or semantic search) use
-        this entry point first; the server then retires if no request arrives.
-        """
-        if self._gemini is not None:
-            return self._gemini.ensure_ready()
-        self._cancel_idle_shutdown()
-        ready = bool(self._start_server())
-        if ready:
-            self._schedule_idle_shutdown(EMBED_ACTIVATION_GRACE_TIMEOUT)
-        return ready
-
-    # ── embedding ──────────────────────────────────────────────────────────
-
-    def _embedding_cache_state(self):
-        """Return lazily initialized cache state for lightweight test hosts."""
-        cache = getattr(self, "_embedding_cache", None)
-        lock = getattr(self, "_embedding_cache_lock", None)
-        inflight = getattr(self, "_embedding_inflight", None)
-        if (
-            isinstance(cache, dict)
-            and lock is not None
-            and callable(getattr(lock, "acquire", None))
-            and isinstance(inflight, dict)
-        ):
-            return cache, lock, inflight
-        with _EMBED_CACHE_INIT_LOCK:
-            if not isinstance(getattr(self, "_embedding_cache", None), dict):
-                self._embedding_cache = {}
-            lock = getattr(self, "_embedding_cache_lock", None)
-            if lock is None or not callable(getattr(lock, "acquire", None)):
-                self._embedding_cache_lock = threading.Lock()
-            if not isinstance(getattr(self, "_embedding_inflight", None), dict):
-                self._embedding_inflight = {}
-            if not isinstance(getattr(self, "_embedding_cache_generation", None), int):
-                self._embedding_cache_generation = 0
-            return self._embedding_cache, self._embedding_cache_lock, self._embedding_inflight
-
-    def _invalidate_embedding_cache(self) -> None:
-        """Drop vectors belonging to a retired/replaced HTTP model process."""
-        cache, cache_lock, _inflight = self._embedding_cache_state()
-        with cache_lock:
-            self._embedding_cache_generation += 1
-            cache.clear()
-
-    @staticmethod
-    def _extract_embedding(item):
-        """Extract a plain float list from an embedding response item.
-
-        Handles both the old dict format {"data": [{"embedding": [...]}]}
-        and the new list format [{"embedding": [[...]]}] where the vector
-        may be nested inside an outer list-of-lists.
-        """
-        if not isinstance(item, dict):
-            return None
-        vec = item.get("embedding")
-        if vec is None:
-            return None
-        if isinstance(vec, list) and vec and isinstance(vec[0], list):
-            vec = vec[0]
-        if not isinstance(vec, list) or not vec:
-            return None
-        return [float(x) for x in vec]
-
-    def _request_embeddings(
-        self,
-        texts: list[str],
-        *,
-        purpose: str,
-        timeout: float,
-    ) -> list[list[float]] | None:
-        if not texts:
-            return []
-        # Do not make ordinary tools pay for a cold model start.  Explicit
-        # indexing/search calls activate the backend with ensure_ready();
-        # incidental context/behavior enrichment simply degrades gracefully.
-        if not self._ready:
-            return None
-        self._cancel_idle_shutdown()
-        # A request landing inside the activation-grace window (right after the
-        # server process started or was attached to) may still be paying for
-        # lazy model load / first-inference warmup.  Give it the longer grace
-        # deadline so a legitimately cold start is not mistaken for a hang.
-        in_activation_grace = (
-            time.monotonic() - self._server_started_at
-        ) < EMBED_ACTIVATION_GRACE_TIMEOUT
-        if in_activation_grace:
-            timeout = max(timeout, EMBED_ACTIVATION_GRACE_TIMEOUT)
-        try:
-            with _InterProcessLock(
-                _embed_request_lock_path(), min(EMBED_LOCK_TIMEOUT, timeout)
-            ):
-                # With the request lock held, an already-processing slot can
-                # only be an abandoned request from a timed-out/older client.
-                if self._server_has_active_slots():
-                    self._retire_lease_process(
-                        self._read_lease(), "abandoned embedding request"
-                    )
-                    return None
-                profile = getattr(self, "_profile", BGE_CODE_V1)
-                # Match the native path's head-first cap after adding the
-                # model prefix/suffix, so both backends tokenize the same
-                # signal and the server does not work on discarded input.
-                max_chars = self.max_input_chars
-                formatted = [
-                    profile.format_text(str(text), purpose)[:max_chars]
-                    for text in texts
-                ]
-                payload: str | list[str] = formatted[0] if len(formatted) == 1 else formatted
-                body = json.dumps({"input": payload, "encoding_format": "float"}).encode()
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{self._port}/embeddings",
-                    data=body,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read())
-            if isinstance(data, dict):
-                rows = data.get("data") or []
-            elif isinstance(data, list):
-                rows = data
-            else:
-                rows = []
-            if len(rows) != len(texts):
-                raise RuntimeError("embedding response count mismatch")
-            indexed = [
-                row.get("index")
-                for row in rows
-                if isinstance(row, dict) and "index" in row
-            ]
-            if indexed:
-                # A partially indexed or duplicate response is ambiguous:
-                # accepting it silently associates vectors with the wrong
-                # input.  The server's indexed response must be a permutation
-                # of every request position before we reorder it.
-                expected_indices = set(range(len(texts)))
-                if (
-                    len(indexed) != len(rows)
-                    or any(type(index) is not int for index in indexed)
-                    or set(indexed) != expected_indices
-                ):
-                    raise RuntimeError("embedding response indices mismatch")
-                rows = sorted(rows, key=lambda row: row["index"])
-            out: list[list[float]] = []
-            for row in rows:
-                vec = self._extract_embedding(row) if isinstance(row, dict) else None
-                if vec is None:
-                    raise RuntimeError("no embedding in response")
-                vec = [x for x in vec if math.isfinite(x)]
-                if not vec:
-                    raise RuntimeError("empty embedding in response")
-                if self.dim and len(vec) != self.dim:
-                    raise RuntimeError(
-                        f"embedding dimension mismatch: expected {self.dim}, got {len(vec)}"
-                    )
-                norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-                out.append([x / norm for x in vec])
-            self._consecutive_rpc_failures = 0
-            self._record_success_and_maybe_recycle()
-            return out
-        except EmbeddingQueueTimeout:
-            # Another valid client owns the single-server queue.  This is a
-            # load-shedding event, never evidence that the server is wedged.
-            return None
-        except (
-            OSError,
-            TypeError,
-            ValueError,
-            KeyError,
-            json.JSONDecodeError,
-            RuntimeError,
-        ) as exc:
-            if isinstance(exc, (TimeoutError, socket.timeout)):
-                self._last_batch_timeout = True
-                if in_activation_grace:
-                    # Cold-start latency, not a wedged server: the process was
-                    # granted the full grace deadline and still needs more time
-                    # to load.  Keep the server alive — retiring it here would
-                    # restart the warmup and turn a one-off slow first request
-                    # into a permanent failure loop.  Count a single failure so
-                    # a genuinely broken server still trips _max_rpc_failures.
-                    pass
-                else:
-                    self._retire_lease_process(
-                        self._read_lease(), "embedding request timeout"
-                    )
-            self._consecutive_rpc_failures += 1
-            if self._consecutive_rpc_failures >= self._max_rpc_failures:
-                # Transient failure — mark not-ready but allow retry.
-                self._ready = False
-                self._consecutive_rpc_failures = 0
-            return None
-        finally:
-            # Even a failed request may leave a llama.cpp worker spinning.
-            # The bounded idle lifecycle makes that state self-healing.
-            if self._ready:
-                self._schedule_idle_shutdown()
-
-    def _llama_embed(self, text: str, purpose: str = "document") -> list[float] | None:
-        # A model path is the identity anchor for the HTTP backend.  Besides
-        # avoiding cache reuse across a model/process replacement, this keeps
-        # lightweight manually constructed test hosts (which have no model
-        # identity at all) on the raw response path.
-        cache_enabled = EMBED_CACHE_MAX > 0 and bool(
-            getattr(self, "_model_path", "")
-        )
-        if not cache_enabled:
-            rows = self._request_embeddings(
-                [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
-            )
-            return rows[0] if rows else None
-
-        profile = getattr(self, "_profile", BGE_CODE_V1)
-        model_identity = (
-            os.path.realpath(str(getattr(self, "_model_path", "") or "")),
-            str(getattr(profile, "key", "") or ""),
-            int(getattr(self, "_dimension", 0) or 0),
-        )
-        formatted = profile.format_text(str(text), purpose)[: self.max_input_chars]
-        cache, cache_lock, inflight = self._embedding_cache_state()
-        owner = False
-        wait_event: threading.Event | None = None
-        with cache_lock:
-            key = (
-                int(self._embedding_cache_generation),
-                model_identity,
-                str(purpose),
-                formatted,
-            )
-            cached = cache.get(key)
-            if cached is not None:
-                return list(cached)
-            wait_event = inflight.get(key)
-            if wait_event is None:
-                wait_event = threading.Event()
-                inflight[key] = wait_event
-                owner = True
-        if not owner:
-            if wait_event is not None:
-                wait_event.wait(timeout=max(1.0, float(EMBED_REQUEST_TIMEOUT)))
-            with cache_lock:
-                cached = cache.get(key)
-            return list(cached) if cached is not None else None
-
-        try:
-            rows = self._request_embeddings(
-                [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
-            )
-            vector = rows[0] if rows else None
-            if vector is not None:
-                with cache_lock:
-                    if int(self._embedding_cache_generation) == key[0]:
-                        if len(cache) >= EMBED_CACHE_MAX:
-                            try:
-                                cache.pop(next(iter(cache)))
-                            except Exception:
-                                cache.clear()
-                        cache[key] = list(vector)
-            return vector
-        finally:
-            with cache_lock:
-                event = inflight.pop(key, None)
-                if event is not None:
-                    event.set()
-
-    def _llama_embed_batch(
-        self, texts: list[str], purpose: str = "document"
-    ) -> list[list[float]] | None:
-        if not texts:
-            return []
-        self._last_batch_timeout = False
-        return self._request_embeddings(
-            texts,
-            purpose=purpose,
-            timeout=max(EMBED_REQUEST_TIMEOUT, EMBED_BATCH_REQUEST_TIMEOUT),
-        )
+    def check_availability(self) -> bool:
+        status = self.status()
+        return bool(status.get("ready") and status.get("embedding_supported"))
 
     def embed(self, text: str, purpose: str = "document") -> _EmbedResult:
-        """Return an :class:`_EmbedResult` for *text*.
+        del text, purpose
+        return _EmbedResult(None, self.backend, False)
 
-        When the real model is unavailable, ``result.ok`` is False and
-        ``result.vector`` is None — callers MUST check this.  There is
-        no silent fallback to a weaker backend.
-        """
-        if self._gemini is not None:
-            return self._gemini.embed(text, purpose=purpose)
-        if self._use_llama:
-            vec = self._llama_embed(text, purpose=purpose)
-            if vec is not None:
-                return _EmbedResult(vec, self.backend, True)
-        return _EmbedResult(None, "unavailable", False)
-
-    def embed_vector(self, text: str, purpose: str = "document") -> list[float] | None:
-        """Convenience wrapper returning the embedding vector or None.
-
-        Use this when you only need the vector and want None to mean
-        "embedding unavailable" without inspecting the full result object.
-        """
-        result = self.embed(text, purpose=purpose)
-        return result.vector if result.ok else None
+    def embed_vector(self, text: str, purpose: str = "document") -> None:
+        del text, purpose
 
     def embed_query(self, text: str) -> _EmbedResult:
         return self.embed(text, purpose="query")
 
-    def embed_query_vector(self, text: str) -> list[float] | None:
+    def embed_query_vector(self, text: str) -> None:
         return self.embed_vector(text, purpose="query")
 
-    def embed_document(self, text: str) -> _EmbedResult:
-        return self.embed(text, purpose="document")
+    def embed_documents(self, texts: list[str], purpose: str = "document") -> list[_EmbedResult]:
+        del purpose
+        # Preserve the old result shape for callers while making the absence of
+        # vector capability explicit. Consumers can still persist/search the
+        # bounded lexical signature path.
+        return [_EmbedResult(None, self.backend, False) for _ in texts]
 
-    def embed_documents(self, texts: list[str]) -> list[_EmbedResult]:
-        return self.embed_batch(texts, purpose="document")
+    def embed_batch(self, texts: list[str], purpose: str = "document") -> list[_EmbedResult]:
+        return self.embed_documents(texts, purpose=purpose)
 
-    def embed_batch(
-        self, texts: list[str], purpose: str = "document"
-    ) -> list[_EmbedResult]:
-        """Batch version of :meth:`embed`.  Each text gets its own result
-        object so callers can identify exactly which items failed."""
-        if not texts:
-            return []
-        if self._gemini is not None:
-            return self._gemini.embed_batch(texts, purpose=purpose)
-        if not self._use_llama:
-            return [_EmbedResult(None, "unavailable", False) for _ in texts]
-        out: list[_EmbedResult] = []
-
-        def embed_chunk(chunk: list[str]) -> list[_EmbedResult]:
-            if not chunk:
-                return []
-            vecs = self._llama_embed_batch(chunk, purpose=purpose)
-            if vecs is not None:
-                self._last_batch_timeout = False
-                with self._batch_lock:
-                    max_batch = int(getattr(self, "_max_batch_size", 32) or 32)
-                    if self._batch_size < max_batch and len(chunk) == self._batch_size:
-                        self._batch_size += 1
-                return [_EmbedResult(v, self.backend, True) for v in vecs]
-            # llama-server does not reliably cancel work when an HTTP client
-            # times out. Never enqueue recursive retries behind abandoned work;
-            # the timed-out server has already been recycled.
-            if getattr(self, "_last_batch_timeout", False):
-                with self._batch_lock:
-                    self._batch_size = max(1, min(self._batch_size, len(chunk) // 2 or 1))
-            return [_EmbedResult(None, "unavailable", False) for _ in chunk]
-
-        i = 0
-        while i < len(texts):
-            with self._batch_lock:
-                bs = self._batch_size
-            chunk = texts[i : i + bs]
-            out.extend(embed_chunk(chunk))
-            i += len(chunk)
-            if not self._ready and self._last_recycle_reason:
-                out.extend(
-                    _EmbedResult(None, "unavailable", False)
-                    for _ in texts[i:]
-                )
-                break
-        return out
-
-    @property
-    def dim(self) -> int:
-        if self._gemini is not None:
-            return self._gemini.dim
-        return int(getattr(self, "_dimension", 0) or 0)
-
-    @property
-    def max_input_chars(self) -> int:
-        """Conservative character budget derived from the configured context."""
-        if self._gemini is not None:
-            return self._gemini.max_input_chars
-        usable_tokens = max(512, EMBED_CTX - 128)
-        return max(1024, min(32768, int(usable_tokens * max(1.0, EMBED_CHARS_PER_TOKEN))))
-
-    @property
-    def decomp_document_chars(self) -> int:
-        """Signal-dense full-decomp document budget used during indexing."""
-        if self._gemini is not None:
-            return self._gemini.decomp_document_chars
-        return decomp_document_char_budget(
-            self.max_input_chars,
-            explicit_chars=DECOMP_DOCUMENT_CHARS,
-            fraction=DECOMP_DOCUMENT_FRACTION,
-        )
-
-    @property
-    def backend(self) -> str:
-        if self._gemini is not None:
-            return self._gemini.backend
-        profile = getattr(self, "_profile", BGE_CODE_V1)
-        return profile.key if self._use_llama else "unavailable"
-
-    @property
-    def embedding_format(self) -> str:
-        if self._gemini is not None:
-            return self._gemini.embedding_format
-        profile = getattr(self, "_profile", BGE_CODE_V1)
-        prompt_hash = hashlib.sha256(
-            f"{profile.query_prefix}\0{profile.document_prefix}\0{profile.suffix}".encode()
-        ).hexdigest()[:12]
-        return f"profile-v1:{profile.key}:{prompt_hash}"
+    def stop(self) -> None:
+        """Compatibility no-op; no child process is owned by this facade."""
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:
         return cosine_similarity(a, b)
 
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        return cosine_similarity(a, b)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BehaviorClassifier — zero-shot RE behavior detection
-# ─────────────────────────────────────────────────────────────────────────────
 
 class BehaviorClassifier:
-    """
-    Zero-shot behavior classification via cosine similarity to anchor texts.
-    Each anchor is a dense description of what that behavior looks like in
-    decompiled C pseudocode.  Anchors are embedded once and cached.
+    """Provider-backed advisory classifier; never performs local inference."""
 
-    Replaces the fake Q-value labeling, hardcoded rule sets, and
-    untrained pattern matchers.
-    """
-
-    # Anchors are written as pseudo-code patterns so a code embedding profile
-    # can compare them against actual decompiled pseudocode.
+    # Stable behavior labels are retained as application metadata for
+    # compatibility and typed-question criteria. They are not local model
+    # prompts or a fallback classifier; provider-backed decisions are made by
+    # ``advisory.ask_behavior``.
     ANCHORS: dict[str, str] = {
-        "crypto_symmetric": "state = load_block(input); round = 0; while (round < nr) { state ^= round_keys[round]; sub_bytes(state, sbox); shift_rows(state); if (round != nr - 1) mix_columns(state, gf_mul); round++; } store_block(out, state ^ round_keys[nr]); key_schedule(key, round_keys);",
-        "crypto_hash": "ctx->h0 = 0x67452301; ctx->h1 = 0xefcdab89; while (len >= 64) { compress_block(ctx, block); block += 64; len -= 64; } pad_and_finalize(ctx); digest[0] = bswap32(ctx->h0); digest[1] = bswap32(ctx->h1); if (hmac) inner_outer_hash(ctx, key_block);",
-        "network_http": "sock = connect_tcp(host, port); req = format(\"POST %s HTTP/1.1\", path); add_header(req, \"Host\", host); add_header(req, \"User-Agent\", ua); send(sock, req, strlen(req), 0); recv_until_headers(sock, buf); parse_status_line(buf); if (chunked) decode_chunked(sock, body); close_socket(sock);",
-        "network_raw": "s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); addr.sin_port = htons(port); addr.sin_addr.s_addr = inet_addr(ip); if (connect(s, &addr, sizeof(addr)) == 0) { n = recv(s, rx, sizeof(rx), 0); if (n > 0) send(s, tx, tx_len, 0); } closesocket(s);",
-        "process_injection": "h = OpenProcess(PROCESS_ALL_ACCESS, 0, pid); remote = VirtualAllocEx(h, 0, sz, MEM_COMMIT, PAGE_EXECUTE_READWRITE); WriteProcessMemory(h, remote, payload, sz, &written); th = CreateRemoteThread(h, 0, 0, remote, 0, 0, 0); WaitForSingleObject(th, INFINITE); CloseHandle(th); CloseHandle(h);",
-        "file_operations": "fd = CreateFileW(path, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0); ReadFile(fd, buf, size, &n, 0); parse_record(buf, n); WriteFile(fd, out, out_len, &m, 0); MoveFileW(tmp, path); DeleteFileW(backup); CloseHandle(fd);",
-        "anti_debug": "if (IsDebuggerPresent()) return 0; CheckRemoteDebuggerPresent(GetCurrentProcess(), &dbg); t0 = __rdtsc(); suspicious_loop(); t1 = __rdtsc(); if (t1 - t0 > limit) flag_debugger(); NtQueryInformationProcess(proc, ProcessDebugPort, &port, sizeof(port), 0);",
-        "anti_vm": "cpuid(1, &eax, &ebx, &ecx, &edx); if (ecx & HYPERVISOR_BIT) vm = 1; cpuid(0x40000000, &vendor); if (strstr(vendor, \"VMware\") || strstr(vendor, \"VBox\")) vm = 1; if (mac_oui_matches_vm(nic_mac) || registry_has_vm_keys()) vm = 1;",
-        "persistence": "RegCreateKeyExW(HKCU, \"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\", ...); RegSetValueExW(run_key, \"Updater\", 0, REG_SZ, exe_path, len); CreateServiceW(scm, name, name, SERVICE_AUTO_START, SERVICE_WIN32_OWN_PROCESS, ...); StartServiceW(svc, 0, 0);",
-        "evasion": "for (i = 0; i < blob_len; ++i) blob[i] ^= key[i & 0xf]; Sleep(delay_ms); VirtualProtect(code, len, PAGE_EXECUTE_READWRITE, &old); memset(headers, 0, 0x200); if (sandbox_signals()) return; jump_to_decrypted_payload(blob);",
-        "string_decrypt": "for (i = 0; i < enc_len; ++i) { out[i] = enc[i] ^ rolling_key; rolling_key = rotl8(rolling_key + i, 1); } out[enc_len] = 0; if (looks_printable(out)) cache_string(id, out); else wipe_buffer(out, enc_len);",
-        "c2_communication": "beacon = json_build(host_id, pid, uptime, version); body = base64_encode(beacon); http_post(c2_url, body, headers); cmd = parse_response(resp); if (cmd.type == EXEC) exec_command(cmd.arg); else if (cmd.type == DOWNLOAD) fetch_payload(cmd.url);",
-        "privilege_escalation": "OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY, &tok); LookupPrivilegeValueW(0, SeDebugPrivilege, &luid); AdjustTokenPrivileges(tok, 0, &tp, sizeof(tp), 0, 0); if (token_is_elevated(tok)) spawn_as_system(command);",
-        "memory_manipulation": "ptr = VirtualAlloc(0, sz, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE); memcpy(ptr, src, sz); VirtualProtect(ptr, sz, PAGE_EXECUTE_READ, &old); fn = (void(*)())ptr; fn(); mmap_region = mmap(0, sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);",
-        "rop_gadget": "for (ea = text_start; ea < text_end; ++ea) { if (is_ret(insn[ea])) { collect_gadget(ea - 6, ea); if (matches(\"pop reg; pop reg; ret\")) score++; } } chain = build_rop_chain(stack_pivot, gadgets, syscall_stub);",
-        "heap_spray": "for (i = 0; i < 0x2000; ++i) { buf = malloc(chunk); memset(buf, 0x41, chunk); memcpy(buf + nop_len, shellcode, sc_len); array[i] = buf; } trigger_uaf_or_oob(array);",
-        "use_after_free": "obj = alloc_obj(sz); init_obj(obj); free(obj); if (condition) { obj->vtable->dispatch(obj, arg); memcpy(obj->buf, input, len); } dangling pointer dereference after free indicates temporal memory bug;",
-        "buffer_overflow": "char tmp[128]; len = read_input(src, 0x400); memcpy(tmp, src, len); if (len > sizeof(tmp)) stack_corruption = 1; strcpy(dst, user); strcat(dst, suffix); missing bounds checks around copy operations and fixed-size local buffers;",
-        "format_string_vuln": "fmt = recv_user_string(sock); if (fmt) { printf(fmt); syslog(LOG_ERR, fmt); snprintf(out, 256, fmt, user1, user2); } user-controlled format string reaches variadic sink without literal format guard;",
-        "race_condition": "if (!global_lock) init_lock(); if (shared_flag) update_shared_state(); pthread_create(&t1, 0, worker, ctx); pthread_create(&t2, 0, worker, ctx); check_then_use(file_path); open(file_path); rename(file_path, backup); state mutation happens without synchronized critical section;",
-        "integer_overflow": "count = read_u32(pkt + 4); size = count * elem_size; buf = malloc(size); if (size < count) overflow = 1; for (i = 0; i < count; ++i) copy_elem(buf + i * elem_size, src); truncation or wraparound in arithmetic before allocation/copy;",
-        "path_traversal": "snprintf(path, sizeof(path), \"%s/%s\", base_dir, user_name); if (strstr(user_name, \"..\")) warn_only(); fopen(path, \"wb\"); extract_archive(entry_name, base_dir); insufficient canonicalization allows writes outside intended root;",
+        "crypto_symmetric": "state = input; round = key_schedule(key); state = cipher_rounds(state); output = state;",
+        "crypto_hash": "ctx = hash_init(); compress(ctx, block); digest = finalize(ctx);",
+        "network_http": "socket = connect(host, port); request = format_http(path); send(socket, request); response = recv(socket);",
+        "network_raw": "socket = open(); connect(socket, peer); send(socket, buffer); receive(socket, buffer);",
+        "process_injection": "process = open_process(pid); remote = allocate_remote(process); write_remote(process, remote, payload); create_remote_thread(process, remote);",
+        "file_operations": "file = open(path); data = read(file); write(file, data); close(file);",
+        "anti_debug": "debugger = detect_debugger(); ticks = read_timer(); if (debugger) return;",
+        "anti_vm": "vendor = query_hypervisor(); if (vendor) virtual_machine = true;",
+        "persistence": "key = open_startup_key(); set_value(key, path); start_service(service);",
+        "evasion": "payload = decode(blob, key); sleep(delay); protect(code); execute(payload);",
+        "string_decrypt": "plain = decrypt(ciphertext, key); if (printable(plain)) cache(plain);",
+        "c2_communication": "beacon = build_message(host_id); send_http(endpoint, beacon); command = parse(response);",
+        "privilege_escalation": "token = open_token(process); adjust_privileges(token); spawn_elevated(command);",
+        "memory_manipulation": "memory = allocate(size); copy(memory, source); protect(memory, executable); call(memory);",
+        "rop_gadget": "for (address = text_start; address < text_end; address++) collect_ret_gadget(address); chain = build_chain(gadgets);",
+        "heap_spray": "for (index = 0; index < count; index++) heap[index] = allocate(chunk); trigger_corruption(heap);",
+        "use_after_free": "object = allocate(size); free(object); dispatch(object);",
+        "buffer_overflow": "buffer = local_array(); length = read(input); copy(buffer, input, length);",
+        "format_string_vuln": "format = receive(user); printf(format);",
+        "race_condition": "if (shared_flag) update(shared_state); worker_one(); worker_two();",
+        "integer_overflow": "count = read_count(); size = count * element_size; buffer = allocate(size);",
+        "path_traversal": "path = join(root, user_name); if (contains_parent(path)) reject(path);",
     }
-    ANCHOR_MIN_CONFIDENCE: dict[str, float] = {
-        "buffer_overflow": 0.35,
-        "use_after_free": 0.35,
-        "format_string_vuln": 0.35,
-        "integer_overflow": 0.35,
-        "path_traversal": 0.35,
-    }
-    # Module-level singleton so anchors are loaded exactly once per process.
-    _shared: BehaviorClassifier | None = None
-    _shared_lock = threading.Lock()
+    ANCHOR_MIN_CONFIDENCE: dict[str, float] = {}
+    ANCHOR_CACHE_VERSION = 0
+    _shared: "BehaviorClassifier | None" = None
+
+    def __init__(self, embedder: BgeCodeEmbedder | None = None, provider=None) -> None:
+        self._embedder = embedder or BgeCodeEmbedder()
+        self._provider = provider
+        self._provider_explicit = provider is not None
+        self._anchor_embs: dict[str, list[float]] = {}
 
     @classmethod
-    def instance(cls, embedder: BgeCodeEmbedder) -> BehaviorClassifier:
-        with cls._shared_lock:
-            if cls._shared is None:
-                cls._shared = cls(embedder)
-            elif cls._shared._embedder is not embedder:
-                # Rebind the shared classifier when the embedding backend changes.
-                # This keeps anchor similarity scores aligned with the active embedder.
-                cls._shared._embedder = embedder
-                cls._shared.clear_cache()
+    def instance(cls, embedder: BgeCodeEmbedder | None = None) -> "BehaviorClassifier":
+        if cls._shared is None or (embedder is not None and cls._shared._embedder is not embedder):
+            cls._shared = cls(embedder)
         return cls._shared
 
-    ANCHOR_CACHE_VERSION = 1
-
-    def __init__(self, embedder: BgeCodeEmbedder):
-        self._embedder = embedder
-        self._anchor_embs: dict[str, list[float]] = {}
-        self._anchor_lock = threading.Lock()
-        self._anchor_generation = 0
-        self._load_anchor_cache()
-
-    # ── persistent anchor cache ─────────────────────────────────────────
-    # Anchor texts are static, so their embeddings depend only on the
-    # embedding model.  Persisting them (keyed by model identity) turns the
-    # cold-start cost of block=True classification — up to ~60 embed calls,
-    # minutes of CPU — into a one-time cost per model, shared by every
-    # process (host and idat) on the machine.
-
-    def _cache_key(self) -> str:
-        emb = getattr(self._embedder, "embedding_format", None)
-        if callable(emb):
-            try:
-                key = emb()
-            except Exception:
-                key = ""
-        else:
-            key = ""
-        if not key:
-            profile = getattr(self._embedder, "_profile", None)
-            model = getattr(self._embedder, "_model_path", "") or ""
-            dim = int(getattr(self._embedder, "dim", 0) or 0)
-            key = f"{getattr(self._embedder, 'backend', '?')}|{getattr(profile, 'key', '')}|{model}|{dim}"
-        return hashlib.sha256(key.encode("utf-8", errors="replace")).hexdigest()[:16]
-
-    def _cache_path(self) -> str:
-        try:
-            from ..config import CACHE_DIR
-        except ImportError:
-            from host.config import CACHE_DIR
-        return os.path.join(CACHE_DIR, f"anchor_cache_{self._cache_key()}.json")
-
-    def _load_anchor_cache(self) -> None:
-        dim = int(getattr(self._embedder, "dim", 0) or 0)
-        if not dim or not getattr(self._embedder, "_model_path", ""):
-            return  # cannot validate vector width (test doubles); stay cold
-        try:
-            with open(self._cache_path(), encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError, TypeError):
-            return
-        if not isinstance(data, dict) or data.get("version") != self.ANCHOR_CACHE_VERSION:
-            return
-        anchors = data.get("anchors")
-        if not isinstance(anchors, dict):
-            return
-        loaded: dict[str, list[float]] = {}
-        for behavior, vec in anchors.items():
-            if behavior not in self.ANCHORS or not isinstance(vec, list):
-                continue
-            try:
-                floats = [float(v) for v in vec]
-            except (TypeError, ValueError):
-                continue
-            if len(floats) != dim:
-                continue
-            loaded[behavior] = floats
-        if loaded:
-            with self._anchor_lock:
-                self._anchor_embs.update(loaded)
-
-    def _save_anchor(self, behavior: str, vec: list[float]) -> None:
-        dim = int(getattr(self._embedder, "dim", 0) or 0)
-        if (
-            not dim
-            or not getattr(self._embedder, "_model_path", "")
-            or not isinstance(vec, list)
-            or not vec
-        ):
-            return
-        try:
-            path = self._cache_path()
-            data: dict[str, Any] = {}
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    existing = json.load(fh)
-                if isinstance(existing, dict):
-                    data = existing
-            except (OSError, ValueError, TypeError):
-                pass
-            anchors = data.get("anchors") if isinstance(data.get("anchors"), dict) else {}
-            anchors[behavior] = [round(float(v), 6) for v in vec]
-            data.update(
-                {
-                    "version": self.ANCHOR_CACHE_VERSION,
-                    "dim": dim,
-                    "anchors": anchors,
-                }
-            )
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            os.replace(tmp, path)
-        except Exception:
-            return
-
     def clear_cache(self) -> None:
-        """Drop all cached anchor embeddings.
-
-        Useful when the embedder backend changes or when tests need to force
-        a cold-start path without recreating the singleton.
-        """
-        with self._anchor_lock:
-            self._anchor_generation += 1
-            self._anchor_embs.clear()
+        self._anchor_embs.clear()
 
     def refresh_anchors(self, behaviors: list[str] | None = None) -> None:
-        """Pre-warm the anchor cache.
+        del behaviors
+        self._anchor_embs.clear()
 
-        If `behaviors` is omitted, all anchors are refreshed. Otherwise only the
-        named behaviors are re-embedded.
-        """
-        targets = behaviors or list(self.ANCHORS.keys())
-        with self._anchor_lock:
-            generation = self._anchor_generation
-        for behavior in targets:
-            self._get_anchor(behavior, generation=generation)
-
-    def _get_anchor(self, behavior: str, generation: int | None = None) -> list[float] | None:
-        """
-        Return cached anchor embedding or compute it.
-        NEVER holds the lock during embed — that was causing full serialization.
-        """
-        with self._anchor_lock:
-            if behavior in self._anchor_embs:
-                return self._anchor_embs[behavior]
-            current_generation = self._anchor_generation
-        if generation is None:
-            generation = current_generation
-        # Compute outside the lock so other calls aren't blocked
-        try:
-            result = self._embedder.embed(self.ANCHORS[behavior])
-            # Production always returns _EmbedResult; some tests mock the
-            # embedder to return a raw list. Treat anything without .ok
-            # as an unavailable embedding.
-            if hasattr(result, "ok"):
-                if not result.ok or result.vector is None:
-                    return None
-                vec = result.vector
-            elif isinstance(result, list):
-                vec = result
-            else:
-                return None
-        except Exception:
-            return None
-        with self._anchor_lock:
-            if generation != self._anchor_generation:
-                return self._anchor_embs.get(behavior)
-            self._anchor_embs.setdefault(behavior, vec)
-        self._save_anchor(behavior, vec)
-        return self._anchor_embs.get(behavior)
-
-    def classify_vec(
-        self,
-        query_vec: list[float],
-        threshold: float = 0.25,
-        top_k: int = 4,
-        block: bool = False,
-        embed_budget_sec: float | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Classify a pre-computed embedding vector against all behavior anchors.
-
-        block=False (default): uses only anchors already in cache — returns
-            immediately when anchors have not been explicitly refreshed.
-        block=True: embeds any missing anchors inline — complete results
-            but may take minutes on the first call; the embed budget
-            (ANCHOR_EMBED_BUDGET_SEC, default 20s) bounds that cold start
-            and returns the partial classification so callers never hang.
-        """
-        # Snapshot cached anchors without holding the lock during scoring
-        with self._anchor_lock:
-            cached = dict(self._anchor_embs)
-
-        deadline: float | None = None
-        if block:
-            budget = ANCHOR_EMBED_BUDGET_SEC if embed_budget_sec is None else float(embed_budget_sec)
-            deadline = time.monotonic() + max(0.0, budget)
-
-        results = []
-        for behavior in self.ANCHORS:
-            anchor = cached.get(behavior)
-            if anchor is None:
-                if not block:
-                    continue  # skip unloaded anchor rather than blocking
-                if deadline is not None and time.monotonic() >= deadline:
-                    break  # bounded cold-start: return partial classification
-                anchor = self._get_anchor(behavior)
-                if anchor is None:
-                    continue
-            sim = BgeCodeEmbedder.cosine(query_vec, anchor)
-            min_thr = float(threshold or 0.0) if threshold is not None else 0.0
-            # Guard on the resolved threshold so a None threshold (raw cosine,
-            # no floor) cannot crash or be forced above the per-behavior floor.
-            if min_thr >= 0.20:
-                min_thr = max(min_thr, float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
-            if sim >= min_thr:
-                results.append({"behavior": behavior, "confidence": round(sim, 4)})
-
-        results.sort(key=lambda x: x["confidence"], reverse=True)
-        return results[:top_k]
+    def classify_vec(self, query_vec: list[float], **kwargs: Any) -> list[dict[str, Any]]:
+        # Typed-question providers do not expose vectors. Keep this explicit
+        # empty result rather than inventing a local embedding fallback.
+        del query_vec, kwargs
+        return []
 
     @staticmethod
     def _anchor_explain(anchor_text: str, query_text: str) -> list[str]:
-        phrases = [p.strip() for p in anchor_text.split(";") if p.strip()]
-        q_tokens = set(re.findall(r"[A-Za-z0-9_]+", (query_text or "").lower()))
-        scored: list[tuple[int, str]] = []
-        for ph in phrases:
-            p_tokens = set(re.findall(r"[A-Za-z0-9_]+", ph.lower()))
-            scored.append((len(q_tokens.intersection(p_tokens)), ph))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        # Only clauses that actually share a token with the query. Padding the
-        # list out to three with arbitrary anchor clauses presented text the
-        # match did not rest on as if it were the justification.
-        return [ph for ov, ph in scored if ov > 0][:3]
+        phrases = [phrase.strip() for phrase in str(anchor_text or "").split(";") if phrase.strip()]
+        query_tokens = set(re.findall(r"[A-Za-z0-9_]+", str(query_text or "").lower()))
+        scored = []
+        for phrase in phrases:
+            phrase_tokens = set(re.findall(r"[A-Za-z0-9_]+", phrase.lower()))
+            scored.append((len(query_tokens.intersection(phrase_tokens)), phrase))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [phrase for overlap, phrase in scored if overlap > 0][:3]
 
     @staticmethod
     def _text_tokens(text: str) -> set[str]:
         out: set[str] = set()
-        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(text or "")):
-            low_raw = raw.lower()
-            if low_raw and low_raw not in NOISE_WORDS:
-                out.add(low_raw)
-        for raw in _IDENT_RE.findall(str(text or "")):
+        raw_text = str(text or "")
+        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", raw_text):
+            low = raw.lower()
+            if low and low not in NOISE_WORDS:
+                out.add(low)
+        for raw in _IDENT_RE.findall(raw_text):
             for term in _identifier_terms(raw):
                 low = term.lower()
                 if low and low not in NOISE_WORDS:
                     out.add(low)
-        for literal in re.findall(r"%[0-9.]*[a-zA-Z]|\.\.|0x[0-9a-fA-F]+", str(text or "")):
-            out.add(literal.lower())
+        out.update(item.lower() for item in re.findall(r"%[0-9.]*[a-zA-Z]|\.\.|0x[0-9a-fA-F]+", raw_text))
         return out
 
     def classify(
@@ -2399,73 +250,39 @@ class BehaviorClassifier:
         max_tokens: int = 3000,
         top_k: int = 4,
         block: bool = False,
+        session_id: str = "",
     ) -> list[dict[str, Any]]:
-        """
-        Zero-shot behavior classification of decompiled pseudocode.
-        Embeds text and delegates to classify_vec.
-
-        Each result carries a ``backend`` field so callers can tell whether
-        the score came from the selected local profile or from a failed embedding. No
-        keyword-bonus is applied on top of the embedding score — the cosine
-        similarity is the confidence.
-        """
-        if not text or not text.strip():
+        del block
+        if not str(text or "").strip():
             return []
-        query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
-        embed_query = getattr(self._embedder, "embed_query", None)
-        result = embed_query(query) if callable(embed_query) else self._embedder.embed(query)
-        if not result.ok or result.vector is None:
-            return []
-        rows = self.classify_vec(result.vector, threshold=threshold, top_k=top_k, block=block)
-        if not rows and not block:
-            rows = self.classify_vec(result.vector, threshold=threshold, top_k=top_k, block=True)
-        for row in rows:
-            row["backend"] = result.backend
-            b = str(row.get("behavior") or "")
-            row["explain"] = self._anchor_explain(self.ANCHORS.get(b, ""), query)
-        rows.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
-        return rows
-
-    def anchor_coverage_report(self, min_similarity: float = 0.4, max_funcs: int = 5000) -> dict[str, Any]:
-        """Report how many functions match each anchor above min_similarity."""
-        rows = []
         try:
-            import idautils
-            funcs = list(idautils.Functions())[:max(1, int(max_funcs))]
+            from .advisory import ask_behavior
+
+            result = ask_behavior(
+                {"signature": _extract_signature(str(text)[:max_tokens])[:2048]},
+                # Resolve the process's explicit provider at request time so
+                # a long-lived compatibility facade cannot retain a disabled
+                # or invalid mode after an operator rotates configuration.
+                provider=self._provider if self._provider_explicit else None,
+                session_id=session_id,
+                operation="classify_text",
+            )
+            if not isinstance(result, list):
+                return []
+            return [
+                row
+                for row in result[: max(1, int(top_k))]
+                if float(row.get("confidence", 0.0) or 0.0) >= float(threshold or 0.0)
+            ]
         except Exception:
-            funcs = []
-        cache: list[tuple[int, list[float]]] = []
-        for ea in funcs:
-            try:
-                import ida_hexrays
-                cfunc = ida_hexrays.decompile(ea)
-                if not cfunc:
-                    continue
-                sig = _extract_signature(str(cfunc)[:3000]) or str(cfunc)[:1200]
-                result = self._embedder.embed(sig)
-                if result.ok and result.vector is not None:
-                    cache.append((ea, result.vector))
-            except Exception:
-                continue
-        for label in self.ANCHORS:
-            anc = self._get_anchor(label)
-            if anc is None:
-                rows.append({"label": label, "hit_count": 0, "top_example": None})
-                continue
-            best = (0.0, None)
-            hits = 0
-            for ea, qv in cache:
-                sim = BgeCodeEmbedder.cosine(qv, anc)
-                if sim >= float(min_similarity):
-                    hits += 1
-                    if sim > best[0]:
-                        best = (sim, ea)
-            rows.append({
-                "label": label,
-                "hit_count": hits,
-                "top_example": hex(best[1]) if best[1] is not None else None,
-            })
-        return {"anchors": rows, "min_similarity": float(min_similarity), "function_count": len(cache)}
+            return []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+__all__ = [
+    "BgeCodeEmbedder",
+    "BehaviorClassifier",
+    "FunctionEmbeddingIndex",
+    "INTEL_PROFILE",
+    "_extract_signature",
+    "_resolve_backend",
+]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
 import json
 import sqlite3
 import sys
@@ -44,90 +43,6 @@ def test_path_and_scalar_helpers_cover_host_and_ida_resolution(monkeypatch, tmp_
     assert module.code_digest("") == ""
     assert module._jaccard("", "words") == 0.0
     assert module._clamp01("bad", default=0.7) == 0.7
-
-
-def test_embedder_import_fallbacks_and_protocols(monkeypatch, tmp_path):
-    original_import = builtins.__import__
-
-    def fallback_import(name, *args, **kwargs):
-        if name == "ida_pro_mcp.host.intelligence.core":
-            raise ImportError("host package unavailable")
-        if name == "host.intelligence.core":
-            return SimpleNamespace(BgeCodeEmbedder=lambda: "fallback")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fallback_import)
-    assert module._get_embedder() == "fallback"
-
-    def no_embedder_import(name, *args, **kwargs):
-        if name in {"ida_pro_mcp.host.intelligence.core", "host.intelligence.core"}:
-            raise ImportError("no embedder")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_embedder_import)
-    assert module._get_embedder() is None
-
-    model = tmp_path / "model.gguf"
-    model.write_bytes(b"model")
-
-    class CallableIdentity:
-        backend = staticmethod(lambda: "local")
-        embedding_format = staticmethod(lambda: "document-v2")
-        _model_path = model
-
-    identity = BlackboardStore._embedding_identity(CallableIdentity(), 2)
-    assert identity.startswith("local|document-v2|model:") and identity.endswith("|2")
-    assert BlackboardStore._embedding_identity(SimpleNamespace(model_path=tmp_path / "missing")) == "unknown|model:" + str(tmp_path / "missing")
-    assert BlackboardStore._embedding_text("title", "body", tags="bad", evidence=[{"source": "ida"}]).endswith("evidence: ida")
-
-    store = BlackboardStore(str(tmp_path / "workspace.db"))
-    store._get_embedder = lambda: None
-    assert store._embed_text("none") is None
-
-    class VectorEmbedder:
-        def embed_document_vector(self, _text):
-            return [1.0, 0.0]
-
-    store._get_embedder = VectorEmbedder
-    assert module.unpack_floats(store._embed_text("vector")) == [1.0, 0.0]
-
-    class DocumentEmbedder:
-        def embed_document(self, text):
-            return SimpleNamespace(vector=[float(len(text)), 1.0])
-
-    store._get_embedder = DocumentEmbedder
-    assert module.unpack_floats(store._embed_text("document"))[1] == 1.0
-
-    class RawDocumentEmbedder:
-        def embed_document(self, _text):
-            return [0.25, 0.75]
-
-    store._get_embedder = RawDocumentEmbedder
-    assert module.unpack_floats(store._embed_text("raw")) == [0.25, 0.75]
-
-    class PurposeEmbedder:
-        def embed_vector(self, _text, *, purpose):
-            assert purpose == "document"
-            return [0.5, 0.5]
-
-    store._get_embedder = PurposeEmbedder
-    assert module.unpack_floats(store._embed_text("purpose")) == [0.5, 0.5]
-
-    class LegacyEmbedder:
-        def embed_vector(self, _text):
-            return [0.4, 0.6]
-
-    store._get_embedder = LegacyEmbedder
-    assert module.unpack_floats(store._embed_text("legacy")) == pytest.approx([0.4, 0.6])
-
-    class BrokenEmbedder:
-        def embed_vector(self, *_args, **_kwargs):
-            raise RuntimeError("model stopped")
-
-    store._get_embedder = BrokenEmbedder
-    assert store._embed_text("broken") is None
-    store.embed_enqueue = lambda *_args: (_ for _ in ()).throw(RuntimeError("queue stopped"))
-    store._enqueue_embedding("entry", "text")
 
 
 def _legacy_connection():

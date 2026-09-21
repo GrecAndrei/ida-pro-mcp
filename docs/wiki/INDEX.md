@@ -14,7 +14,7 @@ findings, and make reviewed IDB changes.
 
 ## When something needs explaining
 
-- [Search, embeddings, and reranking](search-and-retrieval.md)
+- [Search and retrieval](search-and-retrieval.md)
 - [Sessions and troubleshooting](sessions-troubleshooting.md)
 - [Live IDA validation](live-ida-validation.md)
 - [Reference and FAQ](reference-faq.md)
@@ -23,7 +23,7 @@ findings, and make reviewed IDB changes.
 
 ## Tool Reference Manuals
 
-- [Discovery](tools/discovery.md) — 21 operations: reconnaissance, structured search, semantic retrieval, and raw-byte inspection.
+- [Discovery](tools/discovery.md) — 23 operations: reconnaissance, deterministic retrieval, provider status, usage, and raw-byte inspection.
 - [Code](tools/code.md) — 11 operations: decompilation, disassembly, call graphs, cross-session function diffing, whole-binary diff triage, and emulation.
 - [Edit](tools/edit.md) — 33 operations: names, comments, function boundaries, patching, type/segment edits, snapshots, and transactions.
 - [Types](tools/types.md) — Struct, enum, and typedef declarations, struct/enum member edits, and TIL import/export.
@@ -40,4 +40,4 @@ findings, and make reviewed IDB changes.
 - [Sessions Core Guide](core/sessions.md) — Process management, safe mode gate, lease files, and RPC concurrency.
 - [Investigation Workspace](core/investigation.md) — Binary-scoped knowledge store, item kinds, lifecycle states, and evidence models.
 - [Frontier Guide](core/frontier.md) — Target selection strategies (`unresolved`, `frontier`, `stale`, `conflict`, `coverage`).
-- [Intelligence Guide](core/intelligence.md) — Semantic indexing slices, bi-encoder retrieval, and cross-encoder reranking.
+- [Intelligence Guide](core/intelligence.md) — Jev/custom/disabled providers, typed-question privacy, budgets, and lexical retrieval.

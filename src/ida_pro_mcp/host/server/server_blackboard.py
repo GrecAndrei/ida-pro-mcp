@@ -489,33 +489,31 @@ class ServerBlackboardMixin(
                 )
             except Exception as exc:
                 pulls.append({"tool": tool, "args": targs, "ok": False, "error": str(exc)})
+        # Blackboard retrieval is deterministic/lexical when no compatible
+        # provider vector is available; it never reads legacy model switches.
         embedding_neighbors = []
-        embed_off = str(os.environ.get("IDA_MCP_EMBED_DISABLED", "") or "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        if not embed_off:
-            try:
-                query = (source_text or "").strip() or addr
-                sims = store.semantic_search(
-                    query=query,
-                    top_k=5,
-                    threshold=0.35,
-                    include_resolved=True,
-                    include_contradicted=False,
-                )
-                if isinstance(sims, list):
-                    for s in sims[:5]:
-                        embedding_neighbors.append(
-                            {
-                                "entry_id": s.get("id"),
-                                "addr": s.get("addr"),
-                                "title": s.get("title"),
-                                "category": s.get("category"),
-                                "confidence": s.get("confidence"),
-                            }
-                        )
-            except Exception:
-                embedding_neighbors = []
+        try:
+            query = (source_text or "").strip() or addr
+            sims = store.semantic_search(
+                query=query,
+                top_k=5,
+                threshold=0.35,
+                include_resolved=True,
+                include_contradicted=False,
+            )
+            if isinstance(sims, list):
+                for s in sims[:5]:
+                    embedding_neighbors.append(
+                        {
+                            "entry_id": s.get("id"),
+                            "addr": s.get("addr"),
+                            "title": s.get("title"),
+                            "category": s.get("category"),
+                            "confidence": s.get("confidence"),
+                        }
+                    )
+        except Exception:
+            embedding_neighbors = []
         items = []
         for p in pulls:
             items.append(

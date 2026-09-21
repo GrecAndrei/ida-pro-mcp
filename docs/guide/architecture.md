@@ -27,7 +27,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `server_response.py` / `server_response_compact.py` — response processing, compaction
   - `server_batch.py` — batch macro execution
   - `server_blackboard.py` — blackboard tool integration
-  - `server_semantic.py` — semantic search integration
+  - `server_semantic.py` — deterministic gadget indexing and lexical retrieval integration
   - `server_client_state.py` — per-connection state and the session ownership guard
   - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
   - `server_wiki.py` — wiki tool integration
@@ -48,7 +48,10 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - Source-of-truth for all exposed tool contracts
 
 - `src/ida_pro_mcp/host/intelligence/`
-  - BehaviorClassifier, BgeCodeEmbedder, ContextAssembler, UsageIntelligence
+  - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
+  - `advisory.py` — bounded provider questions; never an authorization or mutation path
+  - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
+  - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations
@@ -67,7 +70,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 6. IDA tool execution (deterministic SDK logic)
 7. Host: compact/truncate response
 8. Host: auto-blackboard extraction from response payload
-9. Host: intelligence context injection (top-3 blackboard recall hints in compact mode)
+9. Host: deterministic context injection and optional provider advisory metadata
 10. Return MCP content
 
 ## Complexity Hotspots
@@ -109,7 +112,7 @@ RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 - **Stable schemas**: prefer additive changes over breaking shape changes
 - **Backward compatibility**: preserve existing aliases and action compatibility
 - **Defensive errors**: return structured errors (`{"error": true, "code": "...", "message": "..."}`) with actionable hints
-- **No LLM runtime**: tool execution is pure IDA SDK + local ML; no server-side LLM calls
+- **Explicit advisory provider only**: deterministic IDA execution and policy remain authoritative; Jev/custom typed questions are opt-in, bounded, and cannot invoke tools, authorize mutations, or write findings
 
 ## Safe Areas For New Contributors
 

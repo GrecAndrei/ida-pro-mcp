@@ -35,8 +35,6 @@ def test_profile_math_handles_empty_and_degenerate_inputs():
     assert arch_profile._byte_2gram_embedding(b"abcd")
     assert arch_profile._sparse_cosine({}, {1: 1.0}) == 0.0
     assert arch_profile._sparse_cosine({1: 0.0}, {1: 1.0}) == 0.0
-    assert arch_profile._riscv_bitness(b"\x00" * 8) == (0.5, 0.5)
-    assert arch_profile._dominant_hi20(b"\x00" * 16) is None
     assert arch_profile._raw_arch_candidates(b"") == []
     assert arch_profile._cortex_m_vector_plausible(b"\x00" * 16, 0x70000001) is False
 

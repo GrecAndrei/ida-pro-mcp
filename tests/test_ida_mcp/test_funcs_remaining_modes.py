@@ -194,7 +194,12 @@ def test_function_symbol_persistence_and_embedding_rename_modes(monkeypatch, fre
     monkeypatch.setattr(funcs_mod.idc, "get_idb_path", lambda: "/tmp/demo.i64")
     monkeypatch.setattr(funcs_mod.idc, "get_func_name", lambda ea: "sub_140001000" if ea == 0x140001000 else "packet_handler")
     monkeypatch.setattr(funcs_mod.idautils, "Functions", lambda: [0x140001000])
-    monkeypatch.setattr(funcs_mod.ida_hexrays, "decompile", lambda _ea: "int f(void)")
+    lexical = importlib.import_module("ida_pro_mcp.host.intelligence.lexical")
+    monkeypatch.setattr(lexical, "LexicalFunctionIndex", Index)
+    intelligence = types.ModuleType("ida_pro_mcp.ida_mcp.tools.intelligence")
+    intelligence._build_fast_signature = lambda *_args: "int f(void)"
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp.tools.intelligence", intelligence)
+    monkeypatch.setattr(funcs_mod._compat, "get_func_info", lambda _ea: types.SimpleNamespace(start_ea=0x140001000, end_ea=0x140001010))
     suggestions = _ok(funcs_mod.funcs(action="suggest_names", limit=1, threshold=0.8))
     assert suggestions["suggestions"][0]["suggested_name"] == "packet_handler"
     assert funcs_mod._embedding_rename_suggestions() ["count"] == 1

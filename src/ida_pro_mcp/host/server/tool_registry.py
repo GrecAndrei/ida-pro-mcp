@@ -79,7 +79,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state", "events", "registers"],
     "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
     "intelligence": [
-        "intelligence_status", "embedder_status", "reranker_status", "anchor_status",
+        "intelligence_status", "embedder_status", "reranker_status", "usage_status", "usage_report", "anchor_status",
         "refresh_anchors", "classify_text", "classify_function",
         "index_function", "index_batch", "index_fast", "index_range", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary", "function_families",

@@ -20,7 +20,7 @@ Example workflows:
 - `ida_open_binary(binary_path=...)` then `ida_overview()` to establish architecture and entry points
 - `ida_list_imports()` and `ida_list_strings()` to surface unexpected dependencies and embedded paths
 - `ida_find(query=...)` to locate risky parser, crypto, filesystem, network, or process-control APIs
-- `ida_list_functions()` and `ida_function_families()` to spot symbol drift between builds
+- `ida_list_functions()` and `ida_diff_sessions()` to spot symbol drift between builds
 - `ida_export_findings(path=...)` to document binary behavior in structured notes before filing an advisory or patch
 
 ## 2. Vulnerability triage and patch validation

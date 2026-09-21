@@ -1,17 +1,17 @@
 """Regression tests for the resurrected firmware-shaping tool (WO-F1).
 
 WO-F1 rebuilds the deleted ``firmware_view`` capability as an IDA-side
-``firmware`` tool — the mission differentiator vs radare2.  ``pointer_sweep``
-is folded into ``search(action='data_value')`` (WO-S6); ``auto_retype`` is
-deferred.  This file pins the five rebuilt actions on the shared raw-blob fake
+``firmware`` tool. ``pointer_sweep`` is folded into
+``search(action='data_value')`` (WO-S6); ``auto_retype`` is deferred. This file
+pins the five rebuilt actions on the shared raw-blob fake
 (``tests/ida_mcp/raw_blob_fake.py``), no live IDA required:
 
 - detect_vector_table returns the committed RISC-V fixture's LE u32 ISR table
   (4 handlers at 0x80000008), ranks it above incidental pointer runs, and
   honors ``word`` / ``endian`` / ``base``.
-- detect_load_base validates the known load base (0x80000000) by decoding the
-  reset-vector ``j`` and the reset-handler GP-init prologue, and ranks it above
-  a wrong hypothesis.
+- detect_load_base keeps RISC-V candidates as bounded evidence and reports the
+  explicit-provider advisory boundary without decoding MCP-owned RISC-V
+  instruction heuristics.
 - detect_mmio surfaces the fixture's UART base (0x10003000) as an MMIO page.
 - rtos_scan detects FreeRTOS signatures in raw bytes and returns no matches on
   the bare fixture.
@@ -129,13 +129,11 @@ def test_detect_load_base_validates_known_base():
     blob, mod = _load_fixture_with_insn_map()
     resp = mod.firmware(action="detect_load_base")
     assert resp["ok"] is True, resp
-    assert resp["recommended_base"] == hex(LOAD_BASE), resp
-    top = resp["candidates"][0]
-    assert top["base"] == hex(LOAD_BASE)
-    assert top["confidence"] >= 0.8, top
-    evidence = "\n".join(top["evidence"])
-    assert "reset vector" in evidence and "jumps" in evidence, top
-    assert "GP init" in evidence, top
+    assert resp["recommended_base"] is None, resp
+    assert resp["advisory"]["code"] == "INTELLIGENCE_DISABLED", resp
+    known = next(row for row in resp["candidates"] if row["base"] == hex(LOAD_BASE))
+    evidence = "\n".join(known["evidence"])
+    assert "delegated to IDA native analysis" in evidence, known
 
 
 def test_detect_load_base_explicit_candidates_rank_known_base_first():
@@ -143,8 +141,10 @@ def test_detect_load_base_explicit_candidates_rank_known_base_first():
     resp = mod.firmware(action="detect_load_base",
                         base_candidates=[hex(LOAD_BASE), "0x08000000"])
     assert resp["ok"] is True, resp
-    assert resp["candidates"][0]["base"] == hex(LOAD_BASE)
-    assert resp["candidates"][0]["confidence"] > resp["candidates"][1]["confidence"]
+    assert resp["recommended_base"] is None, resp
+    assert resp["advisory"]["code"] == "INTELLIGENCE_DISABLED", resp
+    known = next(row for row in resp["candidates"] if row["base"] == hex(LOAD_BASE))
+    assert "delegated to IDA native analysis" in " ".join(known["evidence"])
 
 
 def test_detect_load_base_invalid_candidate_errors():
@@ -380,7 +380,9 @@ def test_firmware_infrastructure_and_scan_helpers_cover_fallbacks(monkeypatch):
 
 def test_firmware_load_base_architecture_and_vector_error_modes(monkeypatch):
     blob, mod = _load_fixture_with_insn_map()
-    assert mod._riscv_jal_target(0x1000, 0) is None
+    assert "delegated to IDA native analysis" in mod._validate_load_base(
+        LOAD_BASE, "riscv", 4, LOAD_BASE, LOAD_BASE + 0x1000
+    )["evidence"][0]
     assert mod._validate_load_base(0x90000000, "riscv", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] < 0.5
     assert mod._validate_load_base(LOAD_BASE, "arm", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] < 0.7
     assert mod._validate_load_base(LOAD_BASE, "mips", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] >= 0.05

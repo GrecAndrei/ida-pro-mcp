@@ -5,7 +5,7 @@ Original 515-line implementation injected `_nudge` into every tool response with
   - hex arithmetic resolution (redundant — the LLM can call `calc`)
   - rip-relative expression nagging
   - redundant-call detection (nagging)
-  - embedding-similarity tool suggestions (random against template strings)
+  - model-based similarity tool suggestions (random against template strings)
   - Markov-chain tool suggestions (predicts LLM behavior, not binary structure)
   - prefetch suite (recursive call to trace_analysis(prefetch_context))
   - progress_note

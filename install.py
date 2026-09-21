@@ -102,16 +102,13 @@ def get_mcp_server_config(
     """Build an MCP stdio server-config dict.
 
     Compatibility wrapper that delegates to ``build_stdio_config()`` with
-    the venv Python resolved from *install_path*.  Vertex-compat mode is
-    enabled when *global_vertex_compat* is set or *client_name* is in the
-    known vertex-compat set.
+    the venv Python resolved from *install_path*.  Intelligence is disabled
+    by default; operators select Jev or custom BYOK explicitly through the
+    modern installer options/environment.
     """
     install_path = _absolute_install_path(install_path)
     python_exe = _resolve_venv_python(install_path)
-    # This compatibility API is the legacy local-backend surface. Explicitly
-    # select local mode so an old caller cannot inherit backend=gemini from a
-    # newer state file without asking for the cloud backend.
-    cfg = build_stdio_config(python_exe, install_path, embed_backend="local")
+    cfg = build_stdio_config(python_exe, install_path, intelligence_mode="disabled")
     if global_vertex_compat or client_name in _VERTEX_COMPAT_CLIENTS:
         cfg.setdefault("env", {})["IDA_MCP_VERTEX_COMPAT"] = "1"
     return cfg

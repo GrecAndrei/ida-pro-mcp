@@ -148,7 +148,8 @@ def test_bootstrap_raw_entry_points_riscv_auipc_and_exceptions(monkeypatch):
     monkeypatch.setattr(ida_entry, "add_entry", lambda *_a: (_ for _ in ()).throw(RuntimeError("add entry failed")))
 
     res = analysis_mod._bootstrap_raw_entry_points(0x1000, 0x2000)
-    assert res["seeded_entries"] >= 1
+    assert res["seeded_entries"] == 0
+    assert "delegated to IDA" in res["note"]
 
     # Also test sign-extended negative imm20 and imm12
     def fake_get_operand_value_signed(ea, n):

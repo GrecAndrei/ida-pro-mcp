@@ -34,13 +34,13 @@ body:
   - type: dropdown
     id: backend
     attributes:
-      label: Retrieval backend (if relevant)
-      description: Native is the default when libmcp_llama.so is built; HTTP is the fallback.
+      label: Intelligence mode (if relevant)
+      description: Select the explicit provider mode used by the MCP host.
       options:
-        - Native (in-process libmcp_llama.so)
-        - HTTP (llama-server)
-        - Cloud (Gemini)
-        - Not retrieval-related
+        - Jev
+        - Custom BYOK
+        - Disabled
+        - Not intelligence-related
   - type: textarea
     id: what-happened
     attributes:

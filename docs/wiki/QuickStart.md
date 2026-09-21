@@ -55,6 +55,6 @@ ida_publish_findings(dry_run=true)   # then risk_ack=true to write to the IDB
 - [Sessions](core/sessions.md) — lifecycle, background loading, safe mode.
 - [Investigation](core/investigation.md) — findings, lifecycle, export, IDB round-trip.
 - [Frontier](core/frontier.md) — `ida_next_target` strategies.
-- [Intelligence](core/intelligence.md) — semantic indexing and search.
+- [Intelligence](core/intelligence.md) — provider modes, privacy, budgets, and lexical search.
 - [Tools](tools/) — every operation by category.
 - `ida_help(query="...")` — the exact contract of any operation, on demand.

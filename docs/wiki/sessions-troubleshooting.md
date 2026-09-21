@@ -56,18 +56,14 @@ tokens have a 1-hour sliding TTL refreshed on every continuation call, retain up
 to 500 active tokens in the host store, and support in-flight search via
 `pattern="..."` without retrieving all chunks.
 
-## A semantic search is unavailable
+## Intelligence or advisory scoring is unavailable
 
-Check the installed model and backend with the relevant status operations or
-run the installer doctor:
-
-```bash
-python install.py --embedder-doctor
-```
-
-An unavailable semantic backend is an explicit unavailable result, not a zero
-vector or a score pretending to be semantic. Use lexical discovery while
-repairing the model, library, server, or credentials.
+Call `ida_intelligence_status` and `ida_usage_status`. Disabled mode and
+provider outages do not break deterministic lexical discovery. Jev/custom
+failures are explicit (`JEV_UNAVAILABLE`, `PROVIDER_PROTOCOL_ERROR`, or
+`BUDGET_EXCEEDED`); use lexical results while repairing credentials,
+allowlisting, provider configuration, or budget settings. There is no model
+download or local fallback to repair.
 
 ## A mutation is denied
 

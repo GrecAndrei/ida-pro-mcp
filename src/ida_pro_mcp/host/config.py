@@ -2,6 +2,7 @@
 """
 Host configuration: runtime directories, environment parsing, logging.
 """
+
 import contextlib
 import math
 import os
@@ -90,17 +91,11 @@ def _default_runtime_dir() -> str:
         root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return os.path.realpath(os.path.join(root, "ida-pro-mcp"))
     if sys.platform == "darwin":
-        return os.path.realpath(
-            os.path.join(
-                str(Path.home()), "Library", "Application Support", "ida-pro-mcp"
-            )
-        )
+        return os.path.realpath(os.path.join(str(Path.home()), "Library", "Application Support", "ida-pro-mcp"))
     xdg_state = os.environ.get("XDG_STATE_HOME")
     if xdg_state:
         return os.path.realpath(os.path.join(xdg_state, "ida-pro-mcp"))
-    return os.path.realpath(
-        os.path.join(str(Path.home()), ".local", "state", "ida-pro-mcp")
-    )
+    return os.path.realpath(os.path.join(str(Path.home()), ".local", "state", "ida-pro-mcp"))
 
 
 def _resolve_runtime_dir() -> str:
@@ -228,18 +223,14 @@ RUNTIME_LEASE_HEARTBEAT_SECONDS = _env_int(
     min_value=2,
     max_value=RUNTIME_LEASE_TTL - 1,
 )
-PROCESS_TERMINATION_TIMEOUT_SECONDS = _env_float(
-    "IDA_MCP_PROCESS_TERMINATION_TIMEOUT", 2.0, min_value=1.0
-)
+PROCESS_TERMINATION_TIMEOUT_SECONDS = _env_float("IDA_MCP_PROCESS_TERMINATION_TIMEOUT", 2.0, min_value=1.0)
 _RUNTIME_LEASE_RE = re.compile(r"^SID_([A-Za-z0-9]{8})\.lease\.json$")
 
 # Semantic index configuration
 SEMANTIC_INDEX_VERSION = 1
 SEMANTIC_INDEX_DB_NAME = f"semantic_asm_index_v{SEMANTIC_INDEX_VERSION}.sqlite3"
 SEMANTIC_INDEX_MAX_WORKERS = _env_int("IDA_MCP_SEMANTIC_INDEX_WORKERS", 2, min_value=1)
-SEMANTIC_INDEX_WAIT_SECONDS = _env_float(
-    "IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", 3.0, min_value=0.0
-)
+SEMANTIC_INDEX_WAIT_SECONDS = _env_float("IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", 3.0, min_value=0.0)
 SEMANTIC_GADGET_SOURCE_ACTIONS = (
     "rop",
     "jop",
@@ -248,9 +239,7 @@ SEMANTIC_GADGET_SOURCE_ACTIONS = (
     "write_what_where",
     "stack_pivot",
 )
-SEMANTIC_INDEX_SOURCE_LIMIT = _env_int(
-    "IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", 3000, min_value=50
-)
+SEMANTIC_INDEX_SOURCE_LIMIT = _env_int("IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", 3000, min_value=50)
 SEMANTIC_SCORE_SUBSTRING_MATCH = 48
 SEMANTIC_SCORE_PATTERN_MATCH = 120
 SEMANTIC_SCORE_PER_TOKEN = 12
@@ -266,9 +255,8 @@ MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
 # background_open_enabled() flag below is set. With background open off (the
 # default) this threshold is inert: every open is blocking. 50 MiB by default;
 # override with IDA_MCP_LARGE_BINARY_MB.
-LARGE_BINARY_THRESHOLD_BYTES = (
-    _env_int("IDA_MCP_LARGE_BINARY_MB", 50, min_value=1) * 1024 * 1024
-)
+LARGE_BINARY_THRESHOLD_BYTES = _env_int("IDA_MCP_LARGE_BINARY_MB", 50, min_value=1) * 1024 * 1024
+
 
 # EXPERIMENTAL — background open. session action create_background
 # (ida_open_background) and the large-binary auto-background route are DISABLED
@@ -281,14 +269,13 @@ LARGE_BINARY_THRESHOLD_BYTES = (
 def background_open_enabled() -> bool:
     return _env_bool("IDA_MCP_BACKGROUND_OPEN", False)
 
+
 # Default-open analysis wait: how long a blocking open may wait (after the IDB
 # is on disk) for a live runtime to confirm auto-analysis completed before the
 # open returns with safe_mode on and the async watcher takes over. 0 disables
 # the wait (open returns as soon as the IDB is on disk, as before). Override
 # with IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC.
-BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float(
-    "IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC", 600, min_value=0.0
-)
+BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float("IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC", 600, min_value=0.0)
 
 # Safe mode: while a session's IDA auto-analysis is still completing, the
 # host blocks full-binary analysis / indexing / script execution and reports
@@ -303,12 +290,8 @@ BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float(
 # false-negative). Override with IDA_MCP_SAFE_MODE_POLL_SEC,
 # IDA_MCP_SAFE_MODE_WATCH_SEC, and IDA_MCP_ANALYSIS_CONFIRM_POLLS.
 SAFE_MODE_POLL_SECONDS = _env_float("IDA_MCP_SAFE_MODE_POLL_SEC", 5.0, min_value=1.0)
-SAFE_MODE_WATCH_SECONDS = _env_float(
-    "IDA_MCP_SAFE_MODE_WATCH_SEC", float(6 * 3600), min_value=60.0
-)
-ANALYSIS_CONFIRM_POLLS = _env_int(
-    "IDA_MCP_ANALYSIS_CONFIRM_POLLS", 2, min_value=1, max_value=20
-)
+SAFE_MODE_WATCH_SECONDS = _env_float("IDA_MCP_SAFE_MODE_WATCH_SEC", float(6 * 3600), min_value=60.0)
+ANALYSIS_CONFIRM_POLLS = _env_int("IDA_MCP_ANALYSIS_CONFIRM_POLLS", 2, min_value=1, max_value=20)
 
 # Metadata checkpoint save interval (seconds). The analysis watchdog and
 # apply-progress paths persist per-session metadata every few seconds; this
@@ -316,18 +299,14 @@ ANALYSIS_CONFIRM_POLLS = _env_int(
 # daemon does not thrash the disk. The analysis gate is still persisted on
 # every pending/complete transition and at shutdown regardless of this knob.
 # 0 disables intermediate checkpoints. Override with IDA_MCP_CHECKPOINT_SAVE_SEC.
-CHECKPOINT_SAVE_SECONDS = _env_float(
-    "IDA_MCP_CHECKPOINT_SAVE_SEC", 5.0, min_value=0.0
-)
+CHECKPOINT_SAVE_SECONDS = _env_float("IDA_MCP_CHECKPOINT_SAVE_SEC", 5.0, min_value=0.0)
 
 # Grace period (seconds) a session gets to shut down a large-IDB runtime
 # before the host escalates to a hard kill. Large-IDB sessions flush big
 # databases on exit and need more time than a normal session; the per-session
 # large-IDB shutdown grace is derived from this. Override with
 # IDA_MCP_LARGE_IDB_SHUTDOWN_GRACE_SEC.
-LARGE_IDB_SHUTDOWN_GRACE_SECONDS = _env_float(
-    "IDA_MCP_LARGE_IDB_SHUTDOWN_GRACE_SEC", 30.0, min_value=1.0
-)
+LARGE_IDB_SHUTDOWN_GRACE_SECONDS = _env_float("IDA_MCP_LARGE_IDB_SHUTDOWN_GRACE_SEC", 30.0, min_value=1.0)
 
 # How long a tool call may wait for a session's RPC lane before the host
 # fails fast with IDA_BUSY instead of queueing threads behind a stuck
@@ -335,9 +314,7 @@ LARGE_IDB_SHUTDOWN_GRACE_SECONDS = _env_float(
 # the same session serialize here; different sessions stay fully parallel.
 # 0 disables the bound (unlimited queueing). Override with
 # IDA_MCP_RPC_QUEUE_TIMEOUT (seconds).
-RPC_QUEUE_TIMEOUT_SECONDS = _env_float(
-    "IDA_MCP_RPC_QUEUE_TIMEOUT", 300, min_value=0.0
-)
+RPC_QUEUE_TIMEOUT_SECONDS = _env_float("IDA_MCP_RPC_QUEUE_TIMEOUT", 300, min_value=0.0)
 
 # Rate limiting defaults
 RATE_LIMIT_PER_TOOL = _env_float("IDA_MCP_RATE_LIMIT_PER_TOOL", 10.0, min_value=0.0)
@@ -366,9 +343,7 @@ CONTEXT_DENSITY_MAX_XREF_ITEMS = 20
 _POINTER_NOTE_SIGNAL_TOOLS_STRONG = {"calc", "memory"}
 _POINTER_NOTE_SIGNAL_TOOLS_HINT = {"data", "code", "search", "batch"}
 _POINTER_NOTE_HEX_RE = re.compile(r"0x[0-9a-fA-F]{2,}")
-_POINTER_NOTE_MATH_RE = re.compile(
-    r"0x[0-9a-fA-F]{2,}\s*(?:\+|\-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)"
-)
+_POINTER_NOTE_MATH_RE = re.compile(r"0x[0-9a-fA-F]{2,}\s*(?:\+|\-|\*|/|<<|>>)\s*(?:0x[0-9a-fA-F]{1,}|[0-9]+)")
 _POINTER_NOTE_SIGNAL_KEYWORDS = (
     "addr",
     "address",
@@ -416,8 +391,9 @@ WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 # Ranking/inference policy
-# Default is embedding-first to avoid brittle keyword/threshold heuristics.
-EMBEDDING_FIRST_MODE = _env_bool("IDA_MCP_EMBEDDING_FIRST_MODE", True)
+# Deterministic lexical ranking is the baseline. Typed-question Jev/custom
+# providers may add bounded advisory scores, but never construct vector models
+# or replace the lexical path.
 ALLOW_HEURISTIC_FALLBACKS = _env_bool("IDA_MCP_ALLOW_HEURISTIC_FALLBACKS", False)
 
 
@@ -456,6 +432,7 @@ def _bounded_int(
 
 def _parse_str_list(value: Any) -> list[str]:
     from .intelligence.helpers import parse_str_list
+
     return parse_str_list(value)
 
 
@@ -526,5 +503,3 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(s)
     except Exception:
         return None
-
-

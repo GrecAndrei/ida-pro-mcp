@@ -424,7 +424,7 @@ class IDAMCPServer(
         atexit.register(self.audit.close)
         self.rate_limiter = RateLimiter()
         from ..intelligence.context import get_assembler  # lazy: break circular import
-        self.assembler = get_assembler()  # bge-code-v1 intelligence layer
+        self.assembler = get_assembler()  # deterministic context + optional typed-question advisory layer
         # Usage intelligence — passive observer and learner (started in run())
         try:
             from ..intelligence.usage import UsageIntelligence
@@ -467,9 +467,6 @@ class IDAMCPServer(
         self._wiki_cache_ttl = 5.0
         self._wiki_cache_lock = threading.Lock()
         self._wiki_cache_build_lock = threading.Lock()
-        self._wiki_embed_cache: dict[str, list[float]] = {}
-        self._wiki_embed_inflight: dict[str, threading.Event] = {}
-        self._wiki_embed_cache_max = 512
         self._tools_list_cache: dict[str, tuple] = {}
         self._tools_list_cache_lock = threading.RLock()
         self._context_density_optimizer = ContextDensityOptimizer(
@@ -1221,18 +1218,6 @@ def main():
             if os.path.exists(DAEMON_SOCKET):
                 os.unlink(DAEMON_SOCKET)
     try:
-        # Auto-enable the in-process native retrieval backend when
-        # libmcp_llama.so is present and no backend is pinned.  The HTTP
-        # llama-server path remains the fallback.  This runs only here, never
-        # in tests (which construct IDAMCPServer directly).
-        try:
-            from ida_pro_mcp.host.intelligence.native import bootstrap_native_backend
-
-            _native_report = bootstrap_native_backend()
-            if _native_report.get("enabled"):
-                sys.stderr.write(f"native retrieval backend: {_native_report.get('lib')}\n")
-        except Exception as _native_exc:
-            sys.stderr.write(f"native backend bootstrap skipped: {_native_exc}\n")
         server = IDAMCPServer()
         if daemon_mode:
             server.run_daemon()

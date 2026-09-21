@@ -63,27 +63,6 @@ def test_firmware_range_windows_and_read_helpers_cover_empty_and_hole_paths(monk
     assert mod._read_bytes_range(blob.base + 4, blob.base + 2) == b""
 
 
-def test_firmware_load_base_scores_arm_generic_and_invalid_hypotheses(monkeypatch):
-    blob, mod = _load()
-    assert mod._riscv_jal_target(0x1000, 0) is None
-    assert mod._has_riscv_gp_init([(0x1000, "auipc"), (0x1004, "addi")]) is False
-    monkeypatch.setattr(mod, "get_arch", lambda: "arm")
-    monkeypatch.setattr(mod, "is_arm_family", lambda _arch: True)
-    monkeypatch.setattr(mod, "is_riscv_family", lambda _arch: False)
-    result = mod._validate_load_base(blob.base, "arm", 4, blob.base, blob.end_ea)
-    assert result["confidence"] >= 0.05
-    monkeypatch.setattr(mod, "is_arm_family", lambda _arch: False)
-    generic = mod._validate_load_base(blob.base, "unknown", 4, blob.base, blob.end_ea)
-    assert generic["evidence"]
-    outside = mod._validate_load_base(0x1000, "unknown", 4, blob.base, blob.end_ea)
-    assert "pointer word" in outside["evidence"][0]
-    assert mod._detect_load_base(blob.base, blob.end_ea, "bad", 2)["code"] == "INVALID_ARGS"
-
-    mod.get_arch = lambda: "riscv"
-    mod.is_riscv_family = lambda _arch: True
-    assert mod._detect_load_base(blob.base, blob.end_ea, [], 2)["candidates"] == []
-
-
 def test_firmware_mmio_and_rtos_action_edges(monkeypatch):
     blob, mod = _load()
     assert mod._peripheral_match(0x2000) is None
@@ -139,6 +118,7 @@ def test_firmware_public_dispatch_validates_modes_and_bounds(monkeypatch):
     assert result["ok"] is True
 
 
+@pytest.mark.skip(reason="MCP-owned RISC-V load-base heuristics were removed")
 def test_firmware_deep_branches_99(monkeypatch):
     blob, mod = _load()
     ida_ida = blob.module("ida_ida")

@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from ida_pro_mcp.host.analysis.context_density import ContextDensityOptimizer
-from ida_pro_mcp.host.intelligence import rerank_profiles
 from ida_pro_mcp.host.intelligence.helpers import parse_str_list
+from ida_pro_mcp.host.intelligence.providers import provider_status
 from ida_pro_mcp.host.intelligence.sources.urlhaus import UrlhausSource
 from ida_pro_mcp.host.intelligence.usage import DriftDetector, UsageIntelligence
 from ida_pro_mcp.host.policy import PolicyDecision, PolicyMode, RiskTier, classify_tool_action, evaluate_policy
@@ -22,11 +22,12 @@ from ida_pro_mcp.host.server.server_blackboard_trace import ServerBlackboardTrac
 from ida_pro_mcp.host.server.server_response_compact import ServerResponseCompactMixin
 
 
-def test_small_helper_and_profile_fallbacks(monkeypatch):
+def test_small_helper_and_provider_fallbacks(monkeypatch):
     assert parse_str_list(123, sep="|") == ["123"]
-    assert rerank_profiles.profile_from_rerank_model("unknown.gguf", requested=None).key == "custom-rerank"
-    monkeypatch.setattr(rerank_profiles, "read_gguf_metadata", lambda _path: {"general.name": "BGE-Reranker"})
-    assert rerank_profiles.profile_from_rerank_model("unknown.gguf").key == "bge-reranker-v2-gemma"
+    monkeypatch.delenv("IDA_MCP_INTELLIGENCE_MODE", raising=False)
+    status = provider_status(env={})
+    assert status["ok"] is True
+    assert status["provider"]["mode"] == "disabled"
 
 
 def test_urlhaus_non_json_plain_file_is_ignored(tmp_path):

@@ -684,31 +684,15 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             ctx_has_text = bool((context or "").strip())
             bootstrap = data.get("bootstrap")
             bootstrap_prior = self._bootstrap_prior_confidence(bootstrap)
-            embedder = None
-            ctx_vec = None
-            if ctx_has_text:
-                try:
-                    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
-                    embedder = BgeCodeEmbedder()
-                    ctx_vec = embedder.embed_vector((context or "")[:1200])
-                except Exception:
-                    embedder = None
-                    ctx_vec = None
             for skill_id, skill in data["skills"].items():
                 base_score = float(skill.get("q_value", 0.5))
                 desc = (skill.get("description", "") + " " + " ".join(skill.get("tags", []))).lower()
                 context_relevance = 0.0
                 if ctx_has_text:
-                    if embedder is not None and ctx_vec is not None and desc.strip():
-                        try:
-                            dvec = embedder.embed_vector(desc[:1200])
-                            if dvec is not None and ctx_vec is not None:
-                                context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
-                        except Exception:
-                            context_relevance = 0.0
-                    elif ctx_lower and any(word in desc for word in ctx_lower.split()):
-                        # Deterministic fallback when embeddings unavailable.
-                        context_relevance = 0.5
+                    query_terms = {term for term in ctx_lower.split() if len(term) > 2}
+                    desc_terms = set(desc.split())
+                    if query_terms and desc_terms:
+                        context_relevance = min(1.0, len(query_terms & desc_terms) / len(query_terms))
                     skill["context_match"] = bool(context_relevance > 0.0)
                 score = ((base_score + context_relevance) / 2.0) if ctx_has_text else base_score
                 samples = int(skill.get("success_count", 0)) + int(skill.get("failure_count", 0))
@@ -741,15 +725,10 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                     desc = (str(gs.get("description", "")) + " " + " ".join(gs.get("tags", []))).lower()
                     context_relevance = 0.0
                     if ctx_has_text:
-                        if embedder is not None and ctx_vec is not None and desc.strip():
-                            try:
-                                dvec = embedder.embed_vector(desc[:1200])
-                                if dvec is not None and ctx_vec is not None:
-                                    context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
-                            except Exception:
-                                context_relevance = 0.0
-                        elif ctx_lower and any(word in desc for word in ctx_lower.split()):
-                            context_relevance = 0.5
+                        query_terms = {term for term in ctx_lower.split() if len(term) > 2}
+                        desc_terms = set(desc.split())
+                        if query_terms and desc_terms:
+                            context_relevance = min(1.0, len(query_terms & desc_terms) / len(query_terms))
                     score = ((base_score + context_relevance) / 2.0) if ctx_has_text else base_score
                     weights = (global_blend or {}).get("weights") or {
                         "bootstrap": 0.5,
@@ -798,7 +777,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                     "No active IDB path associated with this session. Ingest a binary first.",
                 )
             # Bound the caller-controlled limit: suggest_next_targets multiplies
-            # it by 4 for an embedding-index top_k query, so an unbounded value
+            # it by 4 for a lexical-index top_k query, so an unbounded value
             # (the session schema admits a bare int with no min/max) would force
             # a very large structured search over the index.
             try:

@@ -25,16 +25,18 @@ after checking the target, intended change, and rollback plan.
 
 ## Does analysis data leave the machine?
 
-The server itself has no LLM service behind it and uses deterministic local IDA
-calls. Local embedding and reranking stay on the machine. The Gemini embedding
-backend is opt-in and uploads compact behavioral signatures to Google, not full
-decompilations.
+Disabled mode is local and uses deterministic IDA calls plus lexical retrieval.
+Jev/custom are explicit remote advisory providers: they receive only bounded
+metadata, bytes/disassembly samples, and signatures. Raw decompilation,
+credentials, prompts, completions, and provider bodies are not logged or
+persisted. Custom origins must pass the HTTPS allowlist; loopback HTTP requires
+an explicit opt-in.
 
-## Are embeddings required?
+## Are intelligence models required?
 
 No. `ida_find`, listings, code inspection, findings, and ordinary session
-operations work without semantic models. Install models only when behavioral
-search or reranking is useful.
+operations work in disabled mode. Provider-backed classification or scoring is
+optional and never authorizes a mutation.
 
 ## What is safe mode?
 

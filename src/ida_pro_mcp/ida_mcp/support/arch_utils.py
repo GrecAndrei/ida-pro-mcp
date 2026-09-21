@@ -887,6 +887,7 @@ def get_tail_call_mnemonics(arch=None):
 # here avoids re-setting processor options and re-queueing a full-address-space
 # reanalysis on every call.
 _APPLIED_RISCV_GP: int | None = None
+_GP_ADVISORY_CACHE: dict[tuple[str, int, int], dict] = {}
 
 
 def _riscv_gp_fix_refs(gp_val: int, old_gp: int | None = None) -> dict:
@@ -1190,6 +1191,25 @@ def detect_riscv_gp():
     except ImportError:
         return {"found": False, "note": "IDA APIs not available"}
 
+    # GP detection is an advisory MCP observation.  Do not expose a locally
+    # inferred candidate when intelligence is disabled or Jev/custom cannot
+    # validate it; the explicit set_gp action remains the only mutating path.
+    try:
+        from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
+        provider_mode = resolve_provider_config().mode
+    except Exception as exc:
+        return {
+            "found": False,
+            "code": str(getattr(exc, "code", "PROVIDER_CONFIG_INVALID"))[:64],
+            "note": "RISC-V GP advisory provider configuration is invalid",
+        }
+    if provider_mode == "disabled":
+        return {
+            "found": False,
+            "code": "INTELLIGENCE_DISABLED",
+            "note": "RISC-V GP inference is disabled; use explicit analysis(action='set_gp', gp=...)",
+        }
+
     # Collect candidate start addresses: entry points, then _start symbol
     candidates = []
     try:
@@ -1214,16 +1234,6 @@ def detect_riscv_gp():
                 candidates.append(ea)
         except Exception:
             pass
-
-    # Raw-blob fallback: an opaque .bin has no vector table / entry point, so
-    # the reset code usually sits at the image head (INF_MIN_EA).  Also scan
-    # the base for common RISC-V link conventions.
-    try:
-        base = idc.get_inf_attr(idc.INF_MIN_EA)
-        if base is not None and base != idc.BADADDR:
-            candidates.append(int(base))
-    except Exception:
-        pass
 
     seen = set()
     for start_ea in candidates:
@@ -1256,7 +1266,12 @@ def detect_riscv_gp():
                         imm -= 0x100000
                     prev_lui_val = imm << 12
                     prev_auipc_val = None
-                elif mnem == "addi" and op0 in ("gp", "x3") and (prev_auipc_val is not None or prev_lui_val is not None):
+                elif (
+                    mnem == "addi"
+                    and op0 in ("gp", "x3")
+                    and idc.print_operand(ea, 1).lower() in ("gp", "x3")
+                    and (prev_auipc_val is not None or prev_lui_val is not None)
+                ):
                     # addi gp, gp, imm  =>  gp = prev + sign_extend(imm, 12)
                     raw = idc.get_operand_value(ea, 2)
                     # sign-extend 12-bit immediate
@@ -1264,18 +1279,66 @@ def detect_riscv_gp():
                         raw -= 0x1000
                     prev = prev_auipc_val if prev_auipc_val is not None else prev_lui_val
                     gp_val = (prev + raw) & 0xFFFFFFFFFFFFFFFF
-                    applied, apply_error, reanalysis_queued, refs = _apply_riscv_gp(gp_val)
-                    note = _riscv_gp_note(gp_val, start_ea, applied, apply_error, reanalysis_queued, refs)
+                    # Detection is an advisory observation.  It must never
+                    # authorize processor-option changes or data-reference
+                    # rewrites; only the explicit set_gp action may call
+                    # _apply_riscv_gp().
+                    cache_key = (str(provider_mode), int(start_ea), gp_val)
+                    advisory = _GP_ADVISORY_CACHE.get(cache_key)
+                    try:
+                        from ida_pro_mcp.host.intelligence.advisory import ask_gp
+
+                        if advisory is None:
+                            advisory = ask_gp(
+                                {
+                                    "architecture": "riscv",
+                                    "address": hex(start_ea),
+                                    "instructions": [str(mnem)[:32]],
+                                    "candidate_source": "ida_processor_disassembly",
+                                },
+                                [hex(gp_val)],
+                                operation="riscv_gp",
+                            )
+                            if isinstance(advisory, dict) and not advisory.get("error"):
+                                _GP_ADVISORY_CACHE[cache_key] = advisory
+                    except Exception as exc:
+                        advisory = {
+                            "error": True,
+                            "code": str(getattr(exc, "code", "PROVIDER_ERROR"))[:64],
+                            "message": "GP advisory failed",
+                        }
+                    if not isinstance(advisory, dict) or advisory.get("error") or not advisory.get("ok"):
+                        return {
+                            "found": False,
+                            "code": str((advisory or {}).get("code") or "PROVIDER_ERROR")[:64],
+                            "at": hex(start_ea),
+                            "advisory": advisory,
+                            "note": "RISC-V GP candidate was not accepted by the advisory provider; explicit set_gp is required.",
+                        }
+                    if str(advisory.get("choice") or "").lower() != hex(gp_val).lower():
+                        return {
+                            "found": False,
+                            "code": "GP_ADVISORY_REJECTED",
+                            "at": hex(start_ea),
+                            "candidate": hex(gp_val),
+                            "advisory": advisory,
+                            "note": "The advisory provider did not accept the RISC-V GP candidate; explicit set_gp is required.",
+                        }
                     return {
                         "found": True,
                         "gp": gp_val,
                         "gp_hex": hex(gp_val),
                         "at": hex(start_ea),
-                        "applied": applied,
-                        "reanalysis_queued": reanalysis_queued,
-                        "refs_fixed": refs.get("fixed", 0),
-                        "refs_skipped": refs.get("skipped", 0),
-                        "note": note,
+                        "applied": False,
+                        "reanalysis_queued": False,
+                        "refs_fixed": 0,
+                        "refs_skipped": 0,
+                        "advisory": advisory,
+                        "note": (
+                            f"RISC-V GP (x3) candidate {hex(gp_val)} detected at "
+                            f"{hex(start_ea)}; it was not applied. Use the explicit "
+                            "analysis(action='set_gp', gp=...) action after verifying it."
+                        ),
                     }
                 else:
                     prev_auipc_val = None
@@ -1286,24 +1349,11 @@ def detect_riscv_gp():
             except Exception:
                 break
 
-    # Opaque raw blob: no prologue found.  Surface a crisp hint instead of the
-    # generic "pattern not found near entry points" (there are none on a raw
-    # .bin), and propose the common GP conventions derived from the load base.
-    try:
-        base = idc.get_inf_attr(idc.INF_MIN_EA)
-        if base is None or base == idc.BADADDR:
-            base = 0
-    except Exception:
-        base = 0
-    candidates_gp = sorted({(int(base) + off) & 0xFFFFFFFFFFFFFFFF
-                            for off in (0x0, 0x10000000, 0x80000000)})
-    gp_hint = ", ".join(hex(g) for g in candidates_gp)
     return {
         "found": False,
+        "code": "GP_NOT_FOUND",
         "note": (
-            "GP not found — load base/GP unknown for this raw blob; "
-            "GP-relative xrefs (lw/sw via gp) are unresolved. "
-            "Run analysis(action='set_gp', gp='0x<value>') with a known GP, "
-            f"or try a candidate base (e.g. gp ≈ {gp_hint})."
+            "RISC-V GP candidate was not found in IDA entry-point disassembly; "
+            "provide an explicit value with analysis(action='set_gp', gp=...)."
         ),
     }

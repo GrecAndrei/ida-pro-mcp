@@ -8,10 +8,10 @@ unavailable external runtimes.
 
 This is an MCP server for deterministic IDA Pro analysis. The host runs
 outside IDA, validates and routes MCP calls, and communicates over a local
-bridge with an IDA-side runtime that calls the IDA SDK. Embedding and reranking
-are optional helpers; embedding/reranking are local unless the
-explicit cloud backend is selected. There is no hidden LLM service in the
-analysis path.
+bridge with an IDA-side runtime that calls the IDA SDK. Intelligence is an
+explicit Jev, custom BYOK, or disabled advisory layer; lexical indexing and
+retrieval remain deterministic. There is no local, Gemini, or native-model
+fallback and no hidden LLM service in the analysis path.
 
 - `src/ida_pro_mcp/host/`: MCP server, schemas, policy, sessions, response
   handling, intelligence, and durable stores.
@@ -20,7 +20,6 @@ analysis path.
 - `src/ida_pro_mcp/installer/`: IDA discovery, runtime/client configuration
   (22+ AI agent environments across JSON, JSON5, TOML, YAML) and launcher
   shims.
-- `src/ida_pro_mcp/native/`: optional in-process llama.cpp driver.
 - `scripts/`: release packaging, verification tools, schema integrity, and
   auto-installers (`install.sh`, `install.bat`).
 - `tests/`: host/contract tests, fake-IDA tests, installer tests, and opt-in live tests.
@@ -55,9 +54,9 @@ IDB mutations must retain the existing policy and explicit `risk_ack` flow.
 Never weaken a guard or bypass the IDA read/write wrappers to make a test pass.
 Blackboard schema changes require an idempotent migration and regression test;
 preserve evidence, provenance, lifecycle state, conflicts, stale markers, and
-audit events. Stored vectors must retain compatible model identity and
-dimension; use the explicit lexical fallback when semantic retrieval is
-unavailable.
+audit events. Provider-mode indexes store bounded signatures and metadata only;
+use the explicit lexical fallback when advisory retrieval is unavailable.
+Historical vector rows must not cause a provider or model fallback.
 
 ## Public `ida_*` versus legacy
 
@@ -126,7 +125,7 @@ map changes. Change the README operation summary only when the public
 summary/workflow changes. Do not copy research-note claims, stale counts,
 paths, or benchmarks into maintained docs without rechecking them.
 
-## Installer and native constraints
+## Installer and provider constraints
 
 When adding an environment variable, model, runtime, client setting, or binary,
 update installer discovery/validation and generated client configuration,
@@ -140,11 +139,13 @@ for clean removal of plugins/client configs/shims, and generates portable launch
 shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-installers live
 at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
 
-Native builds require a caller-supplied `LLAMA_CPP_SRC` for
-`scripts/build_native_llama.sh` or `LLAMA_CPP_BUILD` for the CMake project.
-The llama.cpp revision is pinned in the build script/workflow. Do not vendor a
-checkout or assume a model/library exists. Run fake ABI tests and a real build
-when the external checkout is available; otherwise report the skip.
+Provider mode is selected explicitly with `IDA_MCP_INTELLIGENCE_MODE=jev`,
+`custom`, or `disabled`. Jev uses the fixed TypeSafe endpoint; custom origins
+require an explicit HTTPS allowlist, with loopback-only HTTP as an opt-in. Do
+not persist credentials or send raw decompilation, prompts, or completions.
+Legacy local/Gemini/native settings fail closed with a structured configuration
+error. Provider tests use mocked transports; report any unavailable external
+Jev or licensed IDA runtime rather than substituting another backend.
 
 ## Tests, coverage, and live IDA
 
@@ -164,9 +165,10 @@ Run focused tests first, then the full non-live suite for host/runtime,
 stores, bridge, installer, or contract changes. Cover valid and malformed
 inputs, policy boundaries, compatibility behavior, and the meaningful result.
 Retrieval changes need deterministic ranking/recall, lexical fallback, filters,
-stale/conflict, and model-mismatch coverage. Native changes need fake ABI
-coverage and, when possible, a configured build. Use the relevant
-`benchmarks/run.py --scope ...`; keep reports outside source control.
+stale/conflict, and provider-unavailable coverage. Provider changes need
+malformed-response, privacy/redaction, origin-policy, timeout, and budget
+coverage. Use the relevant `benchmarks/run.py --scope ...`; keep reports
+outside source control.
 
 The coverage hardening target is at least 90% of the measured project surface,
 with offline and real-IDA live reports kept separate until merged. Do not
@@ -181,7 +183,8 @@ IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
 ```
 
 Use the documented idat/idalib runner or matrix, and record IDA version,
-runtime, backend/model, and skipped suites. Do not make ordinary CI start IDA.
+runtime, provider mode/model (without credentials or content), and skipped
+suites. Do not make ordinary CI start IDA.
 Use the documented optional tracer/`coverage.py` workflow for combined live
 measurements.
 

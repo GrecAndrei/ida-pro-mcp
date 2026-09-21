@@ -7,7 +7,6 @@ import threading
 
 from ..agent_operations import list_agent_operations
 from ..config import (
-    EMBEDDING_FIRST_MODE,
     _bounded_int,
     _coerce_bool,
     _parse_str_list,
@@ -26,6 +25,10 @@ from ..schemas import (
     sanitize_schema_for_vertex,
 )
 from .server_workflow_batch import ServerWorkflowBatchMixin
+
+# Retained as a compatibility marker for pre-provider test/caller code. The
+# workflow estimator is deterministic and never consults this flag.
+EMBEDDING_FIRST_MODE = False
 
 _TOOLS_CACHE_INIT_LOCK = threading.Lock()
 
@@ -642,33 +645,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             step_count = len(calls)
             complexity = "low" if step_count <= 4 else ("medium" if step_count <= 7 else "high")
             risk_score = 0
-            plan_text = " ".join(
-                f"{str(c.get('name') or '').strip()}.{str((c.get('arguments') or {}).get('action') or '').strip()}"
-                for c in calls
-                if isinstance(c, dict)
-            ).strip()
-            if EMBEDDING_FIRST_MODE and plan_text:
-                try:
-                    from ..intelligence.core import BgeCodeEmbedder
-                    embedder = BgeCodeEmbedder()
-                    qv = embedder.embed_vector(plan_text)
-                    if qv is None:
-                        raise RuntimeError("embedding unavailable")
-                    anchors = [
-                        "low risk orientation metadata summary listing imports",
-                        "medium risk protocol and threat triage suspicious indicators",
-                        "high risk exploit vulnerability deobfuscation patch and malware deep analysis",
-                    ]
-                    sims = []
-                    for a in anchors:
-                        av = embedder.embed_vector(a)
-                        if av is None:
-                            raise RuntimeError("embedding unavailable")
-                        sims.append(float(embedder.cosine(qv, av)))
-                    if sims:
-                        risk_score = int(round(max(0.0, min(1.0, max(sims))) * 100.0))
-                except Exception:
-                    risk_score = 0
             if risk_score <= 0:
                 # Deterministic fallback by plan breadth only (no heuristic keyword weights).
                 risk_score = int(round(min(100.0, (float(step_count) / 12.0) * 100.0)))

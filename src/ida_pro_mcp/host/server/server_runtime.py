@@ -146,7 +146,7 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
         return
     # POSIX: child must be in its own process group (set via
     # _popen_new_session_kwargs in the matching Popen call).  Do this even
-    # if the direct IDA launcher has already exited: its llama-server child
+    # if the direct IDA launcher has already exited: its child runtime
     # can still be alive in that process group. If the group is gone,
     # ProcessLookupError makes this a harmless no-op.
     try:
@@ -157,7 +157,7 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
     except Exception as exc:
         log_rpc(f"killpg(SIGTERM) failed for pid {pid}: {exc}")
     # The direct idat launcher can exit in milliseconds while ida.exe /
-    # llama-server keep running in the same process group, so waiting only on
+    # child runtimes keep running in the same process group, so waiting only on
     # the direct child is not enough: the SIGKILL escalation below would never
     # run for survivors. Poll the process group (killpg(pid, 0) is a liveness
     # probe on the group) until it drains or the grace budget is exhausted,

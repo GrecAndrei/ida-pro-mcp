@@ -2,19 +2,18 @@
 Firmware-shaping tool for headerless / raw-blob binaries.
 
 Resurrects the deleted ``firmware_view`` capability as an IDA-side ``firmware``
-tool — the mission's differentiator vs radare2.  The old mega-tool was removed
-in b191581; the RISC-V raw-arch inference survived in ``arch_profile.py`` but
-the vector-table / RTOS / carve shaping had no home, leaving the host-side
-``firmware_detected`` flag (idb.py) advertised-but-shapeless.  This module is
-the IDA-side surface that gives those signals actionable shape.
+tool — the mission's deterministic firmware-analysis surface. The old mega-tool was removed
+in b191581; the vector-table / RTOS / carve shaping had no home, leaving the
+host-side ``firmware_detected`` flag (idb.py) advertised-but-shapeless. This
+module is the IDA-side surface that gives those signals actionable shape.
 
 Five actions:
 
     detect_vector_table  — rank candidate ISR/pointer tables: LE/BE runs of
         pointer-width words whose entries fall inside mapped segments.
         Returns ``{base, count, first_entries, confidence}`` per candidate.
-    detect_load_base     — validate load-base hypotheses by decoding the
-        reset-vector + prologue (reusing ``arch_utils`` return/GP heuristics).
+    detect_load_base     — validate bounded load-base hypotheses; RISC-V
+        recommendations use only the explicit provider advisory boundary.
     detect_mmio          — MMIO-style address ranges outside the RAM/ROM
         mapping, grouped by 4KB page density (mirrors the raw-blob MMIO
         scorer).  Returns ``{ranges, registers_hint}``.
@@ -58,7 +57,6 @@ from ..error_handling import parse_address_safe
 # and the host unit-test harness.
 from ..support.arch_utils import (
         get_arch,
-        get_prologue_pattern,
         is_arm_family,
         is_riscv_family,
     )
@@ -415,59 +413,6 @@ def _default_load_base_candidates(s_ea, e_ea, ptr_size, limit=12):
     return cands[:limit]
 
 
-def _riscv_jal_target(ea, insn):
-    """Decode a RISC-V ``jal``/``j`` instruction's absolute target, or None."""
-    if (insn & 0x7F) != 0x6F:
-        return None
-    imm = (((insn >> 31) << 20)
-           | (((insn >> 21) & 0x3FF) << 1)
-           | (((insn >> 20) & 0x1) << 11)
-           | (((insn >> 12) & 0xFF) << 12))
-    if imm & (1 << 20):
-        imm -= (1 << 21)
-    return int(ea) + imm
-
-
-def _read_instructions(ea, count, step=4):
-    """Collect up to *count* {ea, mnemonic} pairs starting at *ea*."""
-    out = []
-    cur = int(ea)
-    for _ in range(int(count)):
-        try:
-            mnem = idc.print_insn_mnem(cur)
-        except Exception:
-            mnem = ""
-        if not mnem:
-            break
-        out.append((cur, mnem))
-        cur += int(step)
-    return out
-
-
-def _has_riscv_gp_init(prologue):
-    """Detect the canonical RISC-V GP init pair: ``auipc gp, hi20; addi gp, gp, lo12``."""
-    for i, (ea, mnem) in enumerate(prologue):
-        if mnem.lower() != "auipc":
-            continue
-        try:
-            op0 = str(idc.print_operand(ea, 0) or "").strip().lower()
-        except Exception:
-            op0 = ""
-        if op0 not in ("gp", "x3"):
-            continue
-        for j in range(i + 1, min(i + 3, len(prologue))):
-            _ea2, mnem2 = prologue[j]
-            if mnem2.lower() != "addi":
-                continue
-            try:
-                op0b = str(idc.print_operand(_ea2, 0) or "").strip().lower()
-            except Exception:
-                op0b = ""
-            if op0b == op0:
-                return True
-    return False
-
-
 def _count_hypothetical_pointers(s_ea, e_ea, b, ptr_size):
     """Count pointer words inside [s_ea, e_ea) that fall in [b, b + image_size)."""
     count = 0
@@ -495,23 +440,11 @@ def _validate_load_base(b, arch, ptr_size, s_ea, e_ea):
             return {"base": hex(b), "confidence": 0.05, "evidence": evidence}
         raw = _decode_word(data, "le" if not _fw_is_be() else "be")
         if is_riscv_family(arch):
-            tgt = _riscv_jal_target(b, raw)
-            if tgt is not None and s_ea <= tgt < e_ea:
-                score += 0.6
-                evidence.append(f"reset vector at {hex(b)} jumps to mapped {hex(tgt)}")
-                prologue = _read_instructions(tgt, 4, step=4)
-                if prologue:
-                    pattern = get_prologue_pattern([m for _e, m in prologue], arch)
-                    if pattern != "unknown":
-                        score += 0.2
-                        evidence.append(f"reset-handler prologue at {hex(tgt)}: {pattern}")
-                    if _has_riscv_gp_init(prologue):
-                        score += 0.15
-                        evidence.append(f"GP init (auipc/addi gp) at {hex(tgt)}")
-            elif tgt is not None:
-                evidence.append(f"reset vector at {hex(b)} jumps outside the mapped image to {hex(tgt)}")
-            else:
-                evidence.append(f"word at {hex(b)} is not a RISC-V jal/jump")
+            # RISC-V reset-vector decoding is processor-owned.  The MCP layer
+            # deliberately does not interpret JAL immediates or GP prologues;
+            # an explicit architecture/load-base choice remains advisory until
+            # IDA's native processor module validates it.
+            evidence.append("RISC-V reset-vector interpretation is delegated to IDA native analysis")
         elif is_arm_family(arch):
             reset_ptr = raw & ~1  # clear Thumb bit
             if s_ea <= reset_ptr < e_ea:
@@ -564,16 +497,59 @@ def _detect_load_base(s_ea, e_ea, base_candidates, limit):
             seen[r["base"]] = r
     results = sorted(seen.values(), key=lambda r: -r["confidence"])
     results = results[:max(1, int(limit or 32))]
+    advisory = None
+    recommended_base = results[0]["base"] if results else None
+    if is_riscv_family(arch):
+        # RISC-V load-base interpretation is provider-backed.  The bounded
+        # pointer evidence above is only context; it is never promoted to a
+        # recommendation when Jev/custom is disabled or unavailable.
+        recommended_base = None
+        try:
+            from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
+            from ida_pro_mcp.host.intelligence.advisory import ask_load_base
+
+            mode = resolve_provider_config().mode
+            if mode == "disabled":
+                advisory = {
+                    "error": True,
+                    "code": "INTELLIGENCE_DISABLED",
+                    "message": "RISC-V load-base advisory is disabled",
+                }
+            else:
+                advisory = ask_load_base(
+                    {
+                        "architecture": arch,
+                        "range_start": hex(int(s_ea)),
+                        "range_end": hex(int(e_ea)),
+                        "pointer_size": int(ptr_size),
+                    },
+                    results,
+                    operation="riscv_load_base",
+                )
+                choice = advisory.get("choice") if isinstance(advisory, dict) else None
+                if isinstance(advisory, dict) and advisory.get("ok") and choice:
+                    selected = next((row for row in results if row.get("base") == choice), None)
+                    if selected is not None:
+                        results = [selected] + [row for row in results if row is not selected]
+                        recommended_base = choice
+        except Exception as exc:
+            advisory = {
+                "error": True,
+                "code": str(getattr(exc, "code", "PROVIDER_ERROR"))[:64],
+                "message": "load-base advisory failed",
+            }
     return {
         "ok": True,
         "action": "detect_load_base",
         "arch": arch,
         "candidates": results,
-        "recommended_base": results[0]["base"] if results else None,
+        "recommended_base": recommended_base,
+        **({"advisory": advisory} if advisory is not None else {}),
         "note": (
-            "Candidates are ranked by reset-vector + prologue plausibility. "
-            "Set the correct load base when loading a raw blob, or rebase with "
-            "Edit -> Segments -> Rebase in IDA."
+            "Candidates are bounded evidence only; RISC-V recommendations require "
+            "an explicit Jev/custom advisory answer. Set the correct load base "
+            "explicitly when loading a raw blob, or rebase with Edit -> Segments "
+            "-> Rebase in IDA."
         ),
     }
 

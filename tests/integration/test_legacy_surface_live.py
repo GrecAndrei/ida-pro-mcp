@@ -660,7 +660,8 @@ def test_legacy_intelligence_and_symbol_surfaces_are_live(legacy_ctx: LegacyCont
         # Full indexing is covered by the dedicated agent live suite.  The
         # compatibility path intentionally probes its status/fallback
         # behavior here; launching a synchronous index from this legacy
-        # client can exceed its short RPC timeout when llama-server is absent.
+        # client can exceed its short RPC timeout while optional advisory
+        # providers are unavailable.
         ("blackboard_search", {"query": "rich", "limit": 5}),
         ("export_index_summary", {}),
         ("function_families", {"limit": 5}),

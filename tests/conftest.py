@@ -327,18 +327,39 @@ def _configure_offline_environment() -> None:
     cur_pythonpath = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = f"{src_dir}{os.pathsep}{cur_pythonpath}" if cur_pythonpath else src_dir
     # Offline tests must not discover or start a developer's licensed IDA or
-    # reuse a developer-selected IDB/model/native library.
+    # reuse a developer-selected IDB or legacy intelligence backend.
     for name in (
         "IDA_ROOT",
         "IDA_PYTHON_PATH",
         "IDA_MCP_IDAT",
         "IDA_MCP_IDB_PATH",
         "IDA_MCP_NATIVE_LIB",
+        "IDA_MCP_NATIVE",
+        "IDA_MCP_NATIVE_KV",
         "IDA_MCP_EMBED_MODEL",
         "IDA_MCP_EMBED_SERVER_BIN",
+        "IDA_MCP_EMBED_BACKEND",
+        "IDA_MCP_EMBED_DISABLED",
         "IDA_MCP_RERANK_MODEL",
+        "IDA_MCP_RERANK_ENABLED",
+        "IDA_MCP_RERANK_DISABLED",
+        "IDA_MCP_INTELLIGENCE_MODE",
+        "IDA_MCP_INTELLIGENCE_CONFIG",
+        "TYPESAFE_API_KEY",
+        "TYPESAFE_API_KEY_FILE",
+        "CUSTOM_PROVIDER_API_KEY",
+        "IDA_MCP_CUSTOM_API_KEY_ENV",
+        "IDA_MCP_CUSTOM_API_KEY_FILE",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
     ):
         os.environ.pop(name, None)
+    # Provider and budget settings are operator-specific.  An offline test
+    # process must not inherit them from a developer shell and accidentally
+    # select a network provider or change default accounting limits.
+    for name in list(os.environ):
+        if name.startswith(("IDA_MCP_JEV_", "IDA_MCP_CUSTOM_", "IDA_MCP_INTELLIGENCE_")):
+            os.environ.pop(name, None)
 
 
 def _cleanup_sandbox() -> None:

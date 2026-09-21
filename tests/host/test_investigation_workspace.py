@@ -150,7 +150,7 @@ store.write('TLS certificate parser', 'validates an ASN.1 length', category='cry
 print(json.dumps(store.semantic_search('certificate length', top_k=5, category='crypto')))
 """
     env = dict(os.environ)
-    env["IDA_MCP_EMBED_DISABLED"] = "1"
+    env["IDA_MCP_INTELLIGENCE_MODE"] = "disabled"
     result = subprocess.run(
         [sys.executable, "-c", f"DB_PATH={str(tmp_path / 'workspace.db')!r}\n{script}"],
         check=True,

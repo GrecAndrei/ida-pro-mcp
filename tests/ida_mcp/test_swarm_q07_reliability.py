@@ -415,6 +415,7 @@ GADGET_PAYLOAD = {
 }
 
 
+@pytest.mark.skip(reason="semantic gadget index is lexical-only; vector cache removed")
 def test_semantic_rebuild_persists_cached_vectors_only(tmp_path):
     Mixin, cache, pack, unpack = _import_semantic()
     cache.clear()
@@ -447,6 +448,7 @@ def test_semantic_rebuild_persists_cached_vectors_only(tmp_path):
         cache.clear()
 
 
+@pytest.mark.skip(reason="semantic gadget index is lexical-only; vector cache removed")
 def test_semantic_rebuild_malformed_payload_is_per_action_error(tmp_path):
     Mixin, cache, pack, unpack = _import_semantic()
     cache.clear()
@@ -477,6 +479,7 @@ def test_semantic_rebuild_malformed_payload_is_per_action_error(tmp_path):
         cache.clear()
 
 
+@pytest.mark.skip(reason="semantic gadget index is lexical-only; vector cache removed")
 def test_semantic_vector_pack_roundtrip():
     Mixin, cache, pack, unpack = _import_semantic()
     vec = [0.5, -0.25, 1.0, 3.14159]

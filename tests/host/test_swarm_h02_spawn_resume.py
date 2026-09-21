@@ -561,26 +561,20 @@ def test_auto_apply_cortex_m_high_confidence(tmp_path):
     assert opts.get("baseaddr") == 0x08000100  # reset-vector-derived load base
 
 
-def test_auto_apply_riscv_non_ambiguous_but_not_near_tie(tmp_path):
+def test_auto_apply_riscv_requires_ida_or_provider_advisory(tmp_path):
     from ida_pro_mcp.host.analysis.arch_profile import infer_binary_arch_profile
 
     host = _session_host()
-    # rv64c: riscv/64 at conf ~1.0, NOT ambiguous -> applied.
-    path64 = _write_blob(tmp_path, _rv64c(), name="rv64c.bin")
-    inf64 = infer_binary_arch_profile(path64)
-    assert inf64["confidence"] >= 0.9 and not inf64.get("ambiguous")
-    opts = {}
-    warn = host._auto_apply_inferred_profile(opts, inf64)
-    assert warn is not None and "riscv 64-bit" in warn
-    assert opts["processor"] == "riscv" and opts["bitness"] == 64
-
-    # rv32c: riscv known but bitness near-tie -> ambiguous, NEVER forced.
-    path32 = _write_blob(tmp_path, _rv32c(), name="rv32c.bin")
-    inf32 = infer_binary_arch_profile(path32)
-    assert inf32.get("ambiguous") is True
-    opts = {}
-    assert host._auto_apply_inferred_profile(opts, inf32) is None
-    assert opts == {}
+    # MCP no longer promotes raw RISC-V byte heuristics.  With the default
+    # disabled provider the host returns an explicit/unknown profile and leaves
+    # processor selection to IDA or an explicit operator option.
+    for data, name in ((_rv64c(), "rv64c.bin"), (_rv32c(), "rv32c.bin")):
+        path = _write_blob(tmp_path, data, name=name)
+        inferred = infer_binary_arch_profile(path)
+        opts = {}
+        host._auto_apply_inferred_profile(opts, inferred)
+        assert opts == {}
+        assert inferred.get("processor") != "riscv"
 
 
 def test_prepare_open_args_applies_inference_and_surfaces_warning(tmp_path):

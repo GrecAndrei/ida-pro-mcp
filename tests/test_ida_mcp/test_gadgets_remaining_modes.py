@@ -429,7 +429,7 @@ def test_gadget_public_dispatch_and_blackboard_opt_in_modes(monkeypatch):
     for name in ("ida_pro_mcp.services", "host", "host.intelligence", "host.intelligence.core"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setattr(builtins, "__import__", refuse_intelligence)
-    assert real_classify(None, 1, 1, None)["error"] is True
+    assert real_classify(None, 1, 1, None)["ok"] is True
 
 
 def test_gadget_chain_blackboard_and_handler_failure_modes(monkeypatch):
@@ -477,7 +477,9 @@ def test_gadget_chain_blackboard_and_handler_failure_modes(monkeypatch):
     monkeypatch.setitem(sys.modules, "blackboard", blackboard)
     result = module._classify_gadget_chain(None, 20, 3, None, auto_blackboard=True)
     assert result["exploit_assessment"].startswith("HIGH:")
-    assert writes and writes[0]["category"] == "exploit"
+    # Provider advisories are never persisted, even when a caller supplies the
+    # legacy auto_blackboard opt-in.
+    assert writes == []
 
     class ExistingStore(Store):
         def list(self, **_kwargs):

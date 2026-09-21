@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import stat
 import subprocess
-import tarfile
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,35 +80,6 @@ def test_runtime_process_commands_fail_closed_across_platforms(tmp_path, monkeyp
     assert runtime.kill_ida_processes() is False
 
 
-def test_runtime_discovery_handles_unmatched_state_and_broken_search_path(tmp_path, monkeypatch):
-    monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
-    monkeypatch.delenv("IDA_MCP_EMBED_PROFILE", raising=False)
-    monkeypatch.setenv("IDA_MCP_EMBED_SEARCH_PATHS", "broken")
-    monkeypatch.setattr(runtime.Path, "home", staticmethod(lambda: tmp_path / "home"))
-    monkeypatch.setattr(runtime.Path, "cwd", staticmethod(lambda: tmp_path / "cwd"))
-
-    class BrokenPath:
-        def resolve(self):
-            raise OSError("path disappeared")
-
-    monkeypatch.setattr(runtime, "_expand_configured_path", lambda _value: BrokenPath())
-    monkeypatch.setattr(
-        runtime,
-        "_read_installer_embedder_state",
-        lambda _root: {"model_path": str(tmp_path / "missing.gguf"), "profile": "other"},
-    )
-    assert runtime.find_embed_model(tmp_path, "zembed-1") == ""
-
-    monkeypatch.setattr(
-        runtime,
-        "_read_installer_embedder_state",
-        lambda _root: (_ for _ in ()).throw(RuntimeError("damaged state")),
-    )
-    monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", "")
-    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
-    assert runtime.find_llama_server_bin(tmp_path) == ""
-
-
 def test_stage_sigs_reports_single_file_invalid_and_racing_destinations(tmp_path, monkeypatch):
     report = InstallReport()
     missing = tmp_path / "missing"
@@ -149,89 +116,6 @@ def test_stage_sigs_reports_single_file_invalid_and_racing_destinations(tmp_path
     )
     raced = runtime.stage_sigs(source, tmp_path / "race-sig", False, InstallReport())
     assert str(tmp_path / "race-sig" / "race.sig") in raced.skipped
-
-
-def test_release_asset_scoring_and_platform_hints(monkeypatch):
-    monkeypatch.setattr(runtime.os, "uname", lambda: SimpleNamespace(machine="AMD64"))
-    monkeypatch.setattr(runtime.sys, "platform", "win32")
-    assert runtime._platform_asset_hints() == (["win", "windows"], ["x64", "amd64", "x86_64"])
-    monkeypatch.setattr(runtime.sys, "platform", "darwin")
-    monkeypatch.setattr(runtime.os, "uname", lambda: SimpleNamespace(machine="arm64"))
-    assert runtime._platform_asset_hints() == (["macos", "darwin"], ["arm64", "aarch64"])
-    monkeypatch.setattr(runtime.sys, "platform", "linux")
-    assert runtime._platform_asset_hints() == (["ubuntu", "linux"], ["arm64", "aarch64"])
-    monkeypatch.setattr(runtime.os, "uname", lambda: SimpleNamespace(machine="s390x"))
-    assert runtime._platform_asset_hints()[1] == ["s390x"]
-    monkeypatch.setattr(runtime.os, "uname", lambda: SimpleNamespace(machine="x86_64"))
-    assert runtime._platform_asset_hints()[1] == ["x64", "x86_64", "amd64"]
-
-    assert runtime._score_release_asset("llama-bin-linux-x64.zip", ["linux"], ["x64"]) == 13
-    assert runtime._score_release_asset("llama-bin-linux-x64-cuda-cudart.tgz", ["linux"], ["x64"]) == 9
-    assert runtime._score_release_asset("notes.txt", ["linux"], ["x64"]) == 0
-
-
-def test_archive_extracts_directories_and_rejects_zip_specials(tmp_path):
-    archive = tmp_path / "members.zip"
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("directory/", b"")
-        zf.writestr("directory/file", b"payload")
-    output = tmp_path / "output"
-    runtime._extract_archive(archive, output)
-    assert (output / "directory" / "file").read_bytes() == b"payload"
-
-    symlink_archive = tmp_path / "symlink.zip"
-    info = zipfile.ZipInfo("link")
-    info.external_attr = stat.S_IFLNK << 16
-    with zipfile.ZipFile(symlink_archive, "w") as zf:
-        zf.writestr(info, b"outside")
-    with pytest.raises(RuntimeError, match="symlink member"):
-        runtime._extract_archive(symlink_archive, tmp_path / "symlink-output")
-
-    special_archive = tmp_path / "special.zip"
-    info = zipfile.ZipInfo("fifo")
-    info.external_attr = stat.S_IFIFO << 16
-    with zipfile.ZipFile(special_archive, "w") as zf:
-        zf.writestr(info, b"")
-    with pytest.raises(RuntimeError, match="special archive member"):
-        runtime._extract_archive(special_archive, tmp_path / "special-output")
-
-    outside = tmp_path / "outside"
-    outside.write_text("outside", encoding="utf-8")
-    linked_output = tmp_path / "linked-output"
-    linked_output.mkdir()
-    (linked_output / "target").symlink_to(outside)
-    target_archive = tmp_path / "target.zip"
-    with zipfile.ZipFile(target_archive, "w") as zf:
-        zf.writestr("target", b"overwrite")
-    with pytest.raises(RuntimeError, match="outside extract root"):
-        runtime._extract_archive(target_archive, linked_output)
-
-
-def test_archive_tar_read_failure_and_unsupported_member_name(tmp_path, monkeypatch):
-    archive = tmp_path / "broken.tar.gz"
-    archive.write_bytes(b"placeholder")
-
-    class FakeTar:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def getmembers(self):
-            return [SimpleNamespace(name="file", isdir=lambda: False, isfile=lambda: True, size=1)]
-
-        def extractfile(self, _member):
-            return None
-
-    monkeypatch.setattr(runtime.tarfile, "open", lambda *_args, **_kwargs: FakeTar())
-    with pytest.raises(RuntimeError, match="could not read tar member"):
-        runtime._extract_archive(archive, tmp_path / "broken-output")
-
-    unknown = tmp_path / "unknown.data"
-    unknown.write_bytes(b"data")
-    with pytest.raises(RuntimeError, match="Unsupported archive"):
-        runtime._extract_archive(unknown, tmp_path / "unknown-output")
 
 
 @pytest.mark.parametrize("raw", ["", "relative/site", "first\nsecond"])
@@ -288,22 +172,6 @@ def test_pth_dry_run_and_runtime_source_modes(tmp_path, monkeypatch):
         for command in calls
         if isinstance(command, list)
     )
-
-
-def test_stdio_config_explicit_local_and_rerank_opt_out(tmp_path):
-    config = runtime.build_stdio_config(
-        tmp_path / "python",
-        tmp_path / "install",
-        embed_backend="local",
-        rerank_profile="qwen3-reranker-0.6b",
-        rerank_disabled=True,
-        gemini_vertex=True,
-    )
-    env = config["env"]
-    assert env["IDA_MCP_EMBED_BACKEND"] == "local"
-    assert env["IDA_MCP_RERANK_DISABLED"] == "1"
-    assert "IDA_MCP_RERANK_PROFILE" not in env
-    assert "IDA_MCP_GEMINI_VERTEX" not in env
 
 
 def test_idalib_path_safety(tmp_path):

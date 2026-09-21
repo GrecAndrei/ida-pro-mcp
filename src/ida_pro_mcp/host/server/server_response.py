@@ -372,7 +372,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         session: Any = None,
     ) -> None:
         """
-        Build a context_pack via the intelligence layer (bge-code-v1) and inject
+        Build a bounded context_pack via deterministic IDA/lexical intelligence and inject
         it into the payload so the LLM receives relevant context alongside results.
         Replaces the cartographer + attention_kernel + cognitive_layer pipeline.
         """
