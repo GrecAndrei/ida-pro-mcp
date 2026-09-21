@@ -1,3 +1,4 @@
+import functools
 import re
 import time
 
@@ -533,6 +534,111 @@ def _store_memory_target(ea: int) -> int | None:
     except Exception:
         pass
     return None
+
+
+_LINUX_KERNEL_MARKERS = (
+    "linux version",
+    "kernel command line",
+    "booting linux",
+    "kernel panic",
+    "start_kernel",
+    "rest_init",
+    "__this_module",
+    "module_layout",
+    "sys_call_table",
+    "copy_to_user",
+    "copy_from_user",
+    "kmalloc",
+    "kfree",
+    "schedule",
+    "__ksymtab",
+    "__init_begin",
+    "vmlinux",
+)
+_LINUX_KERNEL_SEGMENTS = (
+    ".init.text",
+    ".init.data",
+    ".data..percpu",
+    "__ksymtab",
+    "__param",
+    "__mod_",
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _linux_kernel_image_evidence() -> tuple[str, ...]:
+    """Return bounded evidence that the current IDB is Linux kernel code.
+
+    This is deliberately a classifier, not an assertion based on the absence
+    of libc imports.  A stripped vmlinux can be freestanding and still have
+    kernel-specific sections, symbols, or boot strings; those signals should
+    not be reported as bare-metal firmware.
+    """
+    evidence: list[str] = []
+    try:
+        file_type = str(getattr(idaapi, "get_file_type_name", lambda: "")() or "").lower()
+        if "elf" in file_type:
+            evidence.append("elf")
+    except Exception:
+        pass
+
+    try:
+        for seg_ea in list(idautils.Segments())[:256]:
+            seg_name = str(_compat.get_segment_name(seg_ea) or "").lower()
+            if any(marker in seg_name for marker in _LINUX_KERNEL_SEGMENTS):
+                evidence.append(f"segment:{seg_name}")
+    except Exception:
+        pass
+
+    # Function names are cheap and usually survive a System.map import even
+    # when the binary has no dynamic imports.  Stop as soon as strong evidence
+    # is found; never enumerate an unbounded IDB in a response path.
+    try:
+        for index, func_ea in enumerate(idautils.Functions()):
+            name = str(ida_funcs.get_func_name(func_ea) or "").lower()
+            if any(marker in name for marker in _LINUX_KERNEL_MARKERS):
+                evidence.append(f"symbol:{name[:80]}")
+            if len(evidence) >= 3 or index >= 5000:
+                break
+    except Exception:
+        pass
+
+    # Boot strings are strong evidence for a kernel image.  Strings() is not
+    # available in every fake-IDA harness, so this remains best-effort.
+    if len(evidence) < 3:
+        try:
+            for index, item in enumerate(idautils.Strings()):
+                text = str(item or "").lower()
+                if any(marker in text for marker in _LINUX_KERNEL_MARKERS[:4]):
+                    evidence.append(f"string:{text[:80]}")
+                    break
+                if index >= 5000:
+                    break
+        except Exception:
+            pass
+    return tuple(dict.fromkeys(evidence))
+
+
+def _linux_kernel_context(func_start_ea: int | None = None) -> dict[str, Any]:
+    """Return structured Linux-kernel classification for a function/result."""
+    evidence = list(_linux_kernel_image_evidence())
+    local_markers: list[str] = []
+    if func_start_ea is not None:
+        try:
+            name = str(ida_funcs.get_func_name(func_start_ea) or "").lower()
+            seg_name = str(_compat.get_segment_name(func_start_ea) or "").lower()
+            for marker in _LINUX_KERNEL_MARKERS:
+                if marker in name or marker in seg_name:
+                    local_markers.append(marker)
+        except Exception:
+            pass
+    recognized = bool(evidence) and any(
+        item.startswith(("string:", "segment:", "symbol:")) for item in evidence
+    )
+    return {
+        "recognized": recognized,
+        "evidence": (evidence + [f"function:{marker}" for marker in local_markers])[:8],
+    }
 
 
 def _detect_firmware_signals(func_start_ea: int, pseudo: str = "") -> list[str]:
@@ -1821,6 +1927,7 @@ def _build_decompile_enrichment(
     var_hints = _extract_var_rename_hints(cfunc)
     ctx = gather_function_context(func_start_ea, max_refs=8)
     firmware_signals = _detect_firmware_signals(func_start_ea, pseudo)
+    linux_kernel = _linux_kernel_context(func_start_ea)
     enrichment = {
         "api_calls": found_apis,
         "crypto_hints": crypto_hints,
@@ -1836,11 +1943,20 @@ def _build_decompile_enrichment(
     }
     if firmware_signals:
         enrichment["firmware_signals"] = firmware_signals
+    if linux_kernel.get("recognized"):
+        enrichment["linux_kernel"] = linux_kernel
     if not found_apis:
-        # No libc API detected — on a symbol-poor device blob this is normal
-        # (bare-metal/RTOS), not an analysis failure. Make that explicit so the
-        # agent doesn't interpret "no APIs" as "does nothing interesting".
-        enrichment["api_note"] = "no libc APIs detected — bare-metal firmware?"
+        if linux_kernel.get("recognized"):
+            enrichment["api_note"] = (
+                "no libc APIs detected — recognized Linux kernel/freestanding OS code; "
+                "libc absence is expected"
+            )
+        elif firmware_signals:
+            enrichment["api_note"] = "no libc APIs detected — bare-metal firmware?"
+        else:
+            enrichment["api_note"] = (
+                "no libc APIs detected — insufficient evidence to classify this function as firmware"
+            )
     return enrichment
 
 
@@ -1929,6 +2045,23 @@ def _decompile_with_diagnostics(func_ea: int):
     Decompile with structured diagnostics.
     Returns (cfunc, err_dict_or_none).
     """
+    if hasattr(func_ea, "start_ea"):
+        func_ea = func_ea.start_ea
+    elif not isinstance(func_ea, int):
+        try:
+            func_ea = int(func_ea)
+        except Exception:
+            pass
+
+    # Normalize address to exact function entry point
+    fn = None
+    try:
+        fn = _compat.get_func_info(func_ea)
+        if fn and fn.start_ea != func_ea:
+            func_ea = fn.start_ea
+    except Exception:
+        fn = None
+
     try:
         if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
             return None, make_error(
@@ -1952,11 +2085,12 @@ def _decompile_with_diagnostics(func_ea: int):
                 return cfunc, None
             # On newly created functions, Hex-Rays may fail because the CFG
             # isn't fully analyzed yet (e.g. opcode error 50735). Nudge
-            # auto-analysis and retry once.
+            # auto-analysis and retry once at the exact entry point.
             failure_code = getattr(failure, "code", None)
             if failure_code is not None:
                 try:
-                    fn = _compat.get_func_info(func_ea)
+                    if not fn:
+                        fn = _compat.get_func_info(func_ea)
                     if fn:
                         import ida_auto as _ida_auto
                         if hasattr(_ida_auto, "plan_range"):
@@ -1965,7 +2099,7 @@ def _decompile_with_diagnostics(func_ea: int):
                             _ida_auto.auto_mark_range(fn.start_ea, fn.end_ea, _ida_auto.AU_FINAL)
                         time.sleep(0.5)
                         failure2 = ida_hexrays.hexrays_failure_t()
-                        cfunc = _compat.decompile_function(func_ea, failure2, flags)
+                        cfunc = _compat.decompile_function(fn.start_ea, failure2, flags)
                         if cfunc:
                             return cfunc, None
                         code2 = getattr(failure2, "code", None)

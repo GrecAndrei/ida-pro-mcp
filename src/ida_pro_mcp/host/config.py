@@ -275,7 +275,7 @@ def background_open_enabled() -> bool:
 # open returns with safe_mode on and the async watcher takes over. 0 disables
 # the wait (open returns as soon as the IDB is on disk, as before). Override
 # with IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC.
-BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float("IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC", 600, min_value=0.0)
+BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float("IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC", 15.0, min_value=0.0)
 
 # Safe mode: while a session's IDA auto-analysis is still completing, the
 # host blocks full-binary analysis / indexing / script execution and reports

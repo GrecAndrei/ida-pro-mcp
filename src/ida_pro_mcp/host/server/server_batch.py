@@ -12,6 +12,7 @@ from typing import Any
 from ..batch_manager import BatchManager
 from ..config import _env_float
 from ..errors import MCPError, is_error_result, make_error
+from ..intelligence.lexical import signature_index_path
 from ..policy import PolicyDecision, ack_from_args, evaluate_policy
 from .server_client_state import ServerClientStateMixin, _ClientRequestState
 
@@ -135,7 +136,7 @@ class BackgroundMixin(ServerClientStateMixin):
 
     def _seed_index_from_matching_binary_unlocked(self, session: Any) -> dict[str, Any]:
         """Copy a completed exact-binary index into this session's private DB."""
-        target_db = f"{session.idb_path}.embeddings.db"
+        target_db = signature_index_path(session.idb_path)
 
         def _row_counts(path: str) -> tuple[int, int]:
             if not os.path.isfile(path):
@@ -168,7 +169,7 @@ class BackgroundMixin(ServerClientStateMixin):
             if not self._semantic_load_profiles_compatible(session, candidate):
                 continue
             candidate_binary = str(getattr(candidate, "binary_path", "") or "")
-            source_db = f"{candidate.idb_path}.embeddings.db"
+            source_db = signature_index_path(candidate.idb_path)
             total, full = _row_counts(source_db)
             if not total or not os.path.isfile(candidate_binary):
                 continue

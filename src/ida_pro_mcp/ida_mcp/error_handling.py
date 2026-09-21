@@ -269,7 +269,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.DATABASE_CORRUPTED: "The IDB appears corrupted. Recreate it with ida_open_binary(reanalyze=true).",
     MCPError.DATABASE_READ_ONLY: "The database is read-only. Close other IDA instances.",
     MCPError.DATABASE_NOT_LOADED: "No database is loaded. Load a binary first with ida_open_binary.",
-    MCPError.DB_ERROR: "Database error. The index may be corrupted. Delete the .embeddings.db file and re-index.",
+    MCPError.DB_ERROR: "Database error. The signature index may be corrupted. Delete the .signatures.db file and re-index.",
     MCPError.IDB_NOT_FOUND: "The IDB file was not found. The session may need to be rebuilt.",
     MCPError.IDB_VERSION_MISMATCH: "IDB version mismatch. The IDB may have been created by a different IDA version.",
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
@@ -582,6 +582,9 @@ def _image_max_ea() -> int:
     return (1 << 64) - 1
 
 
+_MAX_UNSIGNED_EA = (1 << 64) - 1
+
+
 def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optional[Dict]]:
     """Single canonical address parser for every IDA tool.
 
@@ -619,6 +622,12 @@ def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optiona
                 MCPError.ADDRESS_INVALID,
                 f"Negative address: {addr_str}",
                 hint="Addresses must be non-negative integers. Use hex format like 0x401000.",
+            )
+        if addr_str > _MAX_UNSIGNED_EA:
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Address {addr_str:#x} exceeds the unsigned 64-bit address space",
+                hint="Use an address between 0x0 and 0xffffffffffffffff.",
             )
         return addr_str, None
 
@@ -662,6 +671,12 @@ def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optiona
                 f"Negative address: {addr_str}",
                 hint="Addresses must be non-negative. Use hex format like 0x401000.",
             )
+        if ea > _MAX_UNSIGNED_EA:
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Address {ea:#x} exceeds the unsigned 64-bit address space",
+                hint="Use an address between 0x0 and 0xffffffffffffffff.",
+            )
         return ea, None
 
     # 2) Known symbol.
@@ -689,6 +704,12 @@ def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optiona
             ea = int(s, 16)
         except ValueError:
             ea = None
+        if ea is not None and ea > _MAX_UNSIGNED_EA:
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Address {ea:#x} exceeds the unsigned 64-bit address space",
+                hint="Use an address between 0x0 and 0xffffffffffffffff.",
+            )
         if ea is not None:
             min_ea = _image_min_ea()
             max_ea = _image_max_ea()

@@ -65,6 +65,22 @@ def test_error_envelopes_and_exception_classification_cover_fallbacks():
     assert "details" in result
 
 
+def test_address_parser_accepts_high_unsigned_arm64_and_rejects_overflow():
+    eh = _load_error_handling()
+    value, error = eh.parse_address_canonical("0xffff800010000000")
+    assert value == 0xffff800010000000
+    assert error is None
+
+    value, error = eh.parse_address_canonical("0x10000000000000000")
+    assert value is None
+    assert error["code"] == eh.MCPError.ADDRESS_INVALID
+    assert "unsigned 64-bit" in error["message"]
+
+    value, error = eh.parse_address_canonical(1 << 64)
+    assert value is None
+    assert error["code"] == eh.MCPError.ADDRESS_INVALID
+
+
 def test_image_range_helpers_use_idaapi_fallback_and_default_paths(monkeypatch):
     eh = _load_error_handling()
     ida_ida = types.ModuleType("ida_ida")

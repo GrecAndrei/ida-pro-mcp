@@ -49,8 +49,13 @@ def real_live_context(tmp_path_factory: pytest.TempPathFactory) -> LiveContext:
     )
     client.start()
     try:
-        _assert_ok(client.call("ida_open_binary", {"binary_path": str(binary)}), "ida_open_binary")
-        yield LiveContext(client=client, binary=binary)
+        opened = _assert_ok(
+            client.call("ida_open_binary", {"binary_path": str(binary)}),
+            "ida_open_binary",
+        )
+        session_id = str(opened.get("session_id") or "")
+        assert session_id, opened
+        yield LiveContext(client=client, binary=binary, session_id=session_id)
     finally:
         with contextlib.suppress(Exception):
             _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session")
@@ -363,6 +368,23 @@ def test_real_user_uses_calculator_for_address_reasoning(real_live_context: Live
 
 def test_real_user_marks_a_dead_end_and_gets_a_next_target(real_live_context: LiveContext):
     client = real_live_context.client
+    queued = _assert_ok(
+        client.call(
+            "ida_write_finding",
+            {
+                "title": "next target integration question",
+                "content": "Verify the entrypoint dispatch path.",
+                "address": "fixture_entry",
+                "category": "workflow-test",
+                "kind": "question",
+                "status": "open",
+                "confidence": 0.4,
+                "priority": 0.8,
+            },
+        ),
+        "ida_write_finding for next target",
+    )
+    assert queued.get("entry_id"), queued
     examined = _assert_ok(
         client.call(
             "ida_mark_examined",
@@ -371,12 +393,22 @@ def test_real_user_marks_a_dead_end_and_gets_a_next_target(real_live_context: Li
         "ida_mark_examined",
     )
     assert examined
+    advisory_seen = False
+    target_responses = []
     for strategy in ("coverage", "frontier", "unresolved"):
         next_target = _assert_ok(
             client.call("ida_next_target", {"strategy": strategy, "limit": 5}),
             f"ida_next_target {strategy}",
         )
         assert isinstance(next_target, dict)
+        target_responses.append(next_target)
+        if os.environ.get("IDA_MCP_INTELLIGENCE_MODE") in {"jev", "custom"} and next_target.get("targets"):
+            advisory = next_target.get("advisory_ranking")
+            assert isinstance(advisory, dict), next_target
+            assert advisory.get("ok") is True, next_target
+            advisory_seen = True
+    if os.environ.get("IDA_MCP_INTELLIGENCE_MODE") in {"jev", "custom"}:
+        assert advisory_seen, target_responses
 
 
 def test_real_user_provider_status_returns_metadata_instead_of_transport_failures(real_live_context: LiveContext):

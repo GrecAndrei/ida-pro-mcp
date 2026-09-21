@@ -17,6 +17,26 @@ from ida_pro_mcp.services import (
 )
 
 
+def test_high_canonical_arm64_base_is_unsigned_and_actionable():
+    normalized, meta = normalize_arch_options(
+        {"processor": "arm64", "baseaddr": "0xffff800010000000"}
+    )
+    assert normalized["baseaddr"] == 0xffff800010000000
+    assert meta["arm64_guidance"]["recommended_baseaddr"] == "0x0"
+    assert meta["arm64_guidance"]["va_delta"] == "0xffff800010000000"
+    assert not meta["errors"]
+
+
+def test_address_options_reject_overflow_and_unaligned_ida_bases():
+    _, meta = normalize_arch_options(
+        {"processor": "arm64", "baseaddr": "0x1001"}
+    )
+    assert any("16-byte aligned" in error for error in meta["errors"])
+
+    _, overflow = normalize_arch_options({"baseaddr": "0x10000000000000000"})
+    assert any("unsigned 64-bit" in error for error in overflow["errors"])
+
+
 def test_normalize_arch_options_riscv_aliases():
     # IDA's RISC-V processor module is canonically "riscv"; the suffixed
     # forms resolve to it with the bitness carried through.

@@ -56,22 +56,24 @@ found and fixed).
 
 ## Intelligence-provider coverage
 
-The default live suite runs with `IDA_MCP_INTELLIGENCE_MODE=disabled` and
-therefore remains deterministic and offline. It verifies lexical indexing and
-search without a model. Jev checks are opt-in and must be run separately with
-a rotated `TYPESAFE_API_KEY`, explicit pricing, and a temporary cache:
+The licensed-IDA suites run with `IDA_MCP_INTELLIGENCE_MODE=disabled` and
+therefore remain deterministic and offline with respect to providers. They
+verify lexical indexing and search without a model. Remote Jev checks are a
+separate opt-in suite: they do not start IDA and require a rotated
+`TYPESAFE_API_KEY`, explicit pricing, and a temporary cache:
 
 ```bash
-IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
+IDA_MCP_LIVE_TEST=1 \
 IDA_MCP_INTELLIGENCE_MODE=jev \
 IDA_MCP_JEV_INPUT_USD_PER_MTOK=1 \
 IDA_MCP_JEV_OUTPUT_USD_PER_MTOK=1 \
-pytest -q tests/integration -m live_ida
+pytest -q tests/integration/test_jev_live.py -m live_jev
 ```
 
 Do not put credentials in reports or client configuration. A missing or
-unusable IDA or Jev runtime fails an explicit live run, while ordinary
-unit/contract tests skip external runtimes.
+unusable Jev runtime fails this explicit remote-provider run. A missing or
+unusable IDA fails an explicit `live_ida` run, while ordinary unit/contract
+tests skip both external runtimes.
 
 ## Combined live and offline coverage
 

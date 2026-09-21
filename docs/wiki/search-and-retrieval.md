@@ -8,7 +8,9 @@ provider to score a small candidate set; it never requires a vector model.
 ## Function indexing
 
 `ida_index_functions` stores bounded names, disassembly-derived signatures,
-structural metadata, and token lists in the per-IDB index. It does not store raw
+structural metadata, and token lists in the per-IDB `<idb-path>.signatures.db`
+sidecar. A legacy `<idb-path>.embeddings.db` sidecar is migrated on first
+access and retained if migration cannot be completed. It does not store raw
 decompilation and does not download or start a model. `ida_index_status` and
 `ida_cancel_index` report or stop background work.
 

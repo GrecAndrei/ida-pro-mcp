@@ -645,7 +645,7 @@ def test_init_falls_back_when_db_unwritable(monkeypatch, tmp_path):
     db_path = str(tmp_path / "blocker" / "idx.db")
     index = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
     digest = hashlib.sha256(os.path.abspath(db_path).encode("utf-8")).hexdigest()[:16]
-    expected = os.path.join(str(tmp_path), "fallback_indexes", f"{digest}.embeddings.db")
+    expected = os.path.join(str(tmp_path), "fallback_indexes", f"{digest}.signatures.db")
     assert index._db_path == expected
     assert os.path.isfile(expected)
 

@@ -51,6 +51,8 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
   - `advisory.py` — bounded provider questions; never an authorization or mutation path
   - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
+    (`<idb-path>.signatures.db`, with one-time migration from the legacy
+    `<idb-path>.embeddings.db` sidecar)
   - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
@@ -71,6 +73,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 7. Host: compact/truncate response
 8. Host: auto-blackboard extraction from response payload
 9. Host: deterministic context injection and optional provider advisory metadata
+   (including bounded Jev/custom ranking of deterministic blackboard targets)
 10. Return MCP content
 
 ## Complexity Hotspots
@@ -113,6 +116,7 @@ RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 - **Backward compatibility**: preserve existing aliases and action compatibility
 - **Defensive errors**: return structured errors (`{"error": true, "code": "...", "message": "..."}`) with actionable hints
 - **Explicit advisory provider only**: deterministic IDA execution and policy remain authoritative; Jev/custom typed questions are opt-in, bounded, and cannot invoke tools, authorize mutations, or write findings
+- **Raw-image address discipline**: high canonical ARM64 bases are validated as unsigned 64-bit values; load-at-zero plus an explicit `va_delta`/`address_delta` is the supported raw-kernel mapping, and System.map import applies that delta only to bounded, loaded addresses
 
 ## Safe Areas For New Contributors
 

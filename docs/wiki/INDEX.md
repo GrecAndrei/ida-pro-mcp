@@ -25,7 +25,7 @@ findings, and make reviewed IDB changes.
 
 - [Discovery](tools/discovery.md) — 23 operations: reconnaissance, deterministic retrieval, provider status, usage, and raw-byte inspection.
 - [Code](tools/code.md) — 11 operations: decompilation, disassembly, call graphs, cross-session function diffing, whole-binary diff triage, and emulation.
-- [Edit](tools/edit.md) — 33 operations: names, comments, function boundaries, patching, type/segment edits, snapshots, and transactions.
+- [Edit](tools/edit.md) — 34 operations: names, comments, function boundaries, patching, System.map imports, type/segment edits, snapshots, and transactions.
 - [Types](tools/types.md) — Struct, enum, and typedef declarations, struct/enum member edits, and TIL import/export.
 - [Segments](tools/segments.md) — Segment layout, attributes, permissions, and segment-register (`sreg`) mappings.
 - [Findings](tools/findings.md) — 10 operations: persistent investigation workspace, evidence recording, and IDB publishing.

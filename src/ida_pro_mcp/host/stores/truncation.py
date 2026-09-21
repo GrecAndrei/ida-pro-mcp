@@ -273,6 +273,8 @@ def continue_truncated(
             "field": field,
             "items": items,
             "offset": start,
+            "visible_offset": start,
+            "visible_count": len(items),
             "count": len(items),
             "total": total,
             "next_offset": next_offset if has_more else None,
@@ -296,12 +298,21 @@ def continue_truncated(
             info["next_offset"] = next_offset
         total = info.get("total", len(value))
         has_more = next_offset < total
+        text_bytes = text.encode("utf-8")
+        prefix_bytes = len(value[:start].encode("utf-8"))
+        next_offset_bytes = len(value[:next_offset].encode("utf-8")) if has_more else None
         return {
             "ok": True,
             "token": token,
             "field": field,
             "text": text,
             "offset": start,
+            "visible_offset": start,
+            "visible_count": len(text),
+            "visible_offset_bytes": prefix_bytes,
+            "visible_count_bytes": len(text_bytes),
+            "total_bytes": len(value.encode("utf-8")),
+            "next_offset_bytes": next_offset_bytes,
             "count": len(text),
             "total": total,
             "next_offset": next_offset if has_more else None,
@@ -645,26 +656,43 @@ def _truncate_recursive(
         if original_len > keep_count or trunc_offset is not None:
             start = max(0, trunc_offset or 0)
             end = start + keep_count
+            sliced = obj[start:end] if start < original_len else []
+            visible_count = len(sliced)
+            next_off = min(end, original_len) if end < original_len else None
             truncated_fields[path] = {
                 "type": "list",
                 "total": original_len,
                 "chunk_size": keep_count,
-                "next_offset": min(end, original_len) if end < original_len else None,
+                "offset": start,
+                "visible_offset": start,
+                "visible_count": visible_count,
+                "next_offset": next_off,
             }
-            return obj[start:end] if start < original_len else []
+            return sliced
         return obj
 
     if isinstance(obj, str) and len(obj) > max_tokens:
         chunk_size = trunc_limit if trunc_limit is not None and trunc_limit > 0 else max_tokens
         start = max(0, trunc_offset or 0)
         end = start + chunk_size
+        sliced = obj[start:end] if start < len(obj) else ""
+        visible_count = len(sliced)
+        next_off = min(end, len(obj)) if end < len(obj) else None
         truncated_fields[path] = {
             "type": "string",
+            "unit": "unicode_codepoints",
             "total": len(obj),
+            "total_bytes": len(obj.encode("utf-8")),
             "chunk_size": chunk_size,
-            "next_offset": min(end, len(obj)) if end < len(obj) else None,
+            "offset": start,
+            "visible_offset": start,
+            "visible_count": visible_count,
+            "visible_offset_bytes": len(obj[:start].encode("utf-8")),
+            "visible_count_bytes": len(sliced.encode("utf-8")),
+            "next_offset": next_off,
+            "next_offset_bytes": len(obj[:next_off].encode("utf-8")) if next_off is not None else None,
         }
-        return obj[start:end] if start < len(obj) else ""
+        return sliced
 
     if isinstance(obj, dict):
         # Bound descent so a pathologically deep (or self-referential)

@@ -220,6 +220,7 @@ timeout_method = "thread"
 testpaths = ["tests"]
 markers = [
     "live_ida: starts a licensed IDA instance and performs real MCP integration testing",
+    "live_jev: performs opt-in remote Jev provider validation without licensed IDA",
 ]
 
 [tool.setuptools.package-data]

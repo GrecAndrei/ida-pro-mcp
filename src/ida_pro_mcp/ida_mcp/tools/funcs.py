@@ -4,6 +4,7 @@ from ._common import (
     Literal,
     MCPError,
     Optional,
+    _inf_bitness,
     _inf_filetype_id,
     _inf_procname,
     get_stack_frame_variables_internal,
@@ -42,6 +43,22 @@ from ..support.arch_utils import (
     is_return_mnemonic,
     is_riscv_family,
 )
+
+# ARMv8.3-A PAC and ARMv8.5-A BTI opcodes (32-bit little-endian)
+_ARM64_PAC_BTI_OPCODES = {
+    0xd503233f: "paciasp",
+    0xd503237f: "pacibsp",
+    0xd50323bf: "autiasp",
+    0xd50323ff: "autibsp",
+    0xd503241f: "bti",
+    0xd503245f: "bti c",
+    0xd503249f: "bti j",
+    0xd50324df: "bti jc",
+    0xd503211f: "pacia1716",
+    0xd503215f: "pacib1716",
+    0xd503219f: "autia1716",
+    0xd50321df: "autib1716",
+}
 
 
 # ============================================================================
@@ -89,8 +106,21 @@ def _ensure_code_at(ea: int) -> bool:
     except Exception:
         proc = ""
     is_arm = "arm" in proc or "aarch" in proc or "thumb" in proc
-    if is_arm:
+    is_arm64 = "aarch64" in proc or "arm64" in proc or (is_arm and _inf_bitness() == 64)
+    if is_arm and not is_arm64:
         _set_thumb_mode(ea)
+    elif is_arm64:
+        # In ARM64, T segment register must not be 1. Ensure Thumb mode is off.
+        try:
+            sr_auto = getattr(idc, "SR_auto", 2)
+            idc.split_sreg_range(ea, "T", 0, sr_auto)
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
+            dword = ida_bytes.get_dword(ea)
+            if dword in _ARM64_PAC_BTI_OPCODES:
+                ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, 4)
+                _try_create_insn(ea)
     created = _try_create_insn(ea)
     if created and ida_bytes.is_code(ida_bytes.get_flags(ea)):
         return True
@@ -102,8 +132,14 @@ def _ensure_code_at(ea: int) -> bool:
 
             if hasattr(ida_auto, "auto_make_code"):
                 ida_auto.auto_make_code(ea)
-        if is_arm:
+        if is_arm and not is_arm64:
             _set_thumb_mode(ea)
+        elif is_arm64:
+            with contextlib.suppress(Exception):
+                dword = ida_bytes.get_dword(ea)
+                if dword in _ARM64_PAC_BTI_OPCODES:
+                    ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, 4)
+                    _try_create_insn(ea)
         created = _try_create_insn(ea)
         if created and ida_bytes.is_code(ida_bytes.get_flags(ea)):
             return True
@@ -275,16 +311,16 @@ def _embedding_rename_suggestions(
 ) -> dict:
     """Shared lexical-signature rename suggestion engine used by funcs/suggest_names."""
     try:
-        from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+        from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
     except ImportError:
-        from host.intelligence.lexical import LexicalFunctionIndex  # type: ignore
+        from host.intelligence.lexical import LexicalFunctionIndex, signature_index_path  # type: ignore
     idb_path = ""
     with contextlib.suppress(Exception):
         idb_path = idc.get_idb_path() or ""
     if not idb_path:
         return make_error(MCPError.INVALID_ARGS, "No IDB path available")
 
-    idx = LexicalFunctionIndex(idb_path + ".embeddings.db")
+    idx = LexicalFunctionIndex(signature_index_path(idb_path))
     target_eas: list[int] = []
     if addr:
         ea, err = validate_addr(addr, require_func=True)
@@ -483,6 +519,22 @@ def _funcs_impl(
                     f"Address {hex(ea)} cannot be converted to code",
                     hint,
                 )
+
+            # If ARM64 and preceded by an un-analyzed PAC/BTI prologue (e.g. PACIASP),
+            # recover it so the function entry is exact and avoids DCB/JUMPOUT
+            try:
+                proc = (_inf_procname() or "").lower()
+                is_arm64 = "aarch64" in proc or "arm64" in proc or (("arm" in proc) and _inf_bitness() == 64)
+                if is_arm64 and ea >= 4:
+                    prev_ea = ea - 4
+                    if ida_bytes.get_dword(prev_ea) in _ARM64_PAC_BTI_OPCODES:
+                        prev_fn = _compat.get_func_info(prev_ea)
+                        if prev_fn is None or prev_fn.start_ea == prev_ea:
+                            ida_bytes.del_items(prev_ea, ida_bytes.DELIT_SIMPLE, 4)
+                            if _try_create_insn(prev_ea):
+                                ea = prev_ea
+            except Exception:
+                pass
 
             fn = ida_funcs.add_func(ea, end_ea or idaapi.BADADDR)
             if not fn and end_ea and hasattr(idaapi, "auto_mark_range"):

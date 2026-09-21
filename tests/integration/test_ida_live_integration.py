@@ -799,7 +799,7 @@ class TestSearchAnalyzeIntegration(unittest.TestCase):
             self.assertFalse(data.get("error", False))
             note = data.get("note", "")
             self.assertNotIn("cached call graph", note)
-            self.assertTrue("embedding index" in note or "direct IDA enumeration" in note)
+            self.assertTrue("signature index" in note or "embedding index" in note or "direct IDA enumeration" in note)
         tiny = self._search(action="outlier", metric="tiny", limit=50)
         self.assertIn("rich_tiny", tiny.get("results", ""))
 

@@ -13,12 +13,15 @@ another one.
 | `ida_open_background(binary_path)` | Open without blocking on IDA analysis. |
 | `ida_session_switch(session_id=...)` | Change the active session. |
 
-`ida_open_binary` returns immediately with `session_id`, `binary_path`, and
-analysis flags. **Large binaries** (≥ `IDA_MCP_LARGE_BINARY_MB`, default
-50 MiB) are auto-routed to the background path: the response reports
-`background: true`, `auto_backgrounded: true`, and `safe_mode: true`, and you
-poll `ida_session_status` until analysis completes. Re-opening a binary that
-already has a completed IDB reuses the existing session synchronously.
+`ida_open_binary` returns `session_id`, `binary_path`, readiness flags, and a
+`lifecycle_state` (`starting`, `analyzing`, `ready`, `stopped`, or `error`). It
+waits only for the configured startup/analysis window (or the per-call
+`timeout`); a timeout is recoverable and reports `analysis_continuing: true`,
+so poll `ida_session_status` rather than retrying the open. **Large binaries**
+are auto-routed to the background path only when `IDA_MCP_BACKGROUND_OPEN=1`;
+the response reports `background: true`, `auto_backgrounded: true`, and
+`safe_mode: true`. Re-opening a binary that already has a completed IDB reuses
+the existing session synchronously.
 
 ## Safe mode
 

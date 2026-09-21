@@ -6,7 +6,7 @@ Keep claims synchronized with `README.md` and the current release notes before r
 ## Short post
 
 IDA Pro MCP gives AI agents deterministic, local-first access to IDA Pro through
-101 strict-schema operations: decompilation, cross-references, raw-binary inspection,
+102 strict-schema operations: decompilation, cross-references, raw-binary inspection,
 deterministic lexical search, optional Jev/custom advisory scoring, and an
 evidence-backed findings workspace.
 
@@ -22,7 +22,7 @@ IDA Pro MCP with deterministic agent operations and evidence-backed findings
 
 I have been building an alternative IDA Pro MCP implementation focused on
 deterministic tool contracts rather than a broad free-form action endpoint. The
-default surface currently exposes 101 strict-schema `ida_*` operations covering
+default surface currently exposes 102 strict-schema `ida_*` operations covering
 headless sessions, decompilation, disassembly, cross-references, raw-binary
 inspection, deterministic lexical search, optional Jev/custom advisory scoring,
 and a durable findings workspace.

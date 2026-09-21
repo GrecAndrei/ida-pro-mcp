@@ -145,7 +145,7 @@ def test_matching_binary_seeds_an_independent_session_index(tmp_path):
 
     assert reused["reused"] is True
     assert reused["from_session"] == source.session_id
-    target_db = f"{target.idb_path}.embeddings.db"
+    target_db = f"{target.idb_path}.signatures.db"
     assert target_db != source_db
     with sqlite3.connect(target_db) as conn:
         assert conn.execute("SELECT ea, name FROM func_embeddings").fetchall() == [("0x1000", "decode")]

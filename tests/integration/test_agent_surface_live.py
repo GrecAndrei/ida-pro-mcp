@@ -296,7 +296,9 @@ class LiveMCPClient:
                 "IDA_MCP_DISABLE_RATE_LIMIT": "1",
                 "IDA_MCP_DISABLE_STUCK_DETECTION": "1",
                 "IDA_MCP_POLICY_MODE": "permissive",
-                "IDA_MCP_INTELLIGENCE_MODE": "disabled",
+                # Keep the deterministic default, but allow the explicit
+                # Jev/custom live suites to exercise provider integration.
+                "IDA_MCP_INTELLIGENCE_MODE": os.environ.get("IDA_MCP_INTELLIGENCE_MODE", "disabled"),
                 "IDA_MCP_STRUCTURED_CONTENT": "1",
                 "IDA_MCP_RESPONSE_ENRICH": "0",
                 "IDA_MCP_STARTUP_TIMEOUT": str(max(int(self.timeout), 90)),

@@ -20,6 +20,7 @@ target and intended outcome beforehand.
 | `ida_change_function(address, end)` | Change a function's end boundary (Set function end). | `address`, `end`, `risk_ack` |
 | `ida_add_entry(address)` | Mark an address as an entry point (reclassifies as code and sets entry flag). | `address`, `risk_ack` |
 | `ida_mark_dangerous(address)` | Flag dangerous API call sites with warning comments. | `address`, `risk_ack` |
+| `ida_import_system_map(path)` | Import bounded Linux/System.map symbols, optionally adding a virtual-address delta and creating code functions. | `path`, `risk_ack` |
 
 ---
 

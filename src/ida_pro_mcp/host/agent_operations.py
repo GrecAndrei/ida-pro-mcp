@@ -368,8 +368,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "processor_options": {"type": "string", "description": "Processor-specific options string, e.g. ARM CPU type or MIPS ISA variant."},
                 "rebase_to": {"type": "string", "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."},
                 "entry_point": {"type": "string", "description": "Override the entry point address (hex or decimal)."},
+                "va_delta": {"type": "integer", "description": "Signed virtual-address delta for a raw kernel loaded at a different address."},
+                "address_delta": {"type": "integer", "description": "Alias for va_delta; used by raw-kernel/System.map workflows."},
                 "stack_size": {"type": "integer", "description": "Stack size in bytes for stack analysis."},
                 "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."},
+                "timeout": {
+                    "type": "number",
+                    "description": "Maximum seconds to wait for initial auto-analysis before returning an analysis-continuing response with session_id (default prompt wait or configured timeout).",
+                },
             },
             ["binary_path"],
         ),
@@ -438,6 +444,8 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "processor_options": {"type": "string", "description": "Processor-specific options string, e.g. ARM CPU type or MIPS ISA variant."},
                 "rebase_to": {"type": "string", "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."},
                 "entry_point": {"type": "string", "description": "Override the entry point address (hex or decimal)."},
+                "va_delta": {"type": "integer", "description": "Signed virtual-address delta for a raw kernel loaded at a different address."},
+                "address_delta": {"type": "integer", "description": "Alias for va_delta; used by raw-kernel/System.map workflows."},
                 "stack_size": {"type": "integer", "description": "Stack size in bytes for stack analysis."},
                 "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."},
                 "ida_args": {
@@ -1433,7 +1441,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_next_target",
-        description="Suggest what to analyze next using one named strategy, with the reason for each candidate.",
+        description="Suggest what to analyze next using a deterministic strategy; Jev/custom may advisory-rank the bounded candidates without changing eligibility or mutating IDA.",
         category="findings",
         input_schema=_schema({
             "strategy": {
@@ -1447,7 +1455,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                     "frontier: unexamined neighbours of confirmed findings."
                 ),
             },
-            "query": {"type": "string", "description": "Optional theme; reorders candidates by keyword overlap, never drops them."},
+            "query": {"type": "string", "description": "Optional theme; deterministic keyword overlap reorders candidates first, then Jev/custom may advisory-rank them without dropping any."},
             "limit": LIMIT,
         }),
         example={"strategy": "coverage", "limit": 10},
@@ -1815,6 +1823,45 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_tool="misc",
         backend_action="list_sigs",
         argument_map={"query": "name"},
+    ),
+    AgentOperation(
+        name="ida_import_system_map",
+        description=(
+            "Import a bounded Linux/System.map symbol file into the IDB. "
+            "Use address_delta when a raw kernel was loaded at a different virtual address; "
+            "this operation writes names and therefore requires risk_ack."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "path": {"type": "string", "description": "Path to the System.map file."},
+                "address_delta": {
+                    "type": "integer",
+                    "description": "Signed delta added to each System.map address before import.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50000,
+                    "description": "Maximum symbols to import (default 10000).",
+                },
+                "filter_types": {
+                    "type": "string",
+                    "description": "Optional System.map symbol-type filter, e.g. 'Tt'.",
+                },
+                "create_functions": {
+                    "type": "boolean",
+                    "description": "Create missing IDA functions for imported code symbols.",
+                },
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["path", "risk_ack"],
+        ),
+        example={"path": "/samples/System.map", "address_delta": 0, "risk_ack": True},
+        backend_tool="symbols",
+        backend_action="import_system_map",
+        argument_map={"risk_ack": "_risk_ack"},
     ),
     AgentOperation(
         name="ida_python",

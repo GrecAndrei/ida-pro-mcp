@@ -819,7 +819,7 @@ def _get_call_graph() -> dict:
 def _outlier_rows_from_ida(metric: str) -> list[tuple[int, str, int]]:
     """Compute outlier metric values for every function directly from IDA.
 
-    Used as a fallback when the embedding index is unavailable. Returns
+    Used as a fallback when the signature index is unavailable. Returns
     ``[(ea, name, value)]`` sorted best-first for the metric (ascending for
     ``tiny``, descending otherwise). Only cheap structural metrics are
     supported; ``complexity`` needs the index.
@@ -871,7 +871,7 @@ _VULN_ANCHORS = [
 
 
 def _get_index_metadata(ea: int) -> dict | None:
-    """Get structural metadata for a function from the embedding index."""
+    """Get structural metadata for a function from the signature index."""
     try:
         from ida_pro_mcp.services import get_assembler
         asm = get_assembler()
@@ -1035,7 +1035,7 @@ def search_analyze(
         fea = int(func.start_ea)
         name = _func_name(fea)
 
-        # Structural metadata from embedding index (cached in SQLite)
+        # Structural metadata from signature index (cached in SQLite)
         meta = _get_index_metadata(fea)
         metrics = meta or {"func_size": func.end_ea - func.start_ea}
 
@@ -1100,7 +1100,7 @@ def search_analyze(
             "tags": tags,
             "blackboard": blackboard,
             "items": items_out,
-            "note": "Context card from embedding index + cached call graph.",
+            "note": "Context card from signature index + cached call graph.",
         }
 
     # --- OUTLIER ---
@@ -1111,7 +1111,7 @@ def search_analyze(
             return make_error(MCPError.INVALID_ARGS, f"unknown metric {metric!r}",
                               hint=f"Known: {', '.join(sorted(valid_metrics))}")
 
-        # Metrics backed by the embedding index. tiny/huge are size-threshold
+        # Metrics backed by the signature index. tiny/huge are size-threshold
         # views over the same column (previously declared valid but dead code:
         # the branch below was guarded on `metric in index_metrics`, so the
         # tiny/huge clauses could never run and those metrics silently
@@ -1157,12 +1157,12 @@ def search_analyze(
                         "metric": metric, "results": "\n".join(f"{it['addr']}  {it['name']}  {metric}={it[metric]}" for it in items),
                         "count": len(items), "total": total,
                         "truncated": total > offset + limit, "items": items,
-                        "note": f"Outliers by {metric} from embedding index.",
+                        "note": f"Outliers by {metric} from signature index.",
                     }
                 except Exception:
                     pass
 
-            # No usable embedding index: compute the metric directly from IDA.
+            # No usable signature index: compute the metric directly from IDA.
             # This keeps size/tiny/huge/bb_count fully functional on binaries
             # that were never indexed instead of silently returning nothing.
             if metric != "complexity":
@@ -1188,7 +1188,7 @@ def search_analyze(
                     )
             return make_error(
                 MCPError.NOT_FOUND,
-                "cyclomatic complexity requires the embedding index; run intelligence(action='index_fast') first",
+                "cyclomatic complexity requires the signature index; run intelligence(action='index_fast') first",
             )
 
         # Call-graph-based metrics: use cached graph

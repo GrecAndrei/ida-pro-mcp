@@ -278,8 +278,52 @@ class ServerResponseCompactMixin:
         "safe_mode",
         "background",
         "auto_backgrounded",
+        "analysis_continuing",
         "ok",
     })
+
+    def _compact_string_truncations(
+        self, value: Any, opts: dict, path: str = ""
+    ) -> list[dict[str, Any]]:
+        """Describe string clipping performed by compact rendering.
+
+        The inline ``...(+N chars)`` suffix is intentionally retained for
+        compatibility, but it is not a continuation cursor.  These records
+        make the visible character and UTF-8 byte ranges explicit so a client
+        does not mistake the suffix count for the next ``ida_continue`` offset.
+        """
+        max_string = max(64, int(opts.get("max_string", 500_000)))
+        rows: list[dict[str, Any]] = []
+        if isinstance(value, str):
+            if len(value) > max_string:
+                visible = value[:max_string]
+                next_offset = max_string
+                rows.append(
+                    {
+                        "field": path,
+                        "type": "string",
+                        "unit": "unicode_codepoints",
+                        "offset": 0,
+                        "visible_offset": 0,
+                        "visible_count": len(visible),
+                        "next_offset": next_offset,
+                        "total": len(value),
+                        "visible_offset_bytes": 0,
+                        "visible_count_bytes": len(visible.encode("utf-8")),
+                        "next_offset_bytes": len(visible.encode("utf-8")),
+                        "total_bytes": len(value.encode("utf-8")),
+                    }
+                )
+            return rows
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                rows.extend(self._compact_string_truncations(child, opts, child_path))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                child_path = f"{path}.{index}" if path else str(index)
+                rows.extend(self._compact_string_truncations(child, opts, child_path))
+        return rows
 
     def _compact_value(self, value: Any, opts: dict) -> Any:
         max_items = max(1, int(opts.get("max_items", 10_000)))

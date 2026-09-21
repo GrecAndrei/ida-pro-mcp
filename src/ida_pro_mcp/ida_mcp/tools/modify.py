@@ -314,6 +314,18 @@ def modify(
         if action == "rename":
             if idc.set_name(ea, value, ida_name.SN_FORCE):
                 result = {"ok": True, "addr": addr, "name": value}
+                func = _compat.get_func_info(ea)
+                if func is None or func.start_ea != ea:
+                    result["is_function"] = False
+                    result["warning"] = (
+                        f"Address {addr} is not the entry point of a function; "
+                        "only an address label was created. "
+                        f"Use ida_create_function (or funcs(action='create', addr='{addr}')) "
+                        "to define a function here if intended."
+                    )
+                    result["recommendation"] = f"ida_create_function(address='{addr}')"
+                else:
+                    result["is_function"] = True
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
                 # Cross-session side effect beyond the acknowledged IDB write:

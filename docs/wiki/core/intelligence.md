@@ -40,8 +40,10 @@ syntax and cannot contain credentials.
 ## Deterministic indexing and search
 
 `ida_index_functions` retains its compatibility name but stores bounded names,
-disassembly, structural metadata, and lexical signatures only. It does not
-run a model or persist raw decompilation. Scope with `query`, `ranges`,
+disassembly, structural metadata, and lexical signatures only. The sidecar is
+`<idb-path>.signatures.db`; first access migrates legacy
+`<idb-path>.embeddings.db` storage and preserves it if migration fails. It does
+not run a model or persist raw decompilation. Scope with `query`, `ranges`,
 `start`/`end`, `address` + `radius`, `min_size`, and `max_size`. Use
 `ida_index_status` and `ida_cancel_index` for background indexing.
 
@@ -50,6 +52,12 @@ lexical signature search and can optionally ask Jev/custom to score a bounded
 candidate pool. Provider failure, timeout, or budget blocking preserves the
 lexical order and reports the advisory failure; it never turns an unavailable
 provider into a fake semantic score.
+
+`ida_next_target` uses the blackboard's deterministic strategy to choose the
+eligible candidate set. When Jev/custom is ready, it may score and reorder a
+bounded target pool; eligibility, evidence, mutation policy, and all writes
+remain deterministic and analyst-controlled. Provider failure leaves the
+original target order intact and is returned as advisory metadata.
 
 `ida_reranker_status` reports the configured typed-question scoring capability
 as a compatibility alias. Vector-family clustering is not part of the current

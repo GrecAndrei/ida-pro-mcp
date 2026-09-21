@@ -178,6 +178,23 @@ class TestAddAddressCalculations:
         finally:
             server.shutdown()
 
+    def test_raw_kernel_delta_exposes_virtual_and_loaded_addresses(self, tmp_path, monkeypatch):
+        server = _make_server(tmp_path, monkeypatch)
+        try:
+            sid = server.session_mgr.create_session(
+                "/tmp/kernel.bin",
+                analysis_options={"baseaddr": 0, "va_delta": 0xffff800010000000},
+            ).session_id
+            compacted = {"text": "kernel pointer 0xffff800010001000"}
+            server._add_address_calculations(compacted, sid)
+            calc = compacted["llm_address_calculation"]["0xffff800010001000"]
+            assert calc["loaded_address"] == "0x1000"
+            assert calc["kernel_virtual_address"] == "0xffff800010001000"
+            assert calc["relocation_delta"] == "0xffff800010000000"
+            assert compacted["llm_address_calculation_va_delta"] == "0xffff800010000000"
+        finally:
+            server.shutdown()
+
     def test_32bit_address_not_rebased_to_garbage(self, tmp_path, monkeypatch):
         server = _make_server(tmp_path, monkeypatch)
         try:

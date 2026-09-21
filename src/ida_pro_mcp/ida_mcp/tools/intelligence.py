@@ -178,7 +178,7 @@ def _lexical_index_functions(
     deterministic search and structural filters useful while ensuring a
     provider request is never hidden behind an indexing operation.
     """
-    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
 
     def _address(value: Any) -> int | None:
         if value is None or str(value).strip() == "":
@@ -259,7 +259,7 @@ def _lexical_index_functions(
         except Exception:
             continue
         rows.append((hex(address), name, signature, {**metadata, "index_quality": "lexical"}))
-    index = LexicalFunctionIndex(idb_path + ".embeddings.db")
+    index = LexicalFunctionIndex(signature_index_path(idb_path))
     result = index.index_many(rows)
     _invalidate_tool_cache()
     next_cursor = hex(batch[-1][0]) if len(batch) >= max_count and batch else None
@@ -470,9 +470,9 @@ def intelligence(
                     return make_error(MCPError.INVALID_ARGS, "address is not a function")
                 name = str(ida_funcs.get_func_name(ea) or hex(ea))
                 signature = _build_fast_signature(ea, func)
-                from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+                from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
 
-                index = LexicalFunctionIndex(idb_path + ".embeddings.db")
+                index = LexicalFunctionIndex(signature_index_path(idb_path))
                 stored = index.index(hex(ea), name, signature, {**_function_index_metadata(func), "index_quality": "lexical"})
                 _invalidate_tool_cache()
                 return {
@@ -510,9 +510,9 @@ def intelligence(
             func = _compat.get_func_info(ea)
             if func is None:
                 return make_error(MCPError.INVALID_ARGS, "address is not a function")
-            from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+            from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
 
-            index = LexicalFunctionIndex(idb_path + ".embeddings.db")
+            index = LexicalFunctionIndex(signature_index_path(idb_path))
             rows = index.search_text(
                 _build_fast_signature(ea, func),
                 top_k=max(1, min(200, int(max_items or kwargs.get("top_k", 10)))),
@@ -532,9 +532,9 @@ def intelligence(
             if not idb_path:
                 return make_error(MCPError.SESSION_REQUIRED, "no active IDB path")
             try:
-                from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+                from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
 
-                idx = LexicalFunctionIndex(idb_path + ".embeddings.db")
+                idx = LexicalFunctionIndex(signature_index_path(idb_path))
                 rows = idx.search_text(str(query), top_k=max(1, int(kwargs.get("top_k", max_items or 25))))
             except Exception:
                 rows = []

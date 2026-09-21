@@ -1,3 +1,17 @@
+## 2026-09-20 — Harden IDA binary lifecycle and raw-image integration
+
+- Made blocking opens bounded and recoverable, with explicit `starting`,
+  `analyzing`, `ready`, `stopped`, and `error` lifecycle states plus polling
+  guidance when IDB creation or auto-analysis continues in the background.
+- Validated unsigned 64-bit/high-canonical ARM64 addresses, preserved PAC/BTI
+  prologue recovery, normalized exact decompilation entries, and made rename
+  results warn when an address label is not a function entry.
+- Added bounded, policy-gated `ida_import_system_map` support with explicit
+  address deltas and raw-kernel virtual-to-loaded address reporting; Linux
+  kernel evidence no longer receives a bare-metal-only API warning.
+- Added exact character/UTF-8 byte offsets to truncation metadata and retained
+  compatibility markers for compact rendered strings.
+
 ## 2026-09-20 — Replace implicit intelligence backends with explicit providers
 
 - Replaced local, Gemini, and native model selection with fail-closed `jev`,

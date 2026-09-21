@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .embeddings import FunctionEmbeddingIndex
+from .embeddings import FunctionEmbeddingIndex, signature_index_path
+
+__all__ = ["FunctionEmbeddingIndex", "LexicalFunctionIndex", "signature_index_path"]
 
 
 class _LexicalIdentity:

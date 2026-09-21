@@ -18,7 +18,7 @@ Choose the page that matches the job.
 
 - [Discovery Operations (24 ops)](tools/discovery.md)
 - [Code Operations (11 ops)](tools/code.md)
-- [Edit Operations (33 ops)](tools/edit.md)
+- [Edit Operations (34 ops)](tools/edit.md)
 - [Types Operations](tools/types.md)
 - [Segments Operations](tools/segments.md)
 - [Findings Operations (10 ops)](tools/findings.md)

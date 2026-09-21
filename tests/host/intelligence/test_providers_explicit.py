@@ -4,7 +4,9 @@ import json
 
 import pytest
 
+from ida_pro_mcp.host.intelligence.advisory import rank_targets
 from ida_pro_mcp.host.intelligence.providers import (
+    Answer,
     BudgetConfig,
     CustomProvider,
     DisabledProvider,
@@ -13,6 +15,7 @@ from ida_pro_mcp.host.intelligence.providers import (
     ProviderBudgetError,
     ProviderConfigError,
     ProviderProtocolError,
+    ProviderResponse,
     Question,
     StateSnapshot,
     Usage,
@@ -35,6 +38,39 @@ def _custom_env(**extra):
     }
     env.update(extra)
     return env
+
+
+def test_rank_targets_normalizes_ordinal_scores_and_sends_metadata_only():
+    class _Provider:
+        def __init__(self):
+            self.state = None
+
+        def invoke(self, state, questions, **_kwargs):
+            self.state = state
+            answers = {
+                question.question_id: Answer(
+                    question.question_id,
+                    "score",
+                    2.0 if question.question_id == "target_0" else 0.0,
+                )
+                for question in questions
+            }
+            return ProviderResponse("fixture", answers, Usage(1, 1, 2))
+
+    provider = _Provider()
+    result = rank_targets(
+        {"strategy": "unresolved", "query": "parser"},
+        [
+            {"address": "0x401000", "title": "parse header", "content": "must not be sent"},
+            {"address": "0x402000", "title": "idle helper", "reason": "low priority"},
+        ],
+        provider=provider,
+    )
+
+    assert result["ok"] is True
+    assert [item["score"] for item in result["scores"]] == [1.0, 0.0]
+    assert "content" not in provider.state["targets"][0]
+    assert provider.state["targets"][0]["title"] == "parse header"
 
 
 def test_provider_status_and_errors_are_structured_and_redacted():

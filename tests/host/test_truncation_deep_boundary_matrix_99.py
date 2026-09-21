@@ -139,6 +139,10 @@ def test_summary_long_text_and_recursive_size_truncation_edges(monkeypatch):
     assert clipped == [] and fields["items"]["type"] == "list"
     string_fields = {}
     assert t._truncate_recursive("abcdef", 3, string_fields, path="text", trunc_offset=20, trunc_limit=2) == ""
+    unicode_fields = {}
+    assert t._truncate_recursive("éclair-éclair", 5, unicode_fields, path="unicode") == "éclai"
+    assert unicode_fields["unicode"]["visible_count_bytes"] == len("éclai".encode())
+    assert unicode_fields["unicode"]["next_offset_bytes"] == len("éclai".encode())
     nested = {"deep": {"value": "abcdef"}}
     assert t._truncate_recursive(nested, 3, {}, _depth=t._MAX_TRUNCATION_DEPTH) == nested
 

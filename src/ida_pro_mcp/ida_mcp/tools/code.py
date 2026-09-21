@@ -54,6 +54,7 @@ from .code_helpers import (
     _compute_cfg_semantics,
     _decompile_with_diagnostics,
     _detect_firmware_signals,
+    _linux_kernel_context,
     _disasm_range,
     _disasm_range_structured,
     _disasm_window,
@@ -1317,6 +1318,12 @@ def code(
                     "complexity": complexity,
                     "suggested_next_actions": suggested[:4],
                 })
+                if enrichment.get("firmware_signals"):
+                    results[-1]["firmware_signals"] = enrichment["firmware_signals"]
+                if enrichment.get("linux_kernel"):
+                    results[-1]["linux_kernel"] = enrichment["linux_kernel"]
+                if enrichment.get("api_note"):
+                    results[-1]["api_note"] = enrichment["api_note"]
 
             elif action == "explain":
                 # Plain-English explanation of what a function does.
@@ -1378,7 +1385,10 @@ def code(
                 # table constants) — the bare-metal analog of libc API calls.
                 firmware_signals = _detect_firmware_signals(func.start_ea, pseudo)
 
-                # Build plain-English summary
+                # Build plain-English summary.  Linux kernels are commonly
+                # freestanding and intentionally have no libc imports; do not
+                # mislabel that absence as bare-metal firmware.
+                linux_kernel = _linux_kernel_context(func.start_ea)
                 purpose_parts = []
                 if any(a in found_apis for a in ["recv","recvfrom","socket","connect","bind","listen","accept"]):
                     purpose_parts.append("handles network I/O")
@@ -1401,10 +1411,13 @@ def code(
                 if not purpose_parts:
                     # No libc API matched — check for symbol-free firmware
                     # signals before falling back to the generic line. On
-                    # opaque device blobs "no APIs" usually means bare-metal
-                    # firmware, not "does nothing".
-                    if firmware_signals:
-                        purpose_parts.append("performs bare-metal/RTOS firmware operations (no libc APIs detected — bare-metal firmware?)")
+                    # opaque device blobs, explicit MMIO/trap/CSR signals can
+                    # support a firmware classification; absence of APIs alone
+                    # is not enough.
+                    if linux_kernel.get("recognized"):
+                        purpose_parts.append("implements Linux kernel or freestanding OS logic (no libc APIs detected)")
+                    elif firmware_signals:
+                        purpose_parts.append("performs bare-metal/RTOS firmware operations (no libc APIs detected)")
                     else:
                         purpose_parts.append("performs internal computation")
 
@@ -1443,8 +1456,18 @@ def code(
                 })
                 if firmware_signals:
                     results[-1]["firmware_signals"] = firmware_signals
+                if linux_kernel.get("recognized"):
+                    results[-1]["linux_kernel"] = linux_kernel
                 if not found_apis:
-                    results[-1]["api_note"] = "no libc APIs detected — bare-metal firmware?"
+                    results[-1]["api_note"] = (
+                        "no libc APIs detected — recognized Linux kernel/freestanding OS code; libc absence is expected"
+                        if linux_kernel.get("recognized")
+                        else (
+                            "no libc APIs detected — bare-metal firmware?"
+                            if firmware_signals
+                            else "no libc APIs detected — insufficient evidence to classify this function as firmware"
+                        )
+                    )
 
             elif action == "trace_argument_origin":
                 func = _compat.get_func_info(ea)

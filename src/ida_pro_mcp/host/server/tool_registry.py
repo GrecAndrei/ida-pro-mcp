@@ -116,7 +116,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "suggest_strategy", "get_phase", "dashboard",
     ],
     "stack_analysis": ["frame", "buffers", "canary", "alignment", "spills", "usage", "variables", "arrays", "uninitialized", "summary"],
-    "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
+    "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export", "import_system_map"],
 
 
     "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_diff", "session_diff", "cross_xrefs", "status"],

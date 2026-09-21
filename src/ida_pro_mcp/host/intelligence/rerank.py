@@ -166,6 +166,12 @@ class Reranker:
                     return None
                 if isinstance(answer.value, (int, float)) and not isinstance(answer.value, bool):
                     score = float(answer.value)
+                    # Jev score questions may return the ordinal level
+                    # (0..N-1) rather than a normalized 0..1 value. Keep
+                    # provider output advisory, but normalize that bounded
+                    # representation before applying the rerank contract.
+                    if score > 1.0:
+                        score /= max(1, len(questions[index].criteria) - 1)
                 elif answer.probabilities:
                     labels = [str(item) for item in questions[index].criteria]
                     best = max(answer.probabilities, key=answer.probabilities.get)

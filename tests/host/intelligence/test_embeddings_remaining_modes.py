@@ -49,6 +49,32 @@ def test_document_and_search_helpers_cover_empty_limits_variants_and_synonyms():
     assert emb._clip_signature("x" * 20, 10) == "xxxxxxx..."
 
 
+def test_signature_index_path_migrates_legacy_sidecar(tmp_path):
+    idb_path = tmp_path / "sample.idb"
+    legacy = idb_path.with_name(idb_path.name + ".embeddings.db")
+    with sqlite3.connect(legacy) as conn:
+        conn.execute("CREATE TABLE marker(value TEXT)")
+        conn.execute("INSERT INTO marker(value) VALUES('kept')")
+
+    resolved = emb.signature_index_path(str(idb_path))
+    target = idb_path.with_name(idb_path.name + ".signatures.db")
+    assert resolved == str(target)
+    assert target.is_file()
+    assert not legacy.exists()
+    with sqlite3.connect(target) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone() == ("kept",)
+
+
+def test_signature_index_path_keeps_corrupt_legacy_sidecar_in_place(tmp_path):
+    idb_path = tmp_path / "broken.idb"
+    legacy = idb_path.with_name(idb_path.name + ".embeddings.db")
+    legacy.write_bytes(b"not sqlite")
+
+    assert emb.signature_index_path(str(idb_path)) == str(legacy)
+    assert not idb_path.with_name(idb_path.name + ".signatures.db").exists()
+    assert legacy.read_bytes() == b"not sqlite"
+
+
 def test_long_document_keeps_identifier_branch_and_all_header_sections():
     identifiers = "\n".join(
         f"unique_identifier_{i}(arg_{i}, 0x{i + 1000:x});" for i in range(220)

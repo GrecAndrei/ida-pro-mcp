@@ -162,6 +162,7 @@ WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
     ("session", "untag"),
     ("symbols", "load_dwarf"),
     ("symbols", "load_pdb"),
+    ("symbols", "import_system_map"),
     ("modify", "create_data"),
     ("modify", "create_strlit"),
     ("modify", "undo_begin"),

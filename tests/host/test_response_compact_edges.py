@@ -163,6 +163,18 @@ def test_compact_value_trims_strings_lists_and_drops_empty_values():
     assert "false" not in out
 
 
+def test_compact_string_truncation_reports_character_and_utf8_ranges():
+    host = _CompactHost()
+    rows = host._compact_string_truncations(
+        {"text": "é" * 70}, _opts(max_string=64)
+    )
+    assert rows[0]["field"] == "text"
+    assert rows[0]["visible_offset"] == 0
+    assert rows[0]["next_offset"] == 64
+    assert rows[0]["visible_count_bytes"] == len(("é" * 64).encode("utf-8"))
+    assert rows[0]["total_bytes"] == len(("é" * 70).encode("utf-8"))
+
+
 def test_compact_value_preserves_semantic_booleans_and_explicit_firmware_false():
     host = _CompactHost()
     out = host._compact_value(

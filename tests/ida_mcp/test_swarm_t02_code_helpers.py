@@ -643,6 +643,20 @@ class TestPureHelpers(unittest.TestCase):
         self.assertIn("memcpy", apis)
         self.assertIn("snprintf", apis)
 
+    def test_linux_kernel_context_is_not_classified_as_bare_metal(self):
+        self.mod._linux_kernel_image_evidence.cache_clear()
+        idaapi = sys.modules["idaapi"]
+        idaapi.get_file_type_name = lambda: "ELF for ARM64"
+        funcs = sys.modules["ida_funcs"]
+        funcs.get_func_name = lambda _ea: "start_kernel"
+        autils = sys.modules["idautils"]
+        autils.Segments = lambda: [0x1000]
+        autils.Functions = lambda: [0x1000]
+        self.mod._compat.get_segment_name = lambda _ea: ".init.text"
+        context = self.mod._linux_kernel_context(0x1000)
+        assert context["recognized"] is True
+        assert any("segment:.init.text" in item for item in context["evidence"])
+
     def test_detect_crypto_hints(self):
         hints, xor_count = self.mod._detect_crypto_hints("aes_encrypt(...); md5update(...)")
         self.assertIn("AES", hints)

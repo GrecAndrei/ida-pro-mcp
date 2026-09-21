@@ -7,6 +7,7 @@ Pure-python helpers (no IDA imports) so host + server_script can share logic.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import re
 import struct
@@ -60,7 +61,7 @@ def normalize_arch_options(options: dict[str, Any]) -> tuple[dict[str, Any], dic
     Returns (normalized_options, meta).
     """
     out = dict(options or {})
-    meta: dict[str, Any] = {"normalizations": []}
+    meta: dict[str, Any] = {"normalizations": [], "warnings": [], "errors": []}
 
     # Strip arch keys that are empty/zero/whitespace — an LLM passing processor=""
     # or bitness=0 should be treated the same as not passing it at all, otherwise
@@ -95,7 +96,7 @@ def normalize_arch_options(options: dict[str, Any]) -> tuple[dict[str, Any], dic
         out["value"] = out.get("loader_options")
         meta["normalizations"].append("loader_options->value")
 
-    for key in ("baseaddr", "start_ea", "min_ea", "max_ea"):
+    for key in ("baseaddr", "start_ea", "min_ea", "max_ea", "rebase_to", "entry_point"):
         if out.get(key) is None:
             continue
         raw = out.get(key)
@@ -118,6 +119,72 @@ def normalize_arch_options(options: dict[str, Any]) -> tuple[dict[str, Any], dic
             continue
         out[key] = coerced
         meta["normalizations"].append(f"{key}:coerced=int")
+
+    base = out.get("baseaddr")
+    proc = str(out.get("processor") or "").lower()
+    bits = out.get("bitness")
+    is_arm64 = proc in ("arm64", "aarch64") or ("arm" in proc and bits == 64)
+    address_max = 0xffffffffffffffff
+    for key in ("baseaddr", "start_ea", "min_ea", "max_ea", "rebase_to", "entry_point"):
+        value = out.get(key)
+        if not isinstance(value, int):
+            continue
+        if value < 0:
+            if key == "baseaddr" and (bits == 64 or is_arm64):
+                value &= address_max
+                out[key] = value
+                meta["normalizations"].append(f"{key}:signed_to_unsigned_64")
+            else:
+                meta["errors"].append(f"{key} must be an unsigned 64-bit address")
+                continue
+        if value > address_max:
+            meta["errors"].append(
+                f"{key} {value:#x} exceeds the unsigned 64-bit address space"
+            )
+        if key in {"baseaddr", "rebase_to"} and value % 16:
+            meta["errors"].append(
+                f"{key} {value:#x} must be 16-byte aligned because IDA's -b switch uses paragraphs"
+            )
+
+    base = out.get("baseaddr")
+    if isinstance(base, int):
+        if is_arm64 and base >= 0x8000000000000000:
+            if base % 16:
+                meta["warnings"].append(
+                    "IDA's -b load-base switch uses 16-byte paragraphs; "
+                    "an unaligned ARM64 base needs a post-load rebase instead of a direct open."
+                )
+            guidance_msg = (
+                f"High canonical ARM64 virtual address {hex(base)} detected. "
+                "For raw kernel/firmware images, loading at zero (baseaddr='0x0') and applying "
+                f"virtual address delta (va_delta = {hex(base)}) or importing System.map with "
+                "address_delta is recommended to prevent segment allocation/relocation errors in IDA."
+            )
+            meta["arm64_guidance"] = {
+                "type": "arm64_high_canonical_base",
+                "baseaddr": hex(base),
+                "advice": guidance_msg,
+                "recommended_baseaddr": "0x0",
+                "va_delta": hex(base),
+            }
+            meta["warnings"].append(guidance_msg)
+
+    # Relocation deltas are signed offsets, not EAs.  Keep them separate from
+    # the unsigned address validation above so a raw kernel can describe a
+    # negative adjustment without making the requested load address invalid.
+    for key in ("va_delta", "address_delta"):
+        value = out.get(key)
+        if value is None or isinstance(value, int):
+            continue
+        text = str(value).strip()
+        try:
+            out[key] = int(text, 0)
+        except (TypeError, ValueError):
+            if re.fullmatch(r"-?[0-9][0-9a-fA-F]*", text):
+                with contextlib.suppress(ValueError):
+                    out[key] = int(text, 16)
+            if not isinstance(out.get(key), int):
+                meta["errors"].append(f"{key} must be a signed integer relocation delta")
 
     return out, meta
 

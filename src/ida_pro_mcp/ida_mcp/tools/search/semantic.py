@@ -52,10 +52,10 @@ def get_backend():
     if not idb_path:
         return _err("Semantic search requires an active IDB.", hint="Open a binary and retry.")
     try:
-        from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+        from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
     except ImportError:
-        from host.intelligence.lexical import LexicalFunctionIndex  # type: ignore
-    idx = LexicalFunctionIndex(idb_path + ".embeddings.db")
+        from host.intelligence.lexical import LexicalFunctionIndex, signature_index_path  # type: ignore
+    idx = LexicalFunctionIndex(signature_index_path(idb_path))
     try:
         from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
 

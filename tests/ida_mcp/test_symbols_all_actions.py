@@ -104,6 +104,41 @@ def test_apply_covers_screen_address_existing_type_and_til_fallback(monkeypatch)
     assert mod.symbols("apply", addr="bad")["code"] == "ADDRESS_INVALID"
 
 
+def test_import_system_map_applies_delta_and_bounds_symbols(tmp_path):
+    mod = _tool()
+    system_map = tmp_path / "System.map"
+    system_map.write_text(
+        "00001000 T start_kernel\n"
+        "00002000 t worker\n"
+        "00003000 D init_data\n"
+        "malformed line\n",
+        encoding="utf-8",
+    )
+    named = []
+    created = []
+    loaded = {0x401000, 0x402000}
+    mod.ida_bytes.is_loaded = lambda ea: ea in loaded
+    mod.idc.set_name = lambda ea, name, _flags: named.append((ea, name)) or True
+    mod.ida_name.SN_FORCE = 1
+    mod._compat.get_func_info = lambda _ea: None
+    mod.ida_funcs.add_func = lambda ea: created.append(ea) or object()
+
+    result = mod.symbols(
+        "import_system_map",
+        path=str(system_map),
+        address_delta=0x400000,
+        filter_types="Tt",
+        create_functions=True,
+        limit=10,
+    )
+    assert result["ok"] is True
+    assert result["imported"] == 2
+    assert result["truncated"] is False
+    assert named == [(0x401000, "start_kernel"), (0x402000, "worker")]
+    assert created == [0x401000, 0x402000]
+    assert result["sample"][0]["orig_addr"] == "0x1000"
+
+
 def test_export_unknown_action_and_error_handler(tmp_path, monkeypatch):
     mod = _tool()
     assert mod.symbols("export")["code"] == "INVALID_ARGS"

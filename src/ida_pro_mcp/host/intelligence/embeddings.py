@@ -23,6 +23,70 @@ from .helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Provider-mode indexes store lexical signatures and structural metadata. Keep
+# the old suffix only as a one-time on-disk migration source for installations
+# created before the provider-only intelligence layer.
+SIGNATURE_INDEX_SUFFIX = ".signatures.db"
+LEGACY_SIGNATURE_INDEX_SUFFIX = ".embeddings.db"
+
+
+def signature_index_path(idb_path: str) -> str:
+    """Return the provider-era signature index path, migrating old sidecars.
+
+    Existing releases used ``<idb>.embeddings.db`` even though provider mode
+    no longer stores embeddings.  Migrate a legacy SQLite sidecar through the
+    SQLite backup API so WAL content is included and the old file is removed
+    only after the new sidecar is durable. If migration cannot be completed,
+    keep using the legacy file rather than silently discarding an index.
+    """
+    base = str(idb_path or "")
+    target = base + SIGNATURE_INDEX_SUFFIX
+    legacy = base + LEGACY_SIGNATURE_INDEX_SUFFIX
+    if os.path.exists(target) or not os.path.isfile(legacy):
+        return target
+
+    temporary = f"{target}.migrating-{os.getpid()}-{threading.get_ident()}"
+    try:
+        with closing(sqlite3.connect(legacy, timeout=5.0)) as source, closing(
+            sqlite3.connect(temporary, timeout=5.0)
+        ) as destination:
+            source.backup(destination)
+            destination.commit()
+        with suppress(OSError):
+            os.chmod(temporary, os.stat(legacy).st_mode & 0o777)
+        try:
+            # A hard link publishes the completed snapshot without replacing a
+            # target another process may have created concurrently.
+            os.link(temporary, target)
+        except FileExistsError:
+            with suppress(OSError):
+                os.unlink(temporary)
+            return target
+        except OSError:
+            if os.path.exists(target):
+                with suppress(OSError):
+                    os.unlink(temporary)
+                return target
+            with suppress(OSError):
+                os.unlink(temporary)
+            logger.warning("could not atomically publish migrated signature index %s", target)
+            return legacy
+        with suppress(OSError):
+            os.unlink(temporary)
+        try:
+            os.unlink(legacy)
+        except OSError:
+            logger.warning("migrated legacy signature index to %s but could not remove %s", target, legacy)
+        for suffix in ("-wal", "-shm"):
+            with suppress(OSError):
+                os.unlink(legacy + suffix)
+        return target
+    except (OSError, sqlite3.Error):
+        with suppress(OSError):
+            os.unlink(temporary)
+        logger.warning("could not migrate legacy signature index %s; using it in place", legacy)
+        return legacy
+
 
 _SEARCH_TOKEN_RE = re.compile(r"0x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]{1,}|\b\d+\b")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
@@ -432,7 +496,7 @@ def _clip_signature(text: str, max_len: int = 160) -> str:
 class FunctionEmbeddingIndex:
     """
     Stores compact function signatures and optional compatible vectors,
-    one SQLite database per binary (<idb_path>.embeddings.db). Provider mode
+    one SQLite database per binary (<idb_path>.signatures.db). Provider mode
     uses the lexical signature path and never persists raw decompilation.
     """
 
@@ -478,7 +542,7 @@ class FunctionEmbeddingIndex:
             h = hashlib.sha256(os.path.abspath(db_path).encode("utf-8")).hexdigest()[:16]
             fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
             os.makedirs(fallback_dir, exist_ok=True)
-            self._db_path = os.path.join(fallback_dir, f"{h}.embeddings.db")
+            self._db_path = os.path.join(fallback_dir, f"{h}{SIGNATURE_INDEX_SUFFIX}")
             self._init_db()
 
         self._init_meta()
@@ -626,9 +690,9 @@ class FunctionEmbeddingIndex:
 
     def _source_idb_path(self) -> str:
         p = self._db_path
-        suffix = ".embeddings.db"
-        if p.endswith(suffix):
-            return p[: -len(suffix)]
+        for suffix in (SIGNATURE_INDEX_SUFFIX, LEGACY_SIGNATURE_INDEX_SUFFIX):
+            if p.endswith(suffix):
+                return p[: -len(suffix)]
         return p
 
     def _source_fingerprint(self) -> str:

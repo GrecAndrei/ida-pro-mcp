@@ -187,7 +187,7 @@ def test_matching_index_reuse_records_path_fingerprint_and_rejects_profile(tmp_p
     host = _BatchHarness([source, target])
     reused = host._seed_index_from_matching_binary(target)
     assert reused["reused"] is True
-    with sqlite3.connect(f"{target.idb_path}.embeddings.db") as conn:
+    with sqlite3.connect(f"{target.idb_path}.signatures.db") as conn:
         metadata = dict(conn.execute("SELECT key, value FROM embedding_meta"))
     assert metadata["source_fingerprint"]
     host._batch_manager.shutdown()

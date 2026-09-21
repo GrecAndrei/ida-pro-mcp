@@ -88,7 +88,7 @@ def test_index_backed_outlier_and_semantic_modes(monkeypatch):
     for metric in ("size", "tiny", "huge", "bb_count"):
         result = comb.search_analyze(scope="outlier", metric=metric, offset=0, limit=1)
         assert result["ok"] is True
-        assert result["note"].endswith("embedding index.")
+        assert result["note"].endswith("signature index.")
     monkeypatch.setattr(comb, "_get_index_metadata", lambda _ea: None)
     monkeypatch.setattr(comb, "_coerce_ea", lambda value: int(str(value), 0))
     semantic = comb.search_analyze(scope="semantic", pattern="crypto", offset=0, limit=1)

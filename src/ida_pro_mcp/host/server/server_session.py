@@ -158,11 +158,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         def _diff():
             try:
                 try:
-                    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex
+                    from ida_pro_mcp.host.intelligence.lexical import LexicalFunctionIndex, signature_index_path
                 except ImportError:
                     return
-                new_idx = LexicalFunctionIndex(new_idb + ".embeddings.db")
-                old_idx = LexicalFunctionIndex(old_idb + ".embeddings.db")
+                new_idx = LexicalFunctionIndex(signature_index_path(new_idb))
+                old_idx = LexicalFunctionIndex(signature_index_path(old_idb))
                 if new_idx.size == 0 or old_idx.size == 0:
                     return
                 with new_idx._conn() as new_conn, old_idx._conn() as old_conn:
@@ -423,11 +423,23 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # auto-analysis completed so the caller gets a fully analyzed IDB,
             # not a safe-mode session. When no runtime can confirm, the async
             # watcher keeps tracking the gate.
-            analysis_state = self._wait_for_analysis_complete(updated)
+            user_timeout = args.get("timeout")
+            if user_timeout is None:
+                analysis_state = self._wait_for_analysis_complete(updated)
+            else:
+                analysis_timeout = 0.0
+                with contextlib.suppress(TypeError, ValueError):
+                    analysis_timeout = float(user_timeout)
+                analysis_state = self._wait_for_analysis_complete(updated, timeout=analysis_timeout)
             if analysis_state:
                 out["analysis_functions"] = analysis_state.get("analysis_functions")
             out["analysis_complete"] = self._analysis_is_complete(updated.session_id)
             out["safe_mode"] = self._safe_mode_active(updated.session_id)
+            if not out["analysis_complete"]:
+                out["analysis_continuing"] = True
+                cont_note = "Analysis is continuing in the background; poll ida_session_status until safe_mode clears."
+                out["note"] = f"{out.get('note')} {cont_note}".strip() if out.get("note") else cont_note
+            out["lifecycle_state"] = self._session_lifecycle_state(updated.session_id, spawn_error=out.get("spawn_error"))
             return out
 
         create_note = None
@@ -476,6 +488,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if warn:
                 prev = out.get("warning")
                 out["warning"] = f"{prev} {warn}".strip() if prev else warn
+            if arch_meta.get("arm64_guidance"):
+                out["arm64_guidance"] = arch_meta["arm64_guidance"]
+                prev_n = out.get("note")
+                arm_adv = arch_meta["arm64_guidance"]["advice"]
+                out["note"] = f"{prev_n} {arm_adv}".strip() if prev_n else arm_adv
         with contextlib.suppress(Exception):
             self._import_cross_session_hypotheses(self.current_session)
 
@@ -493,11 +510,23 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # gets a fully analyzed IDB instead of a safe-mode session. When no
         # runtime can confirm (dead/missing), the async watcher keeps tracking
         # and safe_mode stays on.
-        analysis_state = self._wait_for_analysis_complete(self.current_session)
+        user_timeout = args.get("timeout")
+        if user_timeout is None:
+            analysis_state = self._wait_for_analysis_complete(self.current_session)
+        else:
+            analysis_timeout = 0.0
+            with contextlib.suppress(TypeError, ValueError):
+                analysis_timeout = float(user_timeout)
+            analysis_state = self._wait_for_analysis_complete(self.current_session, timeout=analysis_timeout)
         if analysis_state:
             out["analysis_functions"] = analysis_state.get("analysis_functions")
         out["analysis_complete"] = self._analysis_is_complete(self.current_session.session_id)
         out["safe_mode"] = self._safe_mode_active(self.current_session.session_id)
+        if not out["analysis_complete"]:
+            out["analysis_continuing"] = True
+            cont_note = "Analysis is continuing in the background; poll ida_session_status until safe_mode clears."
+            out["note"] = f"{out.get('note')} {cont_note}".strip() if out.get("note") else cont_note
+        out["lifecycle_state"] = self._session_lifecycle_state(self.current_session.session_id, spawn_error=out.get("spawn_error"))
         return out
 
     @staticmethod
@@ -512,6 +541,42 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         """True when the session has a live IDA runtime process."""
         runtime = self._runtime_record(sid)
         return bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
+
+    def _mark_runtime_starting(self, sid: str) -> None:
+        starting = getattr(self, "_runtime_starting", None)
+        if not isinstance(starting, set):
+            self._runtime_starting = set()
+            starting = self._runtime_starting
+        starting.add(sid)
+
+    def _clear_runtime_starting(self, sid: str) -> None:
+        starting = getattr(self, "_runtime_starting", None)
+        if isinstance(starting, set):
+            starting.discard(sid)
+
+    def _session_lifecycle_state(self, sid: str, spawn_error: str | dict | None = None) -> str:
+        """Return unambiguous session lifecycle state:
+        - 'error': spawn failed
+        - 'stopped': runtime is not running / closed
+        - 'starting': a background runtime/IDB spawn is in flight
+        - 'analyzing': runtime is running, initial auto-analysis is still pending / running
+        - 'ready': runtime is running and initial auto-analysis is complete
+        """
+        if spawn_error is None:
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict):
+                spawn_error = bg_errors.get(sid)
+        if spawn_error and not (
+            isinstance(spawn_error, dict) and bool(spawn_error.get("recoverable"))
+        ):
+            return "error"
+        if sid in (getattr(self, "_runtime_starting", None) or set()):
+            return "starting"
+        if not self._session_is_running(sid):
+            return "starting" if isinstance(spawn_error, dict) and spawn_error.get("recoverable") else "stopped"
+        if self._analysis_is_complete(sid):
+            return "ready"
+        return "analyzing"
 
     def _open_result(
         self,
@@ -538,6 +603,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "is_running": self._session_is_running(session.session_id),
             "safe_mode": self._safe_mode_active(session.session_id),
             "analysis_complete": self._analysis_is_complete(session.session_id),
+            "lifecycle_state": self._session_lifecycle_state(session.session_id),
         }
         if reused:
             out["reused_existing_session"] = True
@@ -590,18 +656,27 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             pass
         return {}
 
-    def _wait_for_analysis_complete(self, session, timeout: float = 0.0) -> dict:
+    def _wait_for_analysis_complete(self, session, timeout: float | None = None) -> dict:
         """Block until a live runtime confirms IDA auto-analysis completed.
 
         Default opens are blocking: the caller gets a fully analyzed IDB, not a
         safe-mode session. Polls the runtime's analysis state (the same RPC the
         async watcher uses) until ``analysis_complete is True`` or *timeout*
-        elapses. Returns the analysis-state dict on completion; {} when there
-        is no live runtime to confirm (dead/missing — the async watcher owns
-        the gate and safe_mode stays on) or the deadline passes.
+        elapses. ``timeout=0`` is an explicit no-wait request; an omitted
+        timeout uses the configured default. Returns the analysis-state dict on
+        completion; {} when there is no live runtime to confirm (dead/missing —
+        the async watcher owns the gate and safe_mode stays on) or the deadline
+        passes.
         """
         sid = session.session_id
-        deadline = time.time() + (timeout if timeout > 0 else BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS)
+        wait_timeout = (
+            BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS
+            if timeout is None
+            else max(0.0, float(timeout))
+        )
+        if wait_timeout <= 0:
+            return {}
+        deadline = time.time() + wait_timeout
         poll_sec = max(0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS)))
         while time.time() < deadline:
             runtime = self._runtime_record(sid)
@@ -735,6 +810,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "processor_options",
             "rebase_to",
             "entry_point",
+            "va_delta",
+            "address_delta",
             "stack_size",
             "memory_model",
             "skip_analysis",
@@ -759,6 +836,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 analysis_options[key] = top_val
 
         analysis_options, arch_meta = normalize_arch_options(analysis_options)
+        if arch_meta.get("errors"):
+            return (
+                None,
+                None,
+                arch_meta,
+                False,
+                None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "Invalid architecture/address options",
+                    details={"errors": list(arch_meta["errors"])},
+                    hint="Use unsigned 64-bit addresses (for example 0xffff800010000000); use va_delta/address_delta for signed relocation offsets.",
+                ),
+            )
 
         ida_args = None
         if "ida_args" in args:
@@ -1344,6 +1435,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         """
         if not isinstance(getattr(self, "_background_load_errors", None), dict):
             self._background_load_errors = {}
+        self._mark_runtime_starting(session.session_id)
 
         def _run():
             try:
@@ -1359,6 +1451,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         details={"session_id": session.session_id},
                     ),
                 )
+            finally:
+                self._clear_runtime_starting(session.session_id)
 
         threading.Thread(target=_run, daemon=True, name=f"ida-bg-{session.session_id}").start()
 
@@ -1410,6 +1504,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 if auto
                 else ("Reusing existing session; its runtime is starting in the background. Poll ida_session_status for progress.")
             )
+            self._mark_runtime_starting(updated.session_id)
             out = self._open_result(
                 updated,
                 background=True,
@@ -1446,6 +1541,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if auto
             else ("Analysis started in the background; this call did not wait for IDA. Poll ida_session_status for progress.")
         )
+        self._mark_runtime_starting(self.current_session.session_id)
         out = self._open_result(
             self.current_session,
             background=True,
@@ -1476,6 +1572,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if warn:
             prev = out.get("warning")
             out["warning"] = f"{prev} {warn}".strip() if prev else warn
+        if isinstance(arch_meta, dict) and arch_meta.get("arm64_guidance"):
+            guidance = arch_meta["arm64_guidance"]
+            out["arm64_guidance"] = guidance
+            prev_note = out.get("note")
+            advice = guidance.get("advice")
+            if advice:
+                out["note"] = f"{prev_note} {advice}".strip() if prev_note else advice
         bg_errors = getattr(self, "_background_load_errors", None)
         if isinstance(bg_errors, dict) and session.session_id in bg_errors:
             out["spawn_error"] = bg_errors[session.session_id]
@@ -1485,6 +1588,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             out["analysis_functions"] = analysis_state.get("analysis_functions")
         out["analysis_complete"] = self._analysis_is_complete(session.session_id)
         out["safe_mode"] = self._safe_mode_active(session.session_id)
+        out["lifecycle_state"] = self._session_lifecycle_state(session.session_id, spawn_error=out.get("spawn_error"))
 
     @staticmethod
     def _arch_recommendations(arch_meta):
@@ -1673,6 +1777,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         result["is_running"] = is_running
         result["safe_mode"] = self._safe_mode_active(sid)
         result["analysis_complete"] = self._analysis_is_complete(sid)
+        result["lifecycle_state"] = self._session_lifecycle_state(sid)
         if is_running:
             result["port"] = runtime.get("port")
         report = self._session_ownership_report(sid)
@@ -1709,6 +1814,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             d["is_running"] = bool(runtime and runtime.get("process") and runtime["process"].poll() is None)
             d["safe_mode"] = self._safe_mode_active(d["session_id"])
             d["analysis_complete"] = self._analysis_is_complete(d["session_id"])
+            d["lifecycle_state"] = self._session_lifecycle_state(d["session_id"])
             report = self._session_ownership_report(d["session_id"])
             d["locked"] = report.get("locked", False)
             d["holder"] = report.get("holder")
@@ -1856,7 +1962,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self._last_spawn_error = None
         return response
 
-    def _ensure_runtime_and_idb(self, session: Any, timeout: float = 120.0) -> dict | None:
+    def _ensure_runtime_and_idb(
+        self,
+        session: Any,
+        timeout: float = BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS,
+    ) -> dict | None:
         """Spawn idat for *session* if its runtime is dead and wait for the IDB.
 
         Used by the reuse path so a session restored from disk without a
@@ -1878,8 +1988,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 if not self._wait_for_idb(session, timeout=timeout):
                     return make_error(
                         MCPError.IDA_CRASHED,
-                        "IDA runtime is alive but the IDB was not written within the timeout",
-                        details={"session_id": sid},
+                        "IDA runtime started but the IDB was not written within the timeout; it is still being created",
+                        recoverable=True,
+                        details={"session_id": sid, "analysis_continuing": True},
+                        hint="Poll ida_session_status until lifecycle_state='ready' and safe_mode=false.",
                     )
             return None
         # Runtime is dead or missing — spawn a replacement
@@ -1900,8 +2012,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if not self._wait_for_idb(session, timeout=timeout):
                 return make_error(
                     MCPError.IDA_CRASHED,
-                    "IDA runtime started but the IDB was not written within the timeout",
-                    details={"session_id": sid},
+                    "IDA runtime started but the IDB was not written within the timeout; it is still being created",
+                    recoverable=True,
+                    details={"session_id": sid, "analysis_continuing": True},
+                    hint="Poll ida_session_status until lifecycle_state='ready' and safe_mode=false.",
                 )
         return None
 
@@ -2070,6 +2184,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if isinstance(state_value, dict):
                 state_value["safe_mode"] = self._safe_mode_active(getattr(self.current_session, "session_id", None) or "")
                 state_value["analysis_complete"] = self._analysis_is_complete(getattr(self.current_session, "session_id", None) or "")
+                state_value["lifecycle_state"] = self._session_lifecycle_state(getattr(self.current_session, "session_id", None) or "")
                 report = self._session_ownership_report(getattr(self.current_session, "session_id", None) or "")
                 for _k in (
                     "locked",
@@ -2395,6 +2510,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self._maybe_resolve_analysis_state(fresh_session)
             result["safe_mode"] = self._safe_mode_active(fresh_session.session_id)
             result["analysis_complete"] = self._analysis_is_complete(fresh_session.session_id)
+            result["lifecycle_state"] = self._session_lifecycle_state(fresh_session.session_id)
             bg_errors = getattr(self, "_background_load_errors", None)
             if isinstance(bg_errors, dict) and fresh_session.session_id in bg_errors:
                 result["background_error"] = bg_errors[fresh_session.session_id]

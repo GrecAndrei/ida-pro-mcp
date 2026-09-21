@@ -2087,13 +2087,73 @@ class ServerBlackboardMixin(
                     " The workspace has no open threads yet. Try"
                     " strategy='coverage' for functions nobody has read."
                 )
-        return next_target_response(
+
+        # Candidate eligibility and the deterministic strategy remain the
+        # authority. Jev/custom may only reorder this bounded result set and
+        # its failure must never make next_target unavailable.
+        advisory = None
+        if targets:
+            try:
+                from ..intelligence.advisory import rank_targets
+
+                session_id = str(getattr(self.current_session, "session_id", "") or "")
+                advisory = rank_targets(
+                    {"strategy": strategy, "query": str(query or "")[:512]},
+                    targets,
+                    session_id=session_id,
+                    operation="next_target",
+                )
+            except Exception:
+                advisory = {
+                    "error": True,
+                    "code": "PROVIDER_ERROR",
+                    "message": "target ranking advisory failed",
+                }
+
+            scores = advisory.get("scores") if isinstance(advisory, dict) else None
+            if isinstance(scores, list) and scores:
+                pool_size = min(len(targets), len(scores), 16)
+                indexed_scores = {
+                    int(item["index"]): float(item["score"])
+                    for item in scores
+                    if isinstance(item, dict)
+                    and isinstance(item.get("index"), int)
+                    and 0 <= int(item["index"]) < pool_size
+                    and isinstance(item.get("score"), (int, float))
+                }
+                if len(indexed_scores) == pool_size:
+                    pool = targets[:pool_size]
+                    for index, target in enumerate(pool):
+                        target["advisory_score"] = round(indexed_scores[index], 4)
+                    if len(set(indexed_scores.values())) > 1:
+                        targets = sorted(
+                            pool,
+                            key=lambda item: float(item.get("advisory_score") or 0.0),
+                            reverse=True,
+                        ) + targets[pool_size:]
+                        advisory["applied"] = True
+                        note += " Jev/custom advisory ranking reordered only these deterministic candidates."
+                    else:
+                        advisory["applied"] = False
+                        advisory["reason"] = "provider scores did not discriminate candidates"
+                    advisory["pool"] = pool_size
+                else:
+                    advisory["applied"] = False
+                    advisory["reason"] = "provider returned an incomplete candidate ranking"
+            elif isinstance(advisory, dict) and not advisory.get("error"):
+                advisory["applied"] = False
+                advisory["reason"] = "no candidate scores returned"
+
+        response = next_target_response(
             strategy,
             targets,
             strategies=BB_STRATEGIES,
             note=note.strip(),
             query=query,
         )
+        if advisory is not None:
+            response["advisory_ranking"] = advisory
+        return response
 
     def _bb_action_frontier(self, args, store, phase_state, policy_state) -> dict:
         limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)

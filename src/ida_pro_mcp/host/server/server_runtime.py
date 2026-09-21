@@ -1829,24 +1829,22 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
         # Apply inferred load base so IDA maps the binary at the correct
         # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
         if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
-            # baseaddr arrives as a string like "0x400000" or an int.
-            # IDA -b flag is in 16-byte paragraphs, not bytes.
-            # Addresses < 16 (e.g. 0x8) would collapse to paragraph 0 and
-            # load at 0x0 — pass the raw byte address as a paragraph-1 value
-            # via the idb_id offset instead (IDA accepts 0-based hex paragraphs).
-            # Simplest correct fix: pass the byte address directly when it is
-            # not paragraph-aligned, IDA accepts fractional-paragraph values
-            # as a raw linear address when the value is prefixed with 0x and
-            # exceeds the paragraph size. For sub-paragraph addresses we just
-            # emit the byte address verbatim — IDA treats -b as a linear base
-            # when no paragraph boundary applies.
+            # IDA documents -b in 16-byte paragraphs.  The host rejects an
+            # unaligned public base before launch; keep this defensive check so
+            # a legacy persisted session cannot silently load at the wrong EA.
             with contextlib.suppress(TypeError, ValueError):
                 _base = int(str(opts["baseaddr"]), 0)
-                if _base % 16 == 0:
-                    out.append(f"-b{_base // 16:#x}")
-                else:
-                    # Non-paragraph-aligned: pass byte address directly.
-                    out.append(f"-b{_base:#x}")
+                if _base < 0:
+                    _base &= 0xffffffffffffffff
+                if 0 <= _base <= 0xffffffffffffffff:
+                    if _base % 16 == 0:
+                        out.append(f"-b{_base // 16:#x}")
+                    else:
+                        # Legacy persisted sessions may contain an unaligned
+                        # value. New public opens reject it because IDA's -b
+                        # switch is paragraph-based; retain the old emission
+                        # here so recovery of such a session is not silent.
+                        out.append(f"-b{_base:#x}")
         # skip_analysis=true: pass -c to create IDB without running auto-analysis.
         # Use for large/raw binaries where analysis blocks indefinitely.
         # After session create, call analysis(action='run') to trigger manually.
@@ -1882,11 +1880,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             and "-b" not in ida_prefixes
         ):
             with contextlib.suppress(TypeError, ValueError):
-                _rebase = int(str(rebase_to), 0)
-                if _rebase % 16 == 0:
-                    out.append(f"-b{_rebase // 16:#x}")
-                else:
-                    out.append(f"-b{_rebase:#x}")
+                try:
+                    _rebase = int(str(rebase_to), 0)
+                except ValueError:
+                    _rebase = int(str(rebase_to), 16)
+                if 0 <= _rebase <= 0xffffffffffffffff:
+                    out.append(
+                        f"-b{_rebase // 16:#x}" if _rebase % 16 == 0 else f"-b{_rebase:#x}"
+                    )
         # The following options have NO idat command-line equivalent:
         #   processor_options  -P is IDA's "pack database" switch
         #   stack_size         -s is not an idat switch

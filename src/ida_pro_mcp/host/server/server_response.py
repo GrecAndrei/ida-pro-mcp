@@ -608,7 +608,14 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         runtime = self._runtime_record(session_id)
         if isinstance(runtime, dict) and "imagebase" in runtime:
             cached = runtime["imagebase"]
-            return int(cached) if isinstance(cached, (int, str)) and str(cached) else None
+            if not isinstance(cached, (int, str)) or not str(cached):
+                return None
+            try:
+                return int(str(cached), 0)
+            except ValueError:
+                with contextlib.suppress(ValueError):
+                    return int(str(cached), 16)
+                return None
 
         # 2. Check the target session's recorded options (any session, not
         #    just the current one — the caller may enrich for another session).
@@ -662,6 +669,50 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         return None
 
+    def _get_session_address_delta(self, session_id: str | None) -> int | None:
+        """Return an explicit raw-image virtual-address delta, if configured.
+
+        A raw kernel is often loaded at zero while its System.map and pointers
+        use a high canonical virtual address.  This is an explicit operator
+        hint, not a heuristic: without ``va_delta``/``address_delta`` the host
+        must not reinterpret arbitrary low integers as kernel addresses.
+        """
+        if not session_id:
+            return None
+        runtime = self._runtime_record(session_id)
+        candidates: list[object] = []
+        if isinstance(runtime, dict):
+            candidates.extend(runtime.get(key) for key in ("va_delta", "address_delta"))
+        try:
+            session = self.session_mgr.get_session(session_id)
+        except Exception:
+            session = None
+        if session is None and self.current_session and self.current_session.session_id == session_id:
+            session = self.current_session
+        if session is not None:
+            options = getattr(session, "analysis_options", {}) or {}
+            if isinstance(options, dict):
+                candidates.extend(options.get(key) for key in ("va_delta", "address_delta"))
+        for raw in candidates:
+            if raw is None or raw == "":
+                continue
+            try:
+                if isinstance(raw, bool):
+                    continue
+                if isinstance(raw, int):
+                    value = raw
+                else:
+                    text = str(raw).strip()
+                    try:
+                        value = int(text, 0)
+                    except ValueError:
+                        value = int(text, 16)
+                if value:
+                    return value
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _add_address_calculations(self, compacted: dict, session_id: str | None) -> None:
         try:
             serialized = json.dumps(compacted, ensure_ascii=False)
@@ -694,10 +745,12 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if not valid_addrs:
             return
 
+        relocation_delta = self._get_session_address_delta(session_id)
         calc_dict = {}
         for ha, val in valid_addrs:
             target_val = val
             is_rva = False
+            loaded_val = val
 
             # Only reinterpret a sub-imagebase value as an RVA when the image
             # base itself fits in 32 bits. With a 64-bit base (e.g.
@@ -711,22 +764,51 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if val < imagebase < 0x1_0000_0000:
                 rebased_val = imagebase + val
                 target_val = rebased_val
+                loaded_val = rebased_val
                 is_rva = True
-
-            offset = target_val - imagebase
-            sign = "+" if offset >= 0 else "-"
-            abs_offset = abs(offset)
 
             addr_info = {
                 "decimal": target_val,
-                "relative_to_imagebase": f"imagebase {sign} 0x{abs_offset:x}",
-                "offset": offset,
-                "offset_hex": f"{sign}0x{abs_offset:x}",
+                "relative_to_imagebase": "",
+                "offset": loaded_val - imagebase,
+                "offset_hex": "",
                 "alignment": {
-                    "aligned_4": (target_val % 4 == 0),
-                    "aligned_8": (target_val % 8 == 0),
-                    "aligned_16": (target_val % 16 == 0),
+                    "aligned_4": (loaded_val % 4 == 0),
+                    "aligned_8": (loaded_val % 8 == 0),
+                    "aligned_16": (loaded_val % 16 == 0),
                 }
+            }
+
+            # When the operator supplies a raw-kernel VA delta, preserve the
+            # virtual address and expose the loaded EA separately.  This avoids
+            # the old false interpretation of a canonical VA as an impossible
+            # imagebase-relative offset while still making the mapping usable.
+            if relocation_delta:
+                if val >= relocation_delta:
+                    loaded_val = val - relocation_delta
+                    addr_info["kernel_virtual_address"] = hex(val)
+                    addr_info["loaded_address"] = hex(loaded_val)
+                elif imagebase == 0:
+                    loaded_val = val
+                    addr_info["loaded_address"] = hex(loaded_val)
+                    addr_info["kernel_virtual_address"] = hex(val + relocation_delta)
+                addr_info["relocation_delta"] = (
+                    hex(relocation_delta)
+                    if relocation_delta >= 0
+                    else f"-{abs(relocation_delta):#x}"
+                )
+                addr_info["relocated"] = True
+
+            offset = loaded_val - imagebase
+            sign = "+" if offset >= 0 else "-"
+            abs_offset = abs(offset)
+            addr_info["relative_to_imagebase"] = f"imagebase {sign} 0x{abs_offset:x}"
+            addr_info["offset"] = offset
+            addr_info["offset_hex"] = f"{sign}0x{abs_offset:x}"
+            addr_info["alignment"] = {
+                "aligned_4": (loaded_val % 4 == 0),
+                "aligned_8": (loaded_val % 8 == 0),
+                "aligned_16": (loaded_val % 16 == 0),
             }
 
             if is_rva:
@@ -738,6 +820,16 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if calc_dict:
             compacted["llm_address_calculation"] = calc_dict
             compacted["llm_address_calculation_imagebase"] = hex(imagebase)
+            if relocation_delta:
+                compacted["llm_address_calculation_va_delta"] = (
+                    hex(relocation_delta)
+                    if relocation_delta >= 0
+                    else f"-{abs(relocation_delta):#x}"
+                )
+                compacted["llm_address_calculation_note"] = (
+                    "Explicit raw-image virtual-address delta applied; decimal values remain virtual addresses "
+                    "and loaded_address is the corresponding IDA EA."
+                )
 
     def _resolve_response_session(self, call_args: Any):
         """Resolve the session a tool call actually executed against.
@@ -888,6 +980,13 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if compacted is _COMPACT_DROP:
                 compacted = {}
             compacted = self._compact_batch_result(compacted, opts)
+            rendered_truncations = self._compact_string_truncations(projected, opts)
+            if rendered_truncations and isinstance(compacted, dict):
+                compacted = dict(compacted)
+                compacted.setdefault(
+                    "_rendered_truncation",
+                    {"fields": rendered_truncations, "continuation": "not_available"},
+                )
             budget = int(opts.get("char_budget", 0) or 0)
             if budget > 0 and isinstance(compacted, dict):
                 # Check per-call truncation overrides

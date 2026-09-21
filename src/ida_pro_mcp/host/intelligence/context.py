@@ -25,7 +25,7 @@ from .core import (
     _extract_signature,
 )
 from .embeddings import _file_mtime_ns
-from .lexical import LexicalFunctionIndex
+from .lexical import LexicalFunctionIndex, signature_index_path
 
 
 def _intel_profile_enabled() -> bool:
@@ -118,7 +118,7 @@ class ContextAssembler:
             now = time.time()
             self._idx_last_access[idb_path] = now
             if idb_path not in self._indexes:
-                db = idb_path + ".embeddings.db"
+                db = signature_index_path(idb_path)
                 if getattr(self._embedder, "_provider_only", False):
                     self._indexes[idb_path] = LexicalFunctionIndex(db)
                 else:
@@ -1098,7 +1098,7 @@ class ContextAssembler:
             idx = self._get_index(idb_path)
             if idx is None or idx.size == 0:
                 return []
-            # Query embedding index for interesting functions
+            # Query signature index for interesting functions
             rows = idx.search_structured(
                 {"min_size": 64, "min_bb": 3},
                 query="high value reverse engineering target",
