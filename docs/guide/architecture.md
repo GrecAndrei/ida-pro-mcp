@@ -10,10 +10,15 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 ## High-Level Data Flow
 
 1. MCP client sends tool call over stdio JSON-RPC
-2. Host server resolves session/runtime, validates args/schemas
-3. Host forwards call to IDA runtime over local TCP bridge
-4. IDA tool executes deterministic SDK logic, returns structured output
-5. Host post-processes response (compact/truncation/blackboard/intelligence) and replies
+2. Host server resolves session/runtime and validates args/schemas
+3. For operations that need provider context before IDA runs, the host makes a
+   bounded advisory request and forwards only the resulting labels/query hints
+4. Host forwards the call to IDA over the local TCP bridge
+5. IDA executes deterministic SDK and lexical logic and returns structured
+   results with bounded signatures when host-side classification or ranking is
+   useful
+6. Host performs any remaining advisory classification/ranking, removes
+   bridge-only metadata, applies normal post-processing, and replies
 
 ## Module Boundaries
 
@@ -50,6 +55,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 - `src/ida_pro_mcp/host/intelligence/`
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
   - `advisory.py` — bounded provider questions; never an authorization or mutation path
+  - `rpc_advisory.py` — host-side pre/post-RPC advisory processing for IDA results
   - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
@@ -75,6 +81,10 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 9. Host: deterministic context injection and optional provider advisory metadata
    (including bounded Jev/custom ranking of deterministic blackboard targets)
 10. Return MCP content
+
+Provider configuration and credential variables are removed from the IDA
+child environment. IDA tools open the deterministic lexical index directly;
+they do not instantiate the host provider registry or send Jev/custom requests.
 
 ## Complexity Hotspots
 

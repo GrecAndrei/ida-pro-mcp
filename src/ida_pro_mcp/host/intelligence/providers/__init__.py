@@ -1,5 +1,6 @@
 """Explicit Jev/custom/disabled provider layer."""
 
+from .base import normalize_score_answer
 from .config import (
     JEV_BASE_URL,
     JEV_DEFAULT_MODEL,
@@ -70,6 +71,7 @@ __all__ = [
     "build_provider",
     "provider_error_payload",
     "provider_status",
+    "normalize_score_answer",
     "resolve_provider",
     "resolve_provider_config",
     "validate_mapping",

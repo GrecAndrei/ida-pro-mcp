@@ -1,17 +1,16 @@
-"""Intelligence tool — provider-backed advisory questions and lexical search.
+"""Intelligence tool — bounded evidence collection and deterministic search.
 
 Extracted from `agent.py` in the dedup pass (commit series: shim removal,
 comment_mgr merge, firmware_bootstrap fold, **intelligence
 extraction**). The 14 actions previously hung off `agent` now live here
-because they have a distinct operational identity (embedder/classifier
-lifecycle) and
+because they have a distinct operational identity (advisory and indexing) and
 dominated ~400 LOC of the agent dispatcher without sharing any of its
 neighbor actions.
 
 Payload shapes remain compatible with the old `agent.*` actions so existing
-host-side call sites and CLIs continue to work. The tool now exposes
-provider-backed advisory questions and deterministic lexical indexing; it does
-not start or select a local model.
+host-side call sites and CLIs continue to work. The IDA tool gathers bounded
+signatures and performs deterministic lexical indexing; the MCP host owns
+provider requests and does not start a local model.
 """
 
 import hashlib
@@ -341,8 +340,8 @@ def intelligence(
     reranker_status     - typed-question scoring capability status.
     anchor_status       - compatibility status for removed anchor vectors.
     refresh_anchors     - reports that local anchor-vector refresh is unavailable.
-    classify_text       - provider-backed behavior question over a signature.
-    classify_function   - bounded IDA metadata/signature advisory for `addr`.
+    classify_text       - host-side behavior question over a bounded query signature.
+    classify_function   - bounded IDA metadata/signature for host-side advice.
     index_function      - store a bounded metadata/signature row for `addr`.
     index_batch         - store bounded metadata/signature rows for selected functions.
     similar_functions   - deterministic lexical scan over the per-IDB index for `addr`.
@@ -358,40 +357,12 @@ def intelligence(
         # The public intelligence contract is provider-neutral.  Do not
         # construct the legacy local/Gemini/native embedding stack merely to
         # answer status or typed-question classification calls.
-        if action in {"intelligence_status", "embedder_status", "reranker_status", "usage_status", "usage_report"}:
-            from ida_pro_mcp.host.intelligence.providers import ProviderError, provider_error_payload
-            from ida_pro_mcp.host.intelligence.providers.registry import default_usage_ledger, provider_status
-
-            try:
-                ledger = default_usage_ledger()
-            except ProviderError as exc:
-                return provider_error_payload(exc)
-            except Exception:
-                return {"error": True, "code": "PROVIDER_ERROR", "message": "provider usage ledger is unavailable"}
-            if action == "usage_report":
-                return ledger.report(session_id=str(kwargs.get("session_id") or "") or None, limit=kwargs.get("limit", 100))
-            if action == "usage_status":
-                return {"ok": True, "usage": ledger.status(session_id=str(kwargs.get("session_id") or "") or None)}
-            result = provider_status()
-            if result.get("ok"):
-                result["usage"] = ledger.status(session_id=str(kwargs.get("session_id") or "") or None)
-                if action == "reranker_status" and "score" not in (result.get("provider") or {}).get("capabilities", []):
-                    return {
-                        "error": True,
-                        "code": "CAPABILITY_UNAVAILABLE",
-                        "message": "typed-question scoring is not available in the configured provider mode",
-                        "status": "unavailable",
-                        "provider": result.get("provider"),
-                        "usage": result.get("usage"),
-                    }
-            return result
-        if action == "anchor_status":
-            from ida_pro_mcp.host.intelligence.providers.registry import provider_status
-
-            result = provider_status()
-            if result.get("ok"):
-                result["anchors"] = {"count": 0, "loaded": 0, "source": "typed_question_provider"}
-            return result
+        if action in {"intelligence_status", "embedder_status", "reranker_status", "usage_status", "usage_report", "anchor_status"}:
+            return {
+                "error": True,
+                "code": "HOST_ONLY_OPERATION",
+                "message": "provider status and usage are served by the MCP host",
+            }
         if action == "refresh_anchors":
             return {
                 "error": True,
@@ -399,21 +370,14 @@ def intelligence(
                 "message": "anchor embedding refresh is unavailable; typed-question behavior decisions are evaluated per request",
             }
         if action in {"classify_text", "classify_function"}:
-            from ida_pro_mcp.host.intelligence.advisory import ask_behavior
-
             if action == "classify_text":
                 if not query:
                     return make_error(MCPError.INVALID_ARGS, "query required for classify_text")
-                from ida_pro_mcp.host.intelligence.core import _extract_signature
-
-                state = {
-                    "query_signature": _extract_signature(str(query)[:2048])[:2048],
-                    "source_kind": "operator_query",
+                return {
+                    "ok": True,
+                    "backend": "provider_advisory",
+                    "_provider_source_kind": "operator_query",
                 }
-                result = ask_behavior(state, operation=action, ledger=None)
-                if isinstance(result, dict) and result.get("error"):
-                    return result
-                return {"ok": True, "backend": "provider_advisory", "behaviors": result}
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required for classify_function")
             ea, err = validate_addr(addr, require_func=True)
@@ -423,15 +387,16 @@ def intelligence(
                 func = _compat.get_func_info(ea)
                 name = ida_funcs.get_func_name(ea) or hex(ea)
                 signature = _build_fast_signature(ea, func)
-                state = {"address": hex(ea), "name": name, "signature": signature}
-                if func:
-                    state["metadata"] = _function_index_metadata(func)
             except Exception:
                 return make_error(MCPError.IDA_ERROR, "failed to build bounded function context")
-            result = ask_behavior(state, operation=action, ledger=None)
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            return {"ok": True, "addr": hex(ea), "name": name, "backend": "provider_advisory", "behaviors": result}
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "name": name,
+                "backend": "provider_advisory",
+                "_provider_signature": signature,
+                "_provider_source_kind": "function_signature",
+            }
         if action == "blackboard_search":
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required for blackboard_search")

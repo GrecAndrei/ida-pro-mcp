@@ -8,14 +8,9 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Optional
 
-try:
-    from ida_pro_mcp.services import BgeCodeEmbedder
-except Exception:
-    try:
-        from host.intelligence.core import BgeCodeEmbedder  # type: ignore
-    except Exception:
-        BgeCodeEmbedder = None  # type: ignore
-
+# Compatibility name only.  The IDA process never constructs the old embedder;
+# callers that deliberately inject a vector extension should set ``_EMBEDDER``.
+BgeCodeEmbedder = None
 
 _EMBEDDER = None
 _EMB_CACHE: dict[str, list[float]] = {}
@@ -58,14 +53,6 @@ def _get_embedder():
     """
     if _EMBEDDER is not None:
         return _EMBEDDER
-    try:
-        from ida_pro_mcp.host.intelligence.providers.registry import resolve_provider
-
-        provider = resolve_provider()
-        if not getattr(provider.capabilities, "embeddings", False):
-            return None
-    except Exception:
-        return None
     # Typed-question providers do not implement the vector protocol yet.
     return None
 

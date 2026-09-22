@@ -133,25 +133,16 @@ class _FakeIdx:
         return list(self._hits[: int(top_k)])
 
 
-class _FakeAsm:
-    def __init__(self, idx):
-        self.idx = idx
-
-    def _get_index(self, idb_path):
-        return self.idx
-
-
-def _install_fake_services(monkeypatch, asm):
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: asm
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+def _install_fake_lexical_index(monkeypatch, idx):
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (idx, "/tmp/fake.idb"))
 
 
 def test_analyze_outlier_index_path_reports_truncated(monkeypatch):
     comb = _module("search.combinators")
     monkeypatch.setattr(sys.modules["idc"], "get_idb_path", lambda: "/tmp/fake.idb", raising=False)
     idx = _FakeIdx(size=100, count=10, rows=[("0x1000", "fn1", 100)])
-    _install_fake_services(monkeypatch, _FakeAsm(idx))
+    _install_fake_lexical_index(monkeypatch, idx)
     resp = comb.search_analyze(scope="outlier", metric="size", offset=0, limit=1)
     assert resp["ok"] is True
     assert resp["total"] == 10
@@ -164,7 +155,7 @@ def test_analyze_outlier_index_path_not_truncated(monkeypatch):
     comb = _module("search.combinators")
     monkeypatch.setattr(sys.modules["idc"], "get_idb_path", lambda: "/tmp/fake.idb", raising=False)
     idx = _FakeIdx(size=100, count=1, rows=[("0x1000", "fn1", 100)])
-    _install_fake_services(monkeypatch, _FakeAsm(idx))
+    _install_fake_lexical_index(monkeypatch, idx)
     resp = comb.search_analyze(scope="outlier", metric="size", offset=0, limit=5)
     assert resp["ok"] is True
     assert resp["total"] == 1
@@ -184,7 +175,7 @@ def test_analyze_semantic_scope_marks_truncated(monkeypatch):
         {"ea": "0x2000", "name": "fn2", "score": 0.8},
     ]
     idx = _FakeIdx(size=100, hits=hits)
-    _install_fake_services(monkeypatch, _FakeAsm(idx))
+    _install_fake_lexical_index(monkeypatch, idx)
     resp = comb.search_analyze(scope="semantic", pattern="crypto", offset=0, limit=1)
     assert resp["ok"] is True
     assert resp["count"] == 1
@@ -197,7 +188,7 @@ def test_analyze_semantic_scope_not_truncated_when_exhausted(monkeypatch):
     monkeypatch.setattr(sys.modules["idc"], "get_idb_path", lambda: "/tmp/fake.idb", raising=False)
     hits = [{"ea": "0x1000", "name": "fn1", "score": 0.9}]
     idx = _FakeIdx(size=100, hits=hits)
-    _install_fake_services(monkeypatch, _FakeAsm(idx))
+    _install_fake_lexical_index(monkeypatch, idx)
     resp = comb.search_analyze(scope="semantic", pattern="crypto", offset=0, limit=5)
     assert resp["ok"] is True
     assert resp["count"] == 1

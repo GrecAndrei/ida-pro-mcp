@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
@@ -111,6 +112,68 @@ def normalize_questions(value: Iterable[Question] | Mapping[str, Any]) -> list[Q
     return items
 
 
+def normalize_score_answer(answer: Answer, criteria: Iterable[Any]) -> tuple[float, float]:
+    """Return a typed Score as a 0..1 value plus provider confidence.
+
+    TypeSafe Score values are expected positions on the ordered criteria
+    scale: a three-level rubric returns 0..2, including fractional values.
+    Probability distributions are a fallback for compatible providers that
+    omit the aggregate score.
+    """
+    levels = [str(item).strip() for item in criteria]
+    if len(levels) < 2:
+        raise ProviderProtocolError("score criteria must contain at least two levels")
+    scale = len(levels) - 1
+    normalized_levels = {label.casefold(): index for index, label in enumerate(levels)}
+    value = answer.value
+    score: float | None = None
+
+    if isinstance(value, bool):
+        raise ProviderProtocolError("provider score answer is malformed")
+    if isinstance(value, (int, float)):
+        score = float(value)
+    elif isinstance(value, str):
+        label = value.strip().casefold()
+        if label in normalized_levels:
+            score = float(normalized_levels[label])
+        else:
+            try:
+                score = float(label)
+            except (TypeError, ValueError):
+                score = None
+
+    if score is None and answer.probabilities:
+        weighted_score = 0.0
+        total_probability = 0.0
+        legend = answer.legend or {}
+        for key, probability in answer.probabilities.items():
+            label = str(legend.get(str(key), key)).strip().casefold()
+            level_index = normalized_levels.get(label)
+            if level_index is None:
+                try:
+                    numeric_level = float(key)
+                except (TypeError, ValueError):
+                    continue
+                if not numeric_level.is_integer():
+                    continue
+                level_index = int(numeric_level)
+            if not 0 <= level_index < len(levels):
+                continue
+            weighted_score += level_index * float(probability)
+            total_probability += float(probability)
+        if total_probability > 0.0:
+            score = weighted_score / total_probability
+
+    if score is None or not math.isfinite(score) or score < -1e-9 or score > scale + 1e-9:
+        raise ProviderProtocolError("provider score answer is outside its criteria scale")
+    confidence = answer.confidence
+    if confidence is None:
+        confidence = max((float(item) for item in (answer.probabilities or {}).values()), default=0.0)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise ProviderProtocolError("provider score confidence is malformed")
+    return max(0.0, min(1.0, score / scale)), confidence
+
+
 def parse_response(
     payload: Any,
     request: ProviderRequest,
@@ -200,6 +263,7 @@ def parse_response(
                     answer.probability,
                     answer.probabilities,
                     safe_legend or None,
+                    answer.confidence,
                 )
         if question.type == "choice":
             allowed = question.criteria

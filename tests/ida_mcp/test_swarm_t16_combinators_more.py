@@ -197,9 +197,8 @@ def test_neighborhood_similar_vulnerable_and_semantic_scopes(monkeypatch):
         def hybrid_search(self, *_args, **_kwargs):
             return [{"ea": "0x1000", "name": "root", "score": 0.8, "similarity": 0.7}]
 
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: types.SimpleNamespace(_get_index=lambda _path: Index())
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (Index(), "/tmp/fake.idb"))
     mod.idc.get_idb_path = lambda: "/tmp/fake.idb"
     semantic = mod.search_analyze(scope="semantic", pattern="crypto")
     assert semantic["count"] == 1 and semantic["items"][0]["name"] == "root"

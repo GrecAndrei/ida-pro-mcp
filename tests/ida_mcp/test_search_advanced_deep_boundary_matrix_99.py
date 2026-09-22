@@ -84,28 +84,17 @@ def test_advanced_pure_helpers_cover_limits_and_fallbacks():
     assert adv._coerce_ea("not-an-ea") == -1
 
 
-def test_intelligence_index_resolution_covers_service_and_host_fallbacks(monkeypatch):
+def test_intelligence_index_resolution_uses_provider_free_lexical_adapter(monkeypatch):
     adv = _module()
-    service = types.ModuleType("ida_pro_mcp.services")
-    service.get_assembler = lambda: SimpleNamespace(_get_index=lambda path: ("index", path))
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", service)
-    adv.idc.get_idb_path = lambda: ""
-    asm, idx, path = adv._get_intelligence_index()
-    assert asm is not None and idx is None and path == ""
-    adv.idc.get_idb_path = lambda: "/tmp/test.i64"
-    asm, idx, path = adv._get_intelligence_index()
-    assert idx == ("index", "/tmp/test.i64") and path == "/tmp/test.i64"
+    index = object()
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/test.i64"))
 
-    service.get_assembler = lambda: (_ for _ in ()).throw(RuntimeError("assembler"))
-    assert adv._get_intelligence_index() == (None, None, "")
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", None)
-    host = types.ModuleType("host.intelligence.context")
-    host.get_assembler = lambda: "host-asm"
-    monkeypatch.setitem(sys.modules, "host.intelligence.context", host)
-    adv.idc.get_idb_path = lambda: ""
-    assert adv._get_intelligence_index() == ("host-asm", None, "")
-    monkeypatch.setitem(sys.modules, "host.intelligence.context", None)
-    assert adv._get_intelligence_index() == (None, None, "")
+    # The legacy assembler entry point must never be needed by IDA-side search.
+    service = types.ModuleType("ida_pro_mcp.services")
+    service.get_assembler = lambda: (_ for _ in ()).throw(AssertionError("host assembler used in IDA"))
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", service)
+    assert adv._get_intelligence_index() == (None, index, "/tmp/test.i64")
 
 
 def test_seed_candidates_covers_all_sources_and_candidate_guards(monkeypatch):
@@ -177,14 +166,6 @@ def test_seed_candidates_covers_index_behavior_expansion_and_hit_cap(monkeypatch
     adv.idautils.XrefsTo = lambda _ea, _flow: [_Xref(0x1100)]
     adv._SEARCH_CACHE.clear()
 
-    class Classifier:
-        def classify(self, *_args, **_kwargs):
-            return [{"behavior": "file_io"}, {"behavior": ""}, {}]
-
-    class Asm:
-        def _behavior_classifier(self):
-            return Classifier()
-
     class Index:
         size = 128
         _calls = 0
@@ -199,9 +180,10 @@ def test_seed_candidates_covers_index_behavior_expansion_and_hit_cap(monkeypatch
             return [{"ea": "0x1004", "similarity": 0.2, "score": 0.3}]
 
     index = Index()
-    adv._get_intelligence_index = lambda: (Asm(), index, "idb")
+    adv._get_intelligence_index = lambda: (None, index, "idb")
     ranked, meta = adv._seed_decompiled_candidates(
-        "needle query", lambda _value: True, None, None, 2, 1000
+        "needle query", lambda _value: True, None, None, 2, 1000,
+        host_expansion_queries=["file io"],
     )
     assert ranked[:2] == [0x1000, 0x1004]
     assert meta["seed_reasons"]["intelligence"] == 1
@@ -483,7 +465,7 @@ def test_search_decompiled_success_cache_preview_index_and_modes(monkeypatch):
 
     idx = Index()
     adv._get_intelligence_index = lambda: (SimpleNamespace(), idx, "idb")
-    adv._seed_decompiled_candidates = lambda *_args: (
+    adv._seed_decompiled_candidates = lambda *_args, **_kwargs: (
         [0x1000, 0x1000, 0x2000],
         {"seeded_candidates": 2, "seed_reasons": {}, "tokens": [], "planning_timed_out": True, "intelligence_index_size": 1, "expansion_queries": []},
     )
@@ -525,14 +507,14 @@ def test_search_decompiled_sampling_and_timeout_hints(monkeypatch):
 
     adv._get_intelligence_index = lambda: (None, SimpleNamespace(size=1), "idb")
     adv._iter_function_starts = lambda *_args: iter([1, 2, 3])
-    adv._seed_decompiled_candidates = lambda *_args: (
+    adv._seed_decompiled_candidates = lambda *_args, **_kwargs: (
         [1], {"seeded_candidates": 1, "seed_reasons": {}, "tokens": [], "planning_timed_out": False, "intelligence_index_size": 1, "expansion_queries": []}
     )
     full = adv.search_decompiled("needle", False, None, None, 0, 10, False, max_functions=3)
     assert full["candidate_strategy"] == "seeded_full"
 
     adv._get_intelligence_index = lambda: (None, SimpleNamespace(size=1), "idb")
-    adv._seed_decompiled_candidates = lambda *_args: (
+    adv._seed_decompiled_candidates = lambda *_args, **_kwargs: (
         [1], {"seeded_candidates": 1, "seed_reasons": {}, "tokens": [], "planning_timed_out": True, "intelligence_index_size": 1, "expansion_queries": []}
     )
     timed = adv.search_decompiled("needle", False, None, None, 0, 10, False, timeout_ms=100, max_functions=1)

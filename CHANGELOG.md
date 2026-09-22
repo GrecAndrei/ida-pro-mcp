@@ -1,3 +1,15 @@
+## 2026-09-22 — Keep Jev integration on the MCP host
+
+- Moved search expansion, behavior classification, reranking, gadget
+  classification, load-base advice, and RISC-V GP advice to the host-side RPC
+  boundary. IDA now returns bounded deterministic candidates and signatures;
+  advisory answers cannot apply IDB changes.
+- Removed provider resolution from IDA-side search helpers and stopped passing
+  provider credentials, mode, and configuration paths to IDA child processes.
+- Preserved lexical fallback and public response shapes while adding regression
+  coverage for host-side candidate binding, timeout handling, response
+  post-processing, and the child environment boundary.
+
 ## 2026-09-20 — Harden IDA binary lifecycle and raw-image integration
 
 - Made blocking opens bounded and recoverable, with explicit `starting`,

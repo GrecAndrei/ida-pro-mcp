@@ -28,7 +28,6 @@ from ida_pro_mcp.ida_mcp.tools.gadgets import (
     _raw_decode_insn,
     _region_results,
     _scan_region_terminators,
-    _score_gadgets_behavior,
     _suggest_pivot_chains,
     gadgets,
 )
@@ -235,13 +234,10 @@ def test_shellcode_mitigations_seh_and_pivot_chain_modes(monkeypatch, fresh_fake
 
 
 def test_behavior_scoring_and_chain_empty_paths_are_fail_closed(monkeypatch):
-    assert _score_gadgets_behavior([], "rop") is None
     monkeypatch.setattr(gadgets_module, "_ACTIONS", {"rop": lambda *_args, **_kwargs: []})
     empty = gadgets_module._classify_gadget_chain(None, 5, 3, None)
     assert empty["ok"] is True
     assert empty["exploit_assessment"] == "No gadgets found"
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", None)
-    assert _score_gadgets_behavior([{"gadget": "ret"}], "rop") is None
 
 
 def test_positive_chain_classification_and_semantic_scoring_modes(monkeypatch):
@@ -284,17 +280,12 @@ def test_positive_chain_classification_and_semantic_scoring_modes(monkeypatch):
     monkeypatch.setattr(gadgets_module, "_ACTIONS", handlers)
     monkeypatch.setattr(gadgets_module, "_get_arch", lambda: "x64")
 
-    scored = _score_gadgets_behavior([{"gadget": "pop rdi ; ret"}], "rop")
-    # Legacy injected classifiers are not selected by the explicit provider
-    # boundary; disabled mode keeps gadget discovery deterministic and leaves
-    # semantic classification unavailable.
-    assert scored is None
-
     result = gadgets_module._classify_gadget_chain(None, 20, 5, None)
     assert result["exploit_assessment"].startswith("HIGH:")
     assert result["primitives_found"]["rop"] == 1
     assert result["backend"] == "provider_advisory"
     assert result["behavior_classifications"] == []
+    assert result["_provider_signature"]
     assert not classifier.calls
 
 

@@ -304,10 +304,9 @@ def test_index_metadata_and_embedding_similar_sqlite(monkeypatch, tmp_path):
                 {"ea": "0x2000", "addr": "0x2000", "name": "sim", "similarity": 0.85},
             ]
 
-    services = types.ModuleType("ida_pro_mcp.services")
-    asm = SimpleNamespace(_get_index=lambda _path: MockIndex())
-    services.get_assembler = lambda: asm
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    index = MockIndex()
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.idb"))
     monkeypatch.setattr(comb.idc, "get_idb_path", lambda: "/tmp/sample.idb", raising=False)
 
     meta = comb._get_index_metadata(0x1000)
@@ -323,7 +322,8 @@ def test_index_metadata_and_embedding_similar_sqlite(monkeypatch, tmp_path):
         def _conn(self):
             raise RuntimeError("sqlite open error")
 
-    asm._get_index = lambda _path: BrokenConnIndex()
+    broken = BrokenConnIndex()
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (broken, "/tmp/sample.idb"))
     assert comb._get_index_metadata(0x1000) is None
     assert comb._get_embedding_similar(0x1000) == []
 
@@ -337,9 +337,8 @@ def test_search_analyze_auto_scope_matrix(monkeypatch):
     comb, _names, _edges = _function_surface(monkeypatch)
     monkeypatch.setattr(comb, "resolve_target", lambda target: (0x1000, None, {}))
     monkeypatch.setattr(comb._compat, "get_func_info", lambda _ea: SimpleNamespace(start_ea=0x1000, end_ea=0x1020))
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: SimpleNamespace(_get_index=lambda _path: None)
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (None, ""))
 
     r1 = comb.search_analyze(addr="0x1000", metric="bb_count")
     assert r1.get("scope") == "outlier"
@@ -421,13 +420,9 @@ def test_search_analyze_similar_and_vulnerable_deep_branches(monkeypatch):
                 {"ea": "0x4000", "similarity": 0.7},
             ]
 
-    services = types.ModuleType("ida_pro_mcp.services")
-    asm = SimpleNamespace(
-        _get_index=lambda _path: VulnerableIndex(),
-        _behavior_classifier=SimpleNamespace,
-    )
-    services.get_assembler = lambda: asm
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    index = VulnerableIndex()
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.idb"))
     monkeypatch.setattr(comb.idc, "get_idb_path", lambda: "/tmp/sample.idb", raising=False)
 
     seen_1050 = [False]

@@ -138,23 +138,22 @@ def _decomp_cache_mod_sig(func_ea) -> str:
 
 def _get_intelligence_index():
     try:
-        from ida_pro_mcp.services import get_assembler
+        from ...support.lexical_index import get_lexical_index
     except ImportError:
-        try:
-            from host.intelligence.context import get_assembler  # type: ignore
-        except ImportError:
-            return None, None, ""
-    try:
-        asm = get_assembler()
-        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-        if not idb_path:
-            return asm, None, ""
-        return asm, asm._get_index(idb_path), idb_path
-    except Exception:
-        return None, None, ""
+        from ida_pro_mcp.ida_mcp.support.lexical_index import get_lexical_index  # type: ignore
+    idx, idb_path = get_lexical_index()
+    return None, idx, idb_path
 
 
-def _seed_decompiled_candidates(pattern, matcher, range_start, range_end, max_functions, timeout_ms):
+def _seed_decompiled_candidates(
+    pattern,
+    matcher,
+    range_start,
+    range_end,
+    max_functions,
+    timeout_ms,
+    host_expansion_queries=None,
+):
     """Rank likely matching functions before falling back to broad sampling."""
     # timeout_ms=0 means "no limit"; planning is still capped by design, so fall
     # back to the historical 8s default for the planning budget in that case.
@@ -206,15 +205,12 @@ def _seed_decompiled_candidates(pattern, matcher, range_start, range_end, max_fu
                         sim = float(hit.get("similarity") or 0.0)
                         lex = float(hit.get("lexical_score") or hit.get("score") or 0.0)
                         add_candidate(fea, 210.0 + (sim * 35.0) + (lex * 12.0), "intelligence")
-                    if asm is not None and not planning_timed_out:
-                        classifier = asm._behavior_classifier()
-                        q_hits = classifier.classify(pattern[:600], threshold=0.0, top_k=4, block=False)
+                    if not planning_timed_out:
                         expansion_queries = [
-                            str(h.get("behavior") or "").strip().replace("_", " ")
-                            for h in (q_hits or [])
-                            if h.get("behavior")
+                            str(value).strip()[:128]
+                            for value in (host_expansion_queries or [])[:3]
+                            if str(value).strip()
                         ]
-                        expansion_queries = [q for q in expansion_queries if q]
                         for extra_q in expansion_queries[:3]:
                             for hit in idx.search(extra_q, top_k=max(max_functions * 2, 24), threshold=0.0):
                                 try:
@@ -520,7 +516,13 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         total_available = len(all_funcs)
         if index_available:
             seeded_funcs, planning_meta = _seed_decompiled_candidates(
-                pattern, matcher, range_start, range_end, max_functions, timeout_ms
+                pattern,
+                matcher,
+                range_start,
+                range_end,
+                max_functions,
+                timeout_ms,
+                host_expansion_queries=kwargs.get("_host_expansion_queries"),
             )
         else:
             seeded_funcs = []

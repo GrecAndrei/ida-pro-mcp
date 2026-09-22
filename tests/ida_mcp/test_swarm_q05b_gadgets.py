@@ -286,14 +286,14 @@ def test_tool_notes_raw_opt_in_empty_with_heads():
 def test_tool_returns_gadgets_without_note_when_found():
     """A successful raw sweep returns gadgets and no note."""
     g = _load_gadgets()
-    # Skip the heavy BehaviorClassifier scoring backend for this unit test.
-    g._score_gadgets_behavior = lambda *a, **k: None
     _RawRiscvIDB([
         (0x1000, "addi", "addi sp, sp, 16", 4),
         (0x1004, "jalr", "jalr zero, 0(ra)", 4),
     ]).install(with_heads=False)
     resp = g.gadgets(action="rop", limit=50, max_insns=5)
     assert resp["count"] == 1
+    assert resp["_provider_signature"]
+    assert "exploit_potential" not in resp, "IDA returns bounded evidence; the host classifies it"
     assert "note" not in resp
 
 
@@ -523,9 +523,11 @@ def test_gadget_pivot_dispatch_and_chain_assessment(monkeypatch):
 
     monkeypatch.setattr(g, "_get_arch", lambda: "x64")
     monkeypatch.setattr(g, "_exec_region_has_heads", lambda _addr: True)
-    monkeypatch.setattr(g, "_score_gadgets_behavior", lambda *_args: None)
     monkeypatch.setitem(g._ACTIONS, "rop", lambda *args, **kwargs: [{"gadget": "pop rdi ; ret"}])
-    assert g.gadgets("rop", limit=1)["count"] == 1
+    rop_result = g.gadgets("rop", limit=1)
+    assert rop_result["count"] == 1
+    assert rop_result["_provider_signature"] == "pop rdi ; ret"
+    assert "exploit_potential" not in rop_result
     g._find_shellcode_space = lambda *_args: ["region"]
     assert g.gadgets("shellcode_space")["regions"] == "region"
     g._detect_mitigations = lambda *_args: {"ASLR": False}

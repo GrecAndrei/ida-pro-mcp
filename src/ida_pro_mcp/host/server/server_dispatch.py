@@ -23,6 +23,7 @@ from ..config import (
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.providers import ProviderError, provider_error_payload, provider_status
 from ..intelligence.providers.registry import default_usage_ledger
+from ..intelligence.rpc_advisory import apply_rpc_advisory, prepare_rpc_advisory_args
 from ..policy import (
     PolicyDecision,
     ack_from_args,
@@ -372,6 +373,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
         # consult from the outer exception handler even if the RPC setup
         # raised before these were assigned inside the try.
         _rpc_started = 0.0
+        _advisory_started = time.monotonic()
         _wallclock_cap = 900.0
         try:
             # Reject unknown keys instead of silently stripping them.
@@ -412,6 +414,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # override the resolved session scope.
             if tool_name == "search" and rpc_args.get("action") == "nl":
                 rpc_args["_session_id"] = _sid
+            advisory_args = prepare_rpc_advisory_args(
+                tool_name,
+                rpc_args,
+                session_id=_sid,
+            )
+            if advisory_args:
+                rpc_args.update(advisory_args)
             # Track the request on the session's RPC lane so health and
             # the watchdog can report queue depth. Requests to different
             # sessions run in parallel; requests to the same session
@@ -503,6 +512,23 @@ class ServerDispatchMixin(ServerClientStateMixin):
             _elapsed = time.time() - _t0
             if isinstance(res, dict) and "error" not in res and "ok" not in res:
                 res = {"ok": True, **res}
+            if isinstance(res, dict) and not is_error_result(res):
+                try:
+                    res = apply_rpc_advisory(
+                        tool_name,
+                        rpc_args,
+                        res,
+                        session_id=_sid,
+                        elapsed_seconds=max(0.0, time.monotonic() - _advisory_started),
+                    )
+                except Exception as advisory_exc:
+                    import logging
+
+                    logging.getLogger(__name__).debug(
+                        "host-side advisory processing failed for %s: %s",
+                        tool_name,
+                        advisory_exc,
+                    )
             # Stamp arbitrary-code responses with the session they actually
             # ran in. On a shared MCP connection a call aimed at the wrong
             # session previously returned cleanly — the response now
@@ -1655,10 +1681,15 @@ class ServerDispatchMixin(ServerClientStateMixin):
             return provider_error_payload(RuntimeError("provider status is unavailable"))
 
     def _handle_provider_intelligence_status_inner(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
-        if action in {"intelligence_status", "embedder_status", "reranker_status"}:
+        if action in {"intelligence_status", "embedder_status", "reranker_status", "anchor_status"}:
             result = provider_status()
             if result.get("ok"):
                 result["usage"] = default_usage_ledger().status(session_id=str(args.get("session_id") or "") or None)
+                if action == "anchor_status":
+                    result["anchors"] = {"count": 0, "loaded": 0, "source": "typed_question_provider"}
+                    result["anchors_available"] = False
+                    result["anchor_count"] = 0
+                    result["note"] = "Provider mode uses request-time typed questions; no anchor vectors are stored."
                 if action == "reranker_status" and "score" not in (result.get("provider") or {}).get("capabilities", []):
                     return {
                         "error": True,
@@ -2017,6 +2048,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             "reranker_status",
             "usage_status",
             "usage_report",
+            "anchor_status",
         }:
             return self._handle_provider_intelligence_status(args)
 

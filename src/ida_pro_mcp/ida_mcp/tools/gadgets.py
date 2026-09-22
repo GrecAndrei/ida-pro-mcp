@@ -1204,9 +1204,8 @@ def gadgets(
             }
 
         if action == "classify_chain":
-            # Semantic exploit primitive classification using BehaviorClassifier.
-            # Takes a list of gadget strings (or addresses) and classifies the chain's
-            # exploit potential: stack_pivot, write_what_where, code_exec, rop_chain, etc.
+            # Gather deterministic gadget evidence. The MCP host classifies the
+            # bounded chain signature after this IDA RPC returns.
             return _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard)
 
         if action == "semantic_find":
@@ -1233,8 +1232,7 @@ def gadgets(
         used_raw = bool(raw) or not region_had_heads
         results = handler(addr, limit, max_insns, query, raw=used_raw)
 
-        # Augment with BehaviorClassifier scoring when available
-        behavior_score = _score_gadgets_behavior(results, action)
+        provider_signature = _gadget_behavior_signature(results)
 
         resp = {
             "ok": True,
@@ -1243,7 +1241,7 @@ def gadgets(
             "count": len(results),
             "truncated": len(results) >= limit,
             "arch": _get_arch(),
-            **({"exploit_potential": behavior_score} if behavior_score else {}),
+            **({"_provider_signature": provider_signature} if provider_signature else {}),
         }
         # Surface the opaque-region reality instead of letting an empty result
         # read as "no gadgets exist in this binary".
@@ -1265,40 +1263,14 @@ def gadgets(
         return handle_error(e)
 
 
-def _provider_gadget_classification(signature: str, *, operation: str) -> list[dict] | dict:
-    """Ask the explicit provider about a bounded gadget signature only."""
-    try:
-        from ida_pro_mcp.host.intelligence.advisory import ask_behavior
-        from ida_pro_mcp.host.intelligence.core import _extract_signature
-
-        return ask_behavior(
-            {"signature": _extract_signature(signature[:4096])[:2048]},
-            operation=operation,
-        )
-    except Exception:
-        return {"error": True, "code": "PROVIDER_ERROR", "message": "gadget advisory unavailable"}
-
-
-def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
-    """Return an advisory provider classification for a bounded gadget set."""
-    del action
+def _gadget_behavior_signature(gadgets: list) -> str:
+    """Return a bounded instruction signature for host-side classification."""
     if not gadgets:
-        return None
+        return ""
     insn_text = " ".join(
         str(g.get("gadget") or g.get("insns") or "") for g in gadgets[:20]
     )
-    if not insn_text.strip():
-        return None
-    result = _provider_gadget_classification(insn_text, operation="classify_gadgets")
-    if not isinstance(result, list) or not result:
-        return None
-    return {
-        "classifications": result,
-        "top_primitive": result[0].get("behavior"),
-        "confidence": result[0].get("confidence", 0.0),
-        "note": f"Provider advisory analysis of {len(gadgets)} gadgets",
-        "backend": "provider_advisory",
-    }
+    return insn_text[:4096]
 
 
 def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool = False) -> dict:
@@ -1325,8 +1297,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool 
             g.get("gadget") or g.get("insns") or "" for g in gadgets[:5]
         ) + "\n"
 
-    advisory = _provider_gadget_classification(chain_text, operation="classify_gadget_chain")
-    hits = advisory if isinstance(advisory, list) else []
+    hits = []
 
     # Assess exploitability
     has_pivot = bool(all_gadgets.get("stack_pivot"))
@@ -1351,6 +1322,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool 
         "exploit_assessment": assessment,
         "behavior_classifications": hits,
         "top_primitive": hits[0]["behavior"] if hits else None,
+        **({"_provider_signature": chain_text[:4096]} if chain_text else {}),
         "chain_building_blocks": {
             k: [g.get("gadget") or g.get("insns") for g in v[:3]]
             for k, v in all_gadgets.items() if v

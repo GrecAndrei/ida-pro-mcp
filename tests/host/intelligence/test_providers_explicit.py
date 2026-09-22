@@ -15,11 +15,13 @@ from ida_pro_mcp.host.intelligence.providers import (
     ProviderBudgetError,
     ProviderConfigError,
     ProviderProtocolError,
+    ProviderRequest,
     ProviderResponse,
     Question,
     StateSnapshot,
     Usage,
     UsageLedger,
+    normalize_score_answer,
     provider_error_payload,
     provider_status,
     resolve_provider_config,
@@ -44,9 +46,11 @@ def test_rank_targets_normalizes_ordinal_scores_and_sends_metadata_only():
     class _Provider:
         def __init__(self):
             self.state = None
+            self.questions = None
 
         def invoke(self, state, questions, **_kwargs):
             self.state = state
+            self.questions = list(questions)
             answers = {
                 question.question_id: Answer(
                     question.question_id,
@@ -69,8 +73,96 @@ def test_rank_targets_normalizes_ordinal_scores_and_sends_metadata_only():
 
     assert result["ok"] is True
     assert [item["score"] for item in result["scores"]] == [1.0, 0.0]
-    assert "content" not in provider.state["targets"][0]
-    assert provider.state["targets"][0]["title"] == "parse header"
+    assert "targets" not in provider.state
+    first_candidate = provider.questions[0].instructions["candidate"]
+    assert "content" not in first_candidate
+    assert first_candidate["title"] == "parse header"
+    assert provider.questions[0].instructions["candidate_index"] == 0
+
+
+def test_rank_targets_normalizes_midpoint_and_fractional_ordinal_scores():
+    class _Provider:
+        def invoke(self, _state, questions, **_kwargs):
+            return ProviderResponse(
+                "fixture",
+                {
+                    question.question_id: Answer(
+                        question.question_id,
+                        "score",
+                        1.0 if question.question_id == "target_0" else 1.43,
+                        confidence=0.82,
+                    )
+                    for question in questions
+                },
+                Usage(1, 1, 2),
+            )
+
+    result = rank_targets(
+        {"strategy": "unresolved"},
+        [{"title": "candidate one"}, {"title": "candidate two"}],
+        provider=_Provider(),
+    )
+    assert [item["score"] for item in result["scores"]] == [0.5, 0.715]
+    assert [item["confidence"] for item in result["scores"]] == [0.82, 0.82]
+
+
+def test_typed_answer_keeps_jev_confidence_and_score_scale():
+    request = ProviderRequest(
+        StateSnapshot.from_mapping({"query": "bounded"}),
+        (
+            Question("choice", "choice", "Choose one", criteria=["a", "b"]),
+            Question("score", "score", "Rate it", criteria=["low", "middle", "high"]),
+        ),
+        "jev-latest",
+    )
+    response = parse_response(
+        {
+            "model": "jev-1.13.0",
+            "answers": {
+                "choice": {
+                    "type": "choice",
+                    "choice": "a",
+                    "probabilities": {"a": 0.88, "b": 0.12},
+                    "confidence": 0.81,
+                },
+                "score": {
+                    "type": "score",
+                    "score": 1.43,
+                    "legend": {"0": "low", "1": "middle", "2": "high"},
+                    "probabilities": {"0": 0.0, "1": 0.57, "2": 0.43},
+                    "confidence": 0.72,
+                },
+            },
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request,
+    )
+    assert response.answers["choice"].confidence == 0.81
+    assert normalize_score_answer(response.answers["score"], ["low", "middle", "high"]) == (0.715, 0.72)
+
+
+def test_typed_answer_rejects_out_of_range_confidence():
+    request = ProviderRequest(
+        StateSnapshot.from_mapping({"query": "bounded"}),
+        (Question("choice", "choice", "Choose one", criteria=["a", "b"]),),
+        "jev-latest",
+    )
+    with pytest.raises(ProviderProtocolError):
+        parse_response(
+            {
+                "model": "jev-1.13.0",
+                "answers": {
+                    "choice": {
+                        "type": "choice",
+                        "choice": "a",
+                        "probabilities": {"a": 0.8, "b": 0.2},
+                        "confidence": 1.2,
+                    }
+                },
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request,
+        )
 
 
 def test_provider_status_and_errors_are_structured_and_redacted():

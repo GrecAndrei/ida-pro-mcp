@@ -124,6 +124,32 @@ def test_call_tool_composes_schema_rpc_stamp_and_postprocess(monkeypatch):
     }
 
 
+def test_call_tool_sends_host_expansion_metadata_and_postprocesses_provider_results(monkeypatch):
+    host = _DispatchHost()
+    monkeypatch.setattr(dispatch_mod, "prepare_rpc_args", lambda _tool, args, _schemas: dict(args))
+    monkeypatch.setattr(
+        dispatch_mod,
+        "prepare_rpc_advisory_args",
+        lambda _tool, _args, *, session_id: {"_host_expansion_queries": [session_id]},
+    )
+    seen = {}
+
+    def apply(tool, args, result, *, session_id, elapsed_seconds):
+        seen.update(tool=tool, args=dict(args), session_id=session_id, elapsed=elapsed_seconds)
+        return {**result, "advisory_applied": True}
+
+    monkeypatch.setattr(dispatch_mod, "apply_rpc_advisory", apply)
+    monkeypatch.setattr(dispatch_mod, "truncate_response", lambda result, **_kwargs: result)
+    host._seed_index_from_matching_binary = lambda _session: None
+    result = host.call_tool("search", "target", action="nl", query="find crypto")
+    payload, _port, _kwargs = host.sent[-1]
+    assert payload["args"]["_host_expansion_queries"] == ["ABC12345"]
+    assert seen["tool"] == "search"
+    assert seen["session_id"] == "ABC12345"
+    assert seen["args"]["_host_expansion_queries"] == ["ABC12345"]
+    assert result["advisory_applied"] is True
+
+
 def test_call_tool_rejects_missing_ownership_safe_mode_reload_and_start_errors():
     host = _DispatchHost()
     host._resolve_session_from_idb_ref = lambda _ref: None

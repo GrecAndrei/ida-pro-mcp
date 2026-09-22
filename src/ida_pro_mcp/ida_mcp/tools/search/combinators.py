@@ -873,12 +873,8 @@ _VULN_ANCHORS = [
 def _get_index_metadata(ea: int) -> dict | None:
     """Get structural metadata for a function from the signature index."""
     try:
-        from ida_pro_mcp.services import get_assembler
-        asm = get_assembler()
-        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-        if not idb_path:
-            return None
-        idx = asm._get_index(idb_path)
+        from ...support.lexical_index import get_lexical_index
+        idx, _idb_path = get_lexical_index()
         if idx is None or idx.size == 0:
             return None
         # Query the index for this specific function
@@ -905,7 +901,7 @@ def _get_index_metadata(ea: int) -> dict | None:
 
 
 def _get_behavior_tags(ea: int) -> list[str]:
-    """Get behavior tags for a function from the insight index or classifier."""
+    """Get deterministic behavior tags for a function from the insight index."""
     tags = []
     # Try L1 insight index first (instant)
     try:
@@ -930,12 +926,8 @@ def _get_embedding_similar(ea: int, top_k: int = 10) -> list[dict]:
     available and otherwise search the bounded signature text.
     """
     try:
-        from ida_pro_mcp.services import get_assembler
-        asm = get_assembler()
-        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-        if not idb_path:
-            return []
-        idx = asm._get_index(idb_path)
+        from ...support.lexical_index import get_lexical_index
+        idx, _idb_path = get_lexical_index()
         if idx is None or idx.size == 0:
             return []
         vector_blob = None
@@ -1127,10 +1119,8 @@ def search_analyze(
             col = index_metrics[metric]
             idx = None
             try:
-                from ida_pro_mcp.services import get_assembler
-                asm = get_assembler()
-                idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-                idx = asm._get_index(idb_path) if idb_path else None
+                from ...support.lexical_index import get_lexical_index
+                idx, _idb_path = get_lexical_index()
             except Exception:
                 idx = None
 
@@ -1332,14 +1322,12 @@ def search_analyze(
                         "outlier_score": 1,
                     })
 
-        # Phase 3: Behavior-based vulnerability candidates via embeddings
+        # Phase 3: deterministic lexical candidates from bounded vulnerability
+        # behavior queries. No provider or vector model runs in the IDA process.
         try:
-            from ida_pro_mcp.services import get_assembler
-            asm = get_assembler()
-            idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-            idx = asm._get_index(idb_path) if idb_path else None
-            classifier = asm._behavior_classifier() if asm else None
-            if idx and idx.size > 0 and classifier:
+            from ...support.lexical_index import get_lexical_index
+            idx, _idb_path = get_lexical_index()
+            if idx and idx.size > 0:
                 queries = _VULN_ANCHORS[:4]
                 if pattern:
                     queries.insert(0, pattern)
@@ -1390,10 +1378,8 @@ def search_analyze(
         if not pattern:
             return make_error(MCPError.INVALID_ARGS, "semantic scope requires pattern")
         try:
-            from ida_pro_mcp.services import get_assembler
-            asm = get_assembler()
-            idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-            idx = asm._get_index(idb_path) if idb_path else None
+            from ...support.lexical_index import get_lexical_index
+            idx, _idb_path = get_lexical_index()
             if not idx or idx.size == 0:
                 return make_error(MCPError.NOT_FOUND, "No functions indexed. Run intelligence(action='index_fast') first.")
             # Fetch one extra row so `truncated` (len(hits) > offset + limit)

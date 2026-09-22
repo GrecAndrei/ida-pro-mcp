@@ -387,6 +387,22 @@ class Answer:
     probability: float | None = None
     probabilities: dict[str, float] | None = None
     legend: dict[str, str] | None = None
+    confidence: float | None = None
+
+    @staticmethod
+    def _parse_confidence(value: Mapping[str, Any]) -> float | None:
+        raw_confidence = value.get("confidence")
+        if raw_confidence is None:
+            return None
+        if isinstance(raw_confidence, bool):
+            raise ProviderProtocolError("answer confidence is malformed")
+        try:
+            confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            raise ProviderProtocolError("answer confidence is malformed") from None
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ProviderProtocolError("answer confidence is outside 0..1")
+        return confidence
 
     @classmethod
     def from_wire(cls, question_id: str, expected_type: str, value: Any) -> "Answer":
@@ -418,7 +434,13 @@ class Answer:
                     if not label_text or len(label_text) > 128:
                         raise ProviderProtocolError("choice answer probability label is malformed")
                     parsed_probabilities[label_text] = probability
-            return cls(question_id, kind, choice, probabilities=parsed_probabilities)
+            return cls(
+                question_id,
+                kind,
+                choice,
+                probabilities=parsed_probabilities,
+                confidence=cls._parse_confidence(value),
+            )
         if kind == "noul":
             raw = value.get("noul", value.get("value"))
             raw_probability = value.get("probability")
@@ -485,7 +507,14 @@ class Answer:
                 str(k)[:128]: _public_label(v, 256) or ""
                 for k, v in legend_raw.items()
             }
-        return cls(question_id, kind, score, probabilities=probabilities, legend=legend)
+        return cls(
+            question_id,
+            kind,
+            score,
+            probabilities=probabilities,
+            legend=legend,
+            confidence=cls._parse_confidence(value),
+        )
 
 
 @dataclass(frozen=True)

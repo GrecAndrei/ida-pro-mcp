@@ -373,6 +373,7 @@ def search(
                 radius=raw_radius,
                 rerank=None if kwargs.get("rerank") is None else bool(kwargs.get("rerank")),
                 session_id=str(kwargs.get("_session_id") or ""),
+                host_expansion_queries=kwargs.get("_host_expansion_queries"),
             )
 
         def _search_path():

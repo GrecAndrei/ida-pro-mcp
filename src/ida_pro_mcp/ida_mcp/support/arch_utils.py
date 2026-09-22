@@ -887,7 +887,6 @@ def get_tail_call_mnemonics(arch=None):
 # here avoids re-setting processor options and re-queueing a full-address-space
 # reanalysis on every call.
 _APPLIED_RISCV_GP: int | None = None
-_GP_ADVISORY_CACHE: dict[tuple[str, int, int], dict] = {}
 
 
 def _riscv_gp_fix_refs(gp_val: int, old_gp: int | None = None) -> dict:
@@ -1191,25 +1190,6 @@ def detect_riscv_gp():
     except ImportError:
         return {"found": False, "note": "IDA APIs not available"}
 
-    # GP detection is an advisory MCP observation.  Do not expose a locally
-    # inferred candidate when intelligence is disabled or Jev/custom cannot
-    # validate it; the explicit set_gp action remains the only mutating path.
-    try:
-        from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
-        provider_mode = resolve_provider_config().mode
-    except Exception as exc:
-        return {
-            "found": False,
-            "code": str(getattr(exc, "code", "PROVIDER_CONFIG_INVALID"))[:64],
-            "note": "RISC-V GP advisory provider configuration is invalid",
-        }
-    if provider_mode == "disabled":
-        return {
-            "found": False,
-            "code": "INTELLIGENCE_DISABLED",
-            "note": "RISC-V GP inference is disabled; use explicit analysis(action='set_gp', gp=...)",
-        }
-
     # Collect candidate start addresses: entry points, then _start symbol
     candidates = []
     try:
@@ -1279,51 +1259,9 @@ def detect_riscv_gp():
                         raw -= 0x1000
                     prev = prev_auipc_val if prev_auipc_val is not None else prev_lui_val
                     gp_val = (prev + raw) & 0xFFFFFFFFFFFFFFFF
-                    # Detection is an advisory observation.  It must never
-                    # authorize processor-option changes or data-reference
-                    # rewrites; only the explicit set_gp action may call
-                    # _apply_riscv_gp().
-                    cache_key = (str(provider_mode), int(start_ea), gp_val)
-                    advisory = _GP_ADVISORY_CACHE.get(cache_key)
-                    try:
-                        from ida_pro_mcp.host.intelligence.advisory import ask_gp
-
-                        if advisory is None:
-                            advisory = ask_gp(
-                                {
-                                    "architecture": "riscv",
-                                    "address": hex(start_ea),
-                                    "instructions": [str(mnem)[:32]],
-                                    "candidate_source": "ida_processor_disassembly",
-                                },
-                                [hex(gp_val)],
-                                operation="riscv_gp",
-                            )
-                            if isinstance(advisory, dict) and not advisory.get("error"):
-                                _GP_ADVISORY_CACHE[cache_key] = advisory
-                    except Exception as exc:
-                        advisory = {
-                            "error": True,
-                            "code": str(getattr(exc, "code", "PROVIDER_ERROR"))[:64],
-                            "message": "GP advisory failed",
-                        }
-                    if not isinstance(advisory, dict) or advisory.get("error") or not advisory.get("ok"):
-                        return {
-                            "found": False,
-                            "code": str((advisory or {}).get("code") or "PROVIDER_ERROR")[:64],
-                            "at": hex(start_ea),
-                            "advisory": advisory,
-                            "note": "RISC-V GP candidate was not accepted by the advisory provider; explicit set_gp is required.",
-                        }
-                    if str(advisory.get("choice") or "").lower() != hex(gp_val).lower():
-                        return {
-                            "found": False,
-                            "code": "GP_ADVISORY_REJECTED",
-                            "at": hex(start_ea),
-                            "candidate": hex(gp_val),
-                            "advisory": advisory,
-                            "note": "The advisory provider did not accept the RISC-V GP candidate; explicit set_gp is required.",
-                        }
+                    # Return deterministic evidence for host-side advisory
+                    # scoring. The provider may annotate this candidate but
+                    # cannot apply it; only explicit set_gp mutates IDA state.
                     return {
                         "found": True,
                         "gp": gp_val,
@@ -1333,10 +1271,19 @@ def detect_riscv_gp():
                         "reanalysis_queued": False,
                         "refs_fixed": 0,
                         "refs_skipped": 0,
-                        "advisory": advisory,
+                        "_host_advisory": {
+                            "kind": "riscv_gp",
+                            "state": {
+                                "architecture": "riscv",
+                                "address": hex(start_ea),
+                                "instructions": ["auipc gp", "addi gp, gp"],
+                                "candidate_source": "ida_processor_disassembly",
+                            },
+                            "candidate": hex(gp_val),
+                        },
                         "note": (
                             f"RISC-V GP (x3) candidate {hex(gp_val)} detected at "
-                            f"{hex(start_ea)}; it was not applied. Use the explicit "
+                            f"{hex(start_ea)}; it has not been applied. Use the explicit "
                             "analysis(action='set_gp', gp=...) action after verifying it."
                         ),
                     }

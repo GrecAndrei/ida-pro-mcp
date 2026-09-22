@@ -350,8 +350,10 @@ def test_riscv_gp_apply_directive_queues_reanalysis_and_detects_signed_lui(monke
     monkeypatch.setattr(idc, "get_operand_value", lambda _ea, index: 0x80000 if index == 1 else 0xFFF, raising=False)
     monkeypatch.setattr(idc, "next_head", lambda ea, _end: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
     result = arch.detect_riscv_gp()
-    assert result["found"] is False
-    assert result["code"] == "INTELLIGENCE_DISABLED"
+    assert result["found"] is True
+    assert result["applied"] is False
+    assert result["gp_hex"] == "0xffffffff7fffffff"
+    assert result["_host_advisory"]["kind"] == "riscv_gp"
 
 
 def test_arch_utils_edge_branches(monkeypatch, arch):
@@ -531,8 +533,9 @@ def test_arch_utils_edge_branches(monkeypatch, arch):
         m.setattr(idc, "get_operand_value", lambda ea, idx: 0x80000 if ea == 0x1000 else 0x10, raising=False)
         m.setattr(idc, "next_head", lambda ea, _b: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
         res_auipc = arch.detect_riscv_gp()
-        assert res_auipc["found"] is False
-        assert res_auipc["code"] == "INTELLIGENCE_DISABLED"
+        assert res_auipc["found"] is True
+        assert res_auipc["applied"] is False
+        assert res_auipc["_host_advisory"]["kind"] == "riscv_gp"
 
     # 11. Lines 760, 769, 776, 783, 791: Prologue pattern 'unknown' for all archs
     for fam in ("x86", "arm", "mips", "ppc", "riscv"):

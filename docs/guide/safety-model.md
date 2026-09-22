@@ -146,6 +146,23 @@ Outcome: callers do not reopen an IDB that is still locked.
 Outcome: a permissive CORS setting cannot turn a client-controlled origin into
 an HTTP response-splitting primitive.
 
+### 16) Provider work and credentials stay in the host
+
+- The MCP host performs typed-question requests before or after the IDA RPC as
+  needed. IDA gathers deterministic candidates and bounded signatures only.
+- IDA child processes do not inherit Jev/custom/Gemini credential variables,
+  provider selection, provider configuration paths, or provider-specific
+  settings.
+- Provider answers can annotate or reorder bounded results; they cannot apply
+  GP/load-base candidates, authorize mutations, or replace deterministic
+  lexical results when unavailable.
+- Natural-language queries are reduced to bounded identifier signatures
+  before a provider request; raw operator prompts and decompilation text are
+  not sent.
+
+Outcome: IDA analysis does not own provider transport or receive the host's
+provider credentials.
+
 ## Operational Safety Guidance
 
 - Prefer least-privilege runtime environments for host and IDA.

@@ -262,8 +262,8 @@ def test_architecture_helpers_cover_degraded_sdk_and_segment_fallbacks(monkeypat
     assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 0}
 
 
-@pytest.mark.skip(reason="RISC-V GP candidate inference now requires explicit provider advisory")
 def test_riscv_gp_detection_ignores_malformed_candidates_and_bad_symbols(monkeypatch):
+    """Malformed entry points do not produce a deterministic GP candidate."""
     install_common_stub()
     arch = load_support_module("arch_utils")
     idautils = importlib.import_module("idautils")
@@ -278,7 +278,7 @@ def test_riscv_gp_detection_ignores_malformed_candidates_and_bad_symbols(monkeyp
     monkeypatch.setattr(idc, "get_inf_attr", lambda _attr: idc.BADADDR, raising=False)
     result = arch.detect_riscv_gp()
     assert result["found"] is False
-    assert "GP not found" in result["note"]
+    assert "candidate was not found" in result["note"]
 
 
 @pytest.mark.parametrize("bad", [None, object()])

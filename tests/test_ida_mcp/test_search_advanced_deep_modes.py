@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from types import SimpleNamespace
 
 import pytest
@@ -18,17 +16,13 @@ def test_function_range_and_intelligence_index_compatibility(monkeypatch):
     assert list(advanced._iter_function_starts()) == [11, 11, 21]
     assert advanced._function_in_range(None, 1, 2) is False
 
-    service = types.ModuleType("ida_pro_mcp.services")
-    assembler = SimpleNamespace(_get_index=lambda path: {"path": path})
-    service.get_assembler = lambda: assembler
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", service)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
     monkeypatch.delattr(advanced.idc, "get_idb_path", raising=False)
-    assert advanced._get_intelligence_index() == (assembler, None, "")
-    monkeypatch.setattr(advanced.idc, "get_idb_path", lambda: "/tmp/sample.i64", raising=False)
-    assert advanced._get_intelligence_index() == (assembler, {"path": "/tmp/sample.i64"}, "/tmp/sample.i64")
-
-    service.get_assembler = lambda: (_ for _ in ()).throw(RuntimeError("backend unavailable"))
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (None, ""))
     assert advanced._get_intelligence_index() == (None, None, "")
+    index = object()
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.i64"))
+    assert advanced._get_intelligence_index() == (None, index, "/tmp/sample.i64")
 
 
 def test_seed_planner_combines_cache_names_strings_imports_and_behavior(monkeypatch, fresh_fake_idb):
@@ -50,12 +44,6 @@ def test_seed_planner_combines_cache_names_strings_imports_and_behavior(monkeypa
         lambda ea, *_args: [SimpleNamespace(frm=0x140001080 if ea == 0x140002010 else 0x140001090)] if ea in {0x140002010, 0x140002020} else [],
     )
 
-    class _Classifier:
-        _anchor_embs = {"crypto": object()}
-
-        def classify(self, *_args, **_kwargs):
-            return [{"behavior": "crypto_symmetric", "confidence": 0.9}]
-
     class _Index:
         size = 12
 
@@ -67,10 +55,11 @@ def test_seed_planner_combines_cache_names_strings_imports_and_behavior(monkeypa
                 {"ea": "0x140001000", "similarity": 0.7, "score": 0.1},
             ]
 
-    asm = SimpleNamespace(_behavior_classifier=_Classifier)
-    monkeypatch.setattr(advanced, "_get_intelligence_index", lambda: (asm, _Index(), "/tmp/idb"))
+    index = _Index()
+    monkeypatch.setattr(advanced, "_get_intelligence_index", lambda: (None, index, "/tmp/idb"))
     ranked, meta = advanced._seed_decompiled_candidates(
-        "crypto", lambda text: "crypto" in text.lower(), None, None, 4, 2000
+        "crypto", lambda text: "crypto" in text.lower(), None, None, 4, 2000,
+        host_expansion_queries=["crypto symmetric"],
     )
     assert ranked
     assert meta["intelligence_index_size"] == 12
@@ -178,7 +167,7 @@ def test_search_decompiled_unavailable_and_failure_envelopes(monkeypatch, fresh_
 
 def test_search_decompiled_index_backfill_preview_and_timeout_modes(monkeypatch, fresh_fake_idb):
     monkeypatch.setattr(advanced.ida_hexrays, "init_hexrays_plugin", lambda: True)
-    monkeypatch.setattr(advanced, "_seed_decompiled_candidates", lambda *_a: (
+    monkeypatch.setattr(advanced, "_seed_decompiled_candidates", lambda *_a, **_kw: (
         [0x1000], {"seeded_candidates": 1, "seed_reasons": {}, "tokens": ["needle"], "intelligence_index_size": 3, "expansion_queries": []}
     ))
     monkeypatch.setattr(advanced, "_iter_function_starts", lambda *_a: iter([0x1000, 0x2000]))
@@ -200,7 +189,7 @@ def test_search_decompiled_index_backfill_preview_and_timeout_modes(monkeypatch,
 
     times = iter([0.0, 1.0])
     monkeypatch.setattr(advanced._time, "time", lambda: next(times))
-    monkeypatch.setattr(advanced, "_seed_decompiled_candidates", lambda *_a: ([], {"tokens": []}))
+    monkeypatch.setattr(advanced, "_seed_decompiled_candidates", lambda *_a, **_kw: ([], {"tokens": []}))
     timed = advanced.search_decompiled("needle", False, None, None, 0, 10, False, timeout_ms=250)
     assert timed["timed_out"] is True
     assert timed["analysis_truncated"] is True

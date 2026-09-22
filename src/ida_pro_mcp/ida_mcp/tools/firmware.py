@@ -500,44 +500,10 @@ def _detect_load_base(s_ea, e_ea, base_candidates, limit):
     advisory = None
     recommended_base = results[0]["base"] if results else None
     if is_riscv_family(arch):
-        # RISC-V load-base interpretation is provider-backed.  The bounded
-        # pointer evidence above is only context; it is never promoted to a
-        # recommendation when Jev/custom is disabled or unavailable.
+        # The IDA runtime returns deterministic candidates only. The MCP host
+        # may ask the configured provider to rank them after the bridge call;
+        # this process never loads provider credentials or contacts Jev.
         recommended_base = None
-        try:
-            from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
-            from ida_pro_mcp.host.intelligence.advisory import ask_load_base
-
-            mode = resolve_provider_config().mode
-            if mode == "disabled":
-                advisory = {
-                    "error": True,
-                    "code": "INTELLIGENCE_DISABLED",
-                    "message": "RISC-V load-base advisory is disabled",
-                }
-            else:
-                advisory = ask_load_base(
-                    {
-                        "architecture": arch,
-                        "range_start": hex(int(s_ea)),
-                        "range_end": hex(int(e_ea)),
-                        "pointer_size": int(ptr_size),
-                    },
-                    results,
-                    operation="riscv_load_base",
-                )
-                choice = advisory.get("choice") if isinstance(advisory, dict) else None
-                if isinstance(advisory, dict) and advisory.get("ok") and choice:
-                    selected = next((row for row in results if row.get("base") == choice), None)
-                    if selected is not None:
-                        results = [selected] + [row for row in results if row is not selected]
-                        recommended_base = choice
-        except Exception as exc:
-            advisory = {
-                "error": True,
-                "code": str(getattr(exc, "code", "PROVIDER_ERROR"))[:64],
-                "message": "load-base advisory failed",
-            }
     return {
         "ok": True,
         "action": "detect_load_base",

@@ -31,6 +31,16 @@ never logged or persisted. Provider answers are advisory only: they cannot
 invoke tools, authorize mutations, satisfy `risk_ack`, or write blackboard
 findings. Deterministic IDA policy remains authoritative.
 
+Provider transport runs in the MCP host. For query expansion the host asks its
+provider before the IDA RPC and sends only bounded expansion labels to the
+deterministic search. For behavior search, function classification, gadget
+classification, and reranking, IDA returns bounded candidate signatures and
+the host asks the provider after the RPC. Provider configuration and credential
+variables are removed from the IDA child environment. When a provider is
+disabled, unavailable, or times out, deterministic results remain available.
+Natural-language queries are reduced to bounded identifier signatures before
+provider requests; raw prompts and decompilation text are not sent.
+
 A missing Jev credential or unavailable Jev endpoint returns `JEV_UNAVAILABLE`.
 Malformed provider responses return `PROVIDER_PROTOCOL_ERROR`; invalid mode,
 origin, mapping, or conflicting settings return `PROVIDER_CONFIG_INVALID`.

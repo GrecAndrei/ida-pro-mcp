@@ -242,27 +242,21 @@ class TestKnowledgeTool:
 class TestIntelligenceTool:
     def test_intelligence_status_and_classify(self):
         res_status = intelligence(action="intelligence_status")
-        assert res_status.get("ok") is True or "embedder" in res_status
+        assert res_status["code"] == "HOST_ONLY_OPERATION"
 
         res_emb = intelligence(action="embedder_status")
-        assert res_emb.get("ok") is True or "backend" in res_emb or "status" in res_emb
+        assert res_emb["code"] == "HOST_ONLY_OPERATION"
 
         res_rerank = intelligence(action="reranker_status")
-        assert res_rerank.get("ok") is True or "status" in res_rerank or "available" in res_rerank
+        assert res_rerank["code"] == "HOST_ONLY_OPERATION"
 
         res_anchor = intelligence(action="anchor_status")
-        assert res_anchor.get("ok") is True or "anchors" in res_anchor or "count" in res_anchor
+        assert res_anchor["code"] == "HOST_ONLY_OPERATION"
 
         res_cls = intelligence(action="classify_text", query="int encrypt(char *buf, int len)")
-        assert (
-            res_cls.get("ok") is True
-            or "class" in res_cls
-            or "behavior" in res_cls
-            or "scores" in res_cls
-            or res_cls.get("code") in {"INTELLIGENCE_DISABLED", "JEV_UNAVAILABLE", "PROVIDER_CONFIG_INVALID"}
-            or res_cls.get("code") == "IDA_ERROR"
-            and "Embedding backend unavailable" in res_cls.get("message", "")
-        )
+        assert res_cls["backend"] == "provider_advisory"
+        assert res_cls["_provider_source_kind"] == "operator_query"
+        assert "behaviors" not in res_cls, "the MCP host performs provider classification after IDA returns"
 
 
 # ============================================================================

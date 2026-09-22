@@ -1,4 +1,4 @@
-"""Bounded lexical search with optional provider-backed advisory ranking.
+"""Bounded lexical search with optional host-side provider advisory ranking.
 
 All natural-language search actions delegate here.  The index is deterministic
 and lexical; Jev/custom typed questions may add advisory behavior expansion or
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time as _time
 
-from .._common import MCPError, idautils, idc, make_error, os
+from .._common import MCPError, idautils, idc, make_error
 from ..intelligence import _build_fast_signature
 from ... import compat as _compat
 
@@ -18,16 +18,13 @@ from .core import (
 )
 
 
-# Absolute confidence floor for behavior-driven query expansion.  Expansion
-# only fires when the classifier clears this AND the relative median/quartile
-# margin gate, so an unrelated behavior label never becomes a search query.
-EXPANSION_MIN_CONFIDENCE = float(os.environ.get("IDA_MCP_EXPANSION_MIN_CONFIDENCE", "0.50") or 0.50)
-
-
 # Typed-question rerank budget. Provider requests are bounded and advisory;
 # lexical order remains authoritative when the provider is disabled/unavailable.
 # These are code-level safety bounds, not provider-selection settings.
 RERANK_POOL_MAX = 8
+# Keep the transport candidate cap provider-neutral here. Importing the host
+# reranker into IDA would load provider modules in the analysis process.
+HOST_RERANK_MAX_CANDIDATES = 64
 # Per-document character budget before signature extraction.
 RERANK_DOC_BUDGET_CHARS = 800
 
@@ -56,18 +53,12 @@ def get_backend():
     except ImportError:
         from host.intelligence.lexical import LexicalFunctionIndex, signature_index_path  # type: ignore
     idx = LexicalFunctionIndex(signature_index_path(idb_path))
-    try:
-        from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
-
-        classifier = BehaviorClassifier.instance()
-    except Exception:
-        classifier = None
     if idx.size == 0:
         return _err(
             "No lexical function signatures indexed yet.",
             hint="Run deterministic function listing/search or migrate an existing signature index first.",
         )
-    return idx, classifier, idb_path, "lexical-only — typed-question providers do not expose embeddings"
+    return idx, None, idb_path, "lexical-only — typed-question providers do not expose embeddings"
 
 
 def _err(message: str, hint: str = "") -> dict:
@@ -75,28 +66,6 @@ def _err(message: str, hint: str = "") -> dict:
     if hint:
         payload["hint"] = hint
     return payload
-
-
-def _call_rerank(rr, query: str, docs: list[str], deadline: float, session_id: str = ""):
-    """Invoke a reranker, passing the deadline when the backend accepts it.
-
-    The provider-backed reranker accepts an optional ``deadline`` keyword;
-    lightweight/scripted rerankers used in tests do not.
-    ``inspect.signature`` lets us detect support without catching a TypeError
-    that might otherwise mask a genuine runtime failure inside the reranker.
-    """
-    try:
-        import inspect
-
-        sig = inspect.signature(rr.rerank)
-    except Exception:
-        sig = None
-    call_kwargs = {}
-    if sig is not None and "deadline" in sig.parameters:
-        call_kwargs["deadline"] = deadline
-    if sig is not None and "session_id" in sig.parameters:
-        call_kwargs["session_id"] = session_id
-    return rr.rerank(query, docs, **call_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +88,7 @@ def search_nl(
     radius: int | None = None,
     rerank: bool | None = None,
     session_id: str = "",
+    host_expansion_queries: list[str] | None = None,
 ) -> dict:
     """Natural-language search via the deterministic lexical function index.
 
@@ -145,9 +115,9 @@ def search_nl(
     if isinstance(backend, dict):
         return backend
     if len(backend) == 4:
-        idx, classifier, _idb_path, degraded_note = backend
+        idx, _classifier, _idb_path, degraded_note = backend
     else:  # tolerate a legacy 3-tuple backend (older callers / test stubs)
-        idx, classifier, _idb_path = backend
+        idx, _classifier, _idb_path = backend
         degraded_note = ""
 
     if not timeout_ms or timeout_ms <= 0:
@@ -187,10 +157,6 @@ def search_nl(
     # advisory path. Disabled/unavailable providers preserve lexical order;
     # this operation never starts a local model implicitly.
     want_rerank = bool(rerank) or (rerank is None and mode == "expand")
-    try:
-        from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
-    except Exception:
-        RERANK_MAX_CANDIDATES = 64
     if want_rerank:
         candidate_limit = min(max(limit, RERANK_POOL_MAX), 256)
     else:
@@ -207,41 +173,12 @@ def search_nl(
 
     # Phase 2: behavior-driven query expansion (only in "expand" mode)
     expansion_queries: list[str] = []
-    if mode == "expand" and classifier is not None:
-        try:
-            try:
-                hits = classifier.classify(
-                    query[:600],
-                    threshold=classifier_threshold,
-                    top_k=4,
-                    block=False,
-                    session_id=session_id,
-                )
-            except TypeError:
-                # Preserve compatibility with injected legacy test doubles;
-                # production BehaviorClassifier accepts session attribution.
-                hits = classifier.classify(query[:600], threshold=classifier_threshold, top_k=4, block=False)
-            if hits:
-                # The zero-shot classifier is cosine between a natural-language
-                # query and pseudocode anchors — that similarity is inherently
-                # mushy.  A low floor (0.25-0.30) lets unrelated behaviors
-                # (e.g. "crypto symmetric" for a GPU-allocation query) leak in
-                # and pollute the merged ranking, so expansion must clear a
-                # real bar: an absolute floor plus a relative margin over the
-                # tail (same median/quartile rule search_behavior uses).
-                confs = sorted(float(h.get("confidence") or 0.0) for h in hits)
-                q50 = confs[len(confs) // 2]
-                q75 = confs[min(len(confs) - 1, int(round((len(confs) - 1) * 0.75)))]
-                gate = max(
-                    float(classifier_threshold or 0.0),
-                    EXPANSION_MIN_CONFIDENCE,
-                    q50 + max(0.0, q75 - q50),
-                )
-                expansion_queries = [str(h.get("behavior") or "").strip().replace("_", " ") for h in hits if h.get("behavior") and float(h.get("confidence") or 0.0) >= gate]
-                expansion_queries = [q for q in expansion_queries if q]
-        except Exception:
-            pass
-
+    if mode == "expand":
+        expansion_queries = [
+            str(value).strip()[:128]
+            for value in (host_expansion_queries or [])[:3]
+            if str(value).strip()
+        ]
         if expansion_queries:
             merged_by_ea: dict[str, dict] = {}
             for r in raw_results:
@@ -323,97 +260,17 @@ def search_nl(
             scoped_results.append(result)
         raw_results = scoped_results
 
-    # Phase 3.5: optional provider advisory scoring of the bounded signature
-    # pool.  This is a quality boost, never a hard gate: if the provider is
-    # unavailable, misconfigured, or non-discriminating, lexical order remains
-    # authoritative and the response says why.
+    # Phase 3.5: scoring happens in the MCP host after this deterministic
+    # search returns. Include a bounded pre-gate candidate pool so host-side
+    # advisory scoring can reorder the same recall set without putting provider
+    # configuration or credentials in the IDA process.
     rerank_meta = {"profile": None, "applied": False, "pool": 0, "latency_ms": 0}
     if not want_rerank:
         if rerank is None:
             rerank_meta["reason"] = f"quick mode keeps latency bounded; pass rerank=true to force typed-question advisory scoring (pool capped at {RERANK_POOL_MAX})"
         else:
             rerank_meta["reason"] = "rerank disabled by caller"
-    if want_rerank and raw_results:
-        try:
-            from ida_pro_mcp.host.intelligence.rerank import Reranker
-        except Exception:
-            Reranker = None  # type: ignore[assignment]
-        if Reranker is not None:
-            try:
-                rr = Reranker()
-            except Exception:
-                rr = None
-            enabled = True
-            if rr is not None and hasattr(rr, "is_enabled"):
-                try:
-                    enabled = bool(rr.is_enabled())
-                except Exception:
-                    enabled = False
-            if rr is not None and not enabled:
-                provider_error = getattr(rr, "last_error", None)
-                if provider_error:
-                    rerank_meta["error"] = provider_error
-                    rerank_meta["reason"] = "provider_error"
-            if rr is not None and enabled:
-                # The rerank phase shares the caller's search deadline: check
-                # before starting and hand the deadline into the reranker so it
-                # can bail between CPU chunks.  An expired deadline keeps the
-                # recall order and explains itself instead of burning the budget.
-                budget_sec = (timeout_ms / 1000.0) - max(0.0, _time.time() - started_at)
-                rerank_deadline = _time.monotonic() + max(0.0, budget_sec)
-                if _time.monotonic() >= rerank_deadline:
-                    rerank_meta["reason"] = "timeout"
-                else:
-                    pool = raw_results[: min(RERANK_MAX_CANDIDATES, candidate_limit)]
-                    eas = [str(r.get("ea") or "") for r in pool]
-                    docs: list[str] = []
-                    try:
-                        stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
-                    except Exception:
-                        # Persisted document text is an optimization.  A
-                        # damaged or unavailable side table must not turn a
-                        # useful recall result into a failed search.
-                        stored = {}
-                    for ea, r in zip(eas, pool, strict=True):
-                        doc = stored.get(ea) or r.get("signature") or ""
-                        # Never decompile solely for provider scoring. A
-                        # persisted signature or name is sufficient and keeps
-                        # raw pseudocode outside the advisory transport.
-                        docs.append((doc or str(r.get("name") or ea))[:RERANK_DOC_BUDGET_CHARS])
-                    rerank_started = _time.time()
-                    scored = _call_rerank(
-                        rr,
-                        query,
-                        docs,
-                        rerank_deadline,
-                        session_id,
-                    ) if docs else None
-                    rerank_meta["latency_ms"] = round((_time.time() - rerank_started) * 1000)
-                    if scored:
-                        by_index = {int(item["index"]): float(item["score"]) for item in scored}
-                        discriminating = len(set(by_index.values())) >= 2
-                        indices_in_pool = bool(by_index) and max(by_index) < len(pool) and min(by_index) >= 0
-                        if discriminating and len(by_index) == len(pool) and indices_in_pool:
-                            for i, r in enumerate(pool):
-                                r["rerank_score"] = by_index.get(i)
-                                r["rank_reason"] = {
-                                    **(r.get("rank_reason") or {}),
-                                    "rerank": round(by_index.get(i, 0.0), 4),
-                                }
-                            pool.sort(key=lambda r: float(r.get("rerank_score") or 0.0), reverse=True)
-                            raw_results = pool
-                            rerank_meta["applied"] = True
-                        status = rr.status() if hasattr(rr, "status") else {}
-                        rerank_meta["profile"] = status.get("profile_name") if isinstance(status, dict) else None
-                    rerank_meta["pool"] = len(pool)
-                    provider_error = getattr(rr, "last_error", None) if rr is not None else None
-                    if provider_error and not rerank_meta["applied"]:
-                        rerank_meta["error"] = provider_error
-                        rerank_meta["reason"] = "provider_error"
-        if rerank_meta["applied"]:
-            for r in raw_results:
-                if "rerank_score" in r:
-                    r["score"] = r["rerank_score"]
+    rerank_candidates = [dict(item) for item in raw_results[: min(HOST_RERANK_MAX_CANDIDATES, candidate_limit)]] if want_rerank else []
 
     # Phase 4: adaptive gating on the score used to rank the hybrid results.
     # Gating only on raw cosine similarity discarded strong lexical matches
@@ -449,7 +306,7 @@ def search_nl(
         "query": query,
         "mode": mode,
         "backend": "lexical",
-        "advisory_provider": getattr(idx, "_embedder", None) and getattr(idx._embedder, "backend", "unavailable"),
+        "advisory_provider": None,
         "results": "\n".join(rows),
         "count": len(rows),
         "scope": {
@@ -473,6 +330,7 @@ def search_nl(
         ],
         "note": (f"Deterministic lexical retrieval with optional typed-question advisory scoring (mode={mode}, expansion_queries={len(expansion_queries)}, rerank={'on' if rerank_meta['applied'] else 'off'})."),
         "rerank": rerank_meta,
+        **({"_host_rerank_candidates": rerank_candidates} if rerank_candidates else {}),
     }
     if degraded_note:
         response["degraded"] = degraded_note
@@ -497,12 +355,13 @@ def search_behavior(
 
     Two-stage lookup:
       1. L1 insight index (fast tag_map query).
-      2. Bounded provider behavior questions on unnamed functions (if needed).
+      2. Collect bounded signatures for host-side behavior questions (if needed).
 
     Args:
         tag: Behavior tag (e.g. "crypto_symmetric", "network_http").
         limit: Max results.
-        timeout_ms: Timeout in ms (0 = 10s default).
+        timeout_ms: Timeout in ms (0 = 10s default) for deterministic collection;
+            the MCP host uses the remaining advisory budget after the RPC.
         include_items: Include structured items.
 
     Returns:
@@ -522,7 +381,7 @@ def search_behavior(
 
     timer = SearchTimeout(timeout_ms)
     rows: list[dict] = []
-    classifier_cold = False
+    provider_candidates: list[dict] = []
 
     # Stage 1: L1 insight index
     try:
@@ -546,77 +405,32 @@ def search_behavior(
             except Exception:
                 pass
 
-    # Stage 2: provider-backed behavior questions on unnamed functions (if needed)
+    # Stage 2: collect bounded signatures for host-side behavior questions.
     if len(rows) < limit // 2:
         try:
-            backend = get_backend()
-            if isinstance(backend, dict):
-                pass
-            else:
-                if len(backend) == 4:
-                    idx, classifier, _idb_path, _degraded = backend
-                else:  # tolerate a legacy 3-tuple backend
-                    idx, classifier, _idb_path = backend
-                # Preserve the old no-work guard for injected classifier
-                # doubles that explicitly expose an empty anchor cache.  The
-                # production provider-backed classifier has a different class
-                # and evaluates bounded typed questions per request.
-                if (
-                    classifier is not None
-                    and classifier.__class__.__name__ != "BehaviorClassifier"
-                    and hasattr(classifier, "_anchor_embs")
-                    and not getattr(classifier, "_anchor_embs", None)
-                ):
-                    classifier_cold = True
-                checked = 0
-                for func_ea in () if classifier_cold else idautils.Functions():
-                    if checked >= 200 or len(rows) >= limit:
-                        break
-                    try:
-                        timer.check()
-                    except TimeoutError:
-                        break
-                    fname = idc.get_func_name(func_ea) or ""
-                    if not fname.startswith(("sub_", "j_")):
+            for func_ea in idautils.Functions():
+                if len(provider_candidates) >= 64 or len(rows) + len(provider_candidates) >= limit:
+                    break
+                try:
+                    timer.check()
+                except TimeoutError:
+                    break
+                fname = idc.get_func_name(func_ea) or ""
+                if not fname.startswith(("sub_", "j_")):
+                    continue
+                try:
+                    func = _compat.get_func_info(func_ea)
+                    if func is None:
                         continue
-                    try:
-                        func = _compat.get_func_info(func_ea)
-                        if func is None:
-                            continue
-                        signature = _build_fast_signature(func_ea, func)
-                        hits = classifier.classify(signature, threshold=0.0, top_k=5, block=False)
-                        if hits:
-                            hs = sorted(
-                                float(h.get("confidence", h.get("score", 0.0)) or 0.0)
-                                for h in hits
-                            )
-                            q50 = hs[len(hs) // 2]
-                            q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
-                            gate = q50 + max(0.0, q75 - q50)
-                            hits = [
-                                h
-                                for h in hits
-                                if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate
-                            ]
-                        matching = [
-                            h for h in hits
-                            if str(h.get("behavior", "")).lower() == normalized_tag
-                        ]
-                        if matching:
-                            rows.append(
-                                {
-                                    "addr": hex(func_ea),
-                                    "name": fname,
-                                    "source": "classifier",
-                                    "confidence": max(
-                                        (float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in matching),
-                                        default=0.0,
-                                    ),
-                                }
-                            )
-                    except Exception:
-                        pass
-                    checked += 1
+                    signature = _build_fast_signature(func_ea, func)
+                    if signature:
+                        provider_candidates.append({
+                            "addr": hex(func_ea),
+                            "name": fname[:256],
+                            "signature": signature[:2048],
+                        })
+                except Exception:
+                    continue
         except Exception:
             pass
 
@@ -630,14 +444,10 @@ def search_behavior(
         "count": len(rows),
         "items": rows,
         "note": (
-            "Classifier cold; provider advisory was not queried. "
-            if classifier_cold
-            else f"Functions classified as '{normalized_tag}' via "
-            f"L1 insight index ({sum(1 for r in rows if r['source'] == 'insight_index')}) "
-            f"+ provider advisory ({sum(1 for r in rows if r['source'] == 'classifier')})."
+            f"Functions classified as '{normalized_tag}' via the L1 insight index "
+            f"({sum(1 for r in rows if r['source'] == 'insight_index')}); "
+            "the MCP host may add bounded provider advisory classifications."
         ),
+        **({"_host_behavior_candidates": provider_candidates} if provider_candidates else {}),
     }
-    if classifier_cold:
-        response["classifier_cold"] = True
-        response["timed_out"] = True
     return response

@@ -130,7 +130,7 @@ def test_detect_load_base_validates_known_base():
     resp = mod.firmware(action="detect_load_base")
     assert resp["ok"] is True, resp
     assert resp["recommended_base"] is None, resp
-    assert resp["advisory"]["code"] == "INTELLIGENCE_DISABLED", resp
+    assert "advisory" not in resp, "IDA gathers deterministic evidence; the MCP host owns Jev requests"
     known = next(row for row in resp["candidates"] if row["base"] == hex(LOAD_BASE))
     evidence = "\n".join(known["evidence"])
     assert "delegated to IDA native analysis" in evidence, known
@@ -142,7 +142,7 @@ def test_detect_load_base_explicit_candidates_rank_known_base_first():
                         base_candidates=[hex(LOAD_BASE), "0x08000000"])
     assert resp["ok"] is True, resp
     assert resp["recommended_base"] is None, resp
-    assert resp["advisory"]["code"] == "INTELLIGENCE_DISABLED", resp
+    assert "advisory" not in resp, "IDA gathers deterministic evidence; the MCP host owns Jev requests"
     known = next(row for row in resp["candidates"] if row["base"] == hex(LOAD_BASE))
     assert "delegated to IDA native analysis" in " ".join(known["evidence"])
 

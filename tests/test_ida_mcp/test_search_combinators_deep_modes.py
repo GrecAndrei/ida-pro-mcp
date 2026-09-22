@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-import types
-
 from tests._isolated_repo_loader import load_tool_submodule
 
 
@@ -80,10 +77,8 @@ def test_call_graph_cache_cold_warm_and_fingerprint_modes(monkeypatch):
 def test_index_backed_outlier_and_semantic_modes(monkeypatch):
     comb = _module()
     index = _Index([("0x1000", "entry", 100), ("0x2000", "helper", 10)])
-    assembler = types.SimpleNamespace(_get_index=lambda _path: index)
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: assembler
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.i64"))
     monkeypatch.setattr(comb.idc, "get_idb_path", lambda: "/tmp/sample.i64", raising=False)
     for metric in ("size", "tiny", "huge", "bb_count"):
         result = comb.search_analyze(scope="outlier", metric=metric, offset=0, limit=1)

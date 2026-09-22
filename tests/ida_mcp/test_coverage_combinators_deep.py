@@ -110,9 +110,11 @@ class _Index:
 
 
 def _services(monkeypatch, index):
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: types.SimpleNamespace(_get_index=lambda _path: index)
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    def get_index():
+        path = sys.modules["idc"].get_idb_path()
+        return (index, path) if path else (None, "")
+    monkeypatch.setattr(lexical, "get_lexical_index", get_index)
 
 
 def test_index_metadata_and_embedding_similarity_paths(monkeypatch):
@@ -199,16 +201,7 @@ def test_vulnerable_and_semantic_index_candidates_are_returned(monkeypatch):
         def search(self, *_args, **_kwargs):
             return [{"addr": "0x3000", "similarity": 0.8}]
 
-    class Assembler:
-        def _get_index(self, _path):
-            return VulnerabilityIndex()
-
-        def _behavior_classifier(self):
-            return object()
-
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = Assembler
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    _services(monkeypatch, VulnerabilityIndex())
     mod.idc.get_idb_path = lambda: "/tmp/combinator-test.i64"
     vulnerable = mod.search_analyze(scope="vulnerable", pattern="behavior", depth=20)
     assert vulnerable["ok"] is True
@@ -220,7 +213,7 @@ def test_vulnerable_and_semantic_index_candidates_are_returned(monkeypatch):
         def hybrid_search(self, *_args, **_kwargs):
             return [{"ea": "0x3000", "name": "candidate", "score": 0.8, "similarity": 0.7}]
 
-    services.get_assembler = lambda: types.SimpleNamespace(_get_index=lambda _path: SemanticIndex())
+    _services(monkeypatch, SemanticIndex())
     mod._get_index_metadata = lambda _ea: {
         "func_size": 12, "bb_count": 1, "cyclomatic": 1,
     }

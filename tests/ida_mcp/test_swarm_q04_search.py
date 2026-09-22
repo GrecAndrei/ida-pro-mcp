@@ -17,12 +17,10 @@ Pinned fixes (all implemented in the q04 wave):
 - resolve_target demangle memoization keyed on the DB fingerprint, plus a
   token pre-filter so unrelated mangled names never hit the demangle RPC.
 - search_nl: embedding-backend failure degrades to lexical-only ranking with
-  a note; classifier-cold search_behavior skips the up-to-200 decompile loop;
-  "expand" mode runs extra queries only over the top recalled EAs (and gates
-  expansion to a single extra query on very large binaries).
+  a note; query expansion arrives from the host, and only bounded lexical
+  candidates/signatures cross back for host-side advisory scoring.
 - _rescore_find_ranked: phrase-like queries get a wider embedding budget than
-  identifier queries; rerank deadline is plumbed into the reranker when the
-  backend accepts it.
+  identifier queries; provider advisory work stays on the MCP host.
 - semantic_matching._subword_tokens splits RISC-V ABI digit suffixes
   (uart0 -> uart) while short register names (x5, a0) stay intact.
 - FunctionEmbeddingIndex.search_text consumes persisted token columns (no
@@ -35,7 +33,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 
 from tests._isolated_repo_loader import load_support_module, load_tool_submodule
 
@@ -385,16 +382,6 @@ class _FakeIndex:
         return {}
 
 
-class _FakeClassifier:
-    _anchor_embs = {"a": [1.0]}
-
-    def __init__(self, hits):
-        self.hits = hits
-
-    def classify(self, text, threshold, top_k, block):
-        return self.hits
-
-
 def test_search_nl_lexical_fallback_preserves_recall_with_note():
     """A provider-unavailable index still ranks lexically and says so."""
     sem = _semantic()
@@ -438,107 +425,59 @@ class _WideIndex(_FakeIndex):
         ][:top_k]
 
 
-def test_search_nl_rerank_pool_sized_to_min_of_cap_and_recall():
-    """The rerank pool must be min(RERANK_MAX_CANDIDATES, candidate_limit),
-    and the deadline must be handed to a reranker that accepts it."""
-    import ida_pro_mcp.host.intelligence.rerank as rerank_mod
-
+def test_search_nl_returns_a_bounded_host_rerank_pool():
+    """IDA returns candidates only; provider ranking is performed by the host."""
     sem = _semantic()
     idx = _WideIndex(12)
-    sem.get_backend = lambda: (idx, _FakeClassifier([]), "test.idb", "")
-
-    class _ScriptedReranker:
-        _use_llama = True
-        _script = [{"index": i, "score": 0.1 * (i + 1)} for i in range(8)]
-        last_deadline = None
-
-        def __init__(self):
-            pass
-
-        def rerank(self, query, documents, deadline=0.0):
-            _ScriptedReranker.last_deadline = deadline
-            return list(self._script)
-
-        def status(self):
-            return {"profile_name": "Test"}
-
-    _orig_reranker = rerank_mod.Reranker
-    _orig_max = rerank_mod.RERANK_MAX_CANDIDATES
-    rerank_mod.Reranker = _ScriptedReranker
-    rerank_mod.RERANK_MAX_CANDIDATES = 8
-    try:
-        resp = sem.search_nl("find crypto", limit=3, mode="quick", rerank=True)
-    finally:
-        rerank_mod.Reranker = _orig_reranker
-        rerank_mod.RERANK_MAX_CANDIDATES = _orig_max
-    assert resp["ok"] is True
-    assert resp["rerank"]["applied"] is True, resp["rerank"]
-    assert resp["rerank"]["pool"] == 8, resp["rerank"]  # min(8, candidate_limit=12)
-    # The deadline was plumbed through to the reranker.
-    assert _ScriptedReranker.last_deadline is not None
-
-
-def test_search_nl_expired_rerank_deadline_skips_and_explains():
-    """When the caller's search deadline is already spent, skip the rerank
-    phase and report reason='timeout' instead of silently burning the budget."""
-    sem = _semantic()
-    idx = _WideIndex(4)
-    sem.get_backend = lambda: (idx, _FakeClassifier([]), "test.idb", "")
-
-    class _LlamaReranker:
-        _use_llama = True
-
-        def __init__(self):
-            pass
-
-        def rerank(self, query, documents, deadline=0.0):
-            raise AssertionError("rerank must not run after deadline expiry")
-
-        def status(self):
-            return {"profile_name": "Test"}
-
-    import ida_pro_mcp.host.intelligence.rerank as rerank_mod
-    _orig_reranker = rerank_mod.Reranker
-    rerank_mod.Reranker = _LlamaReranker
-    # Capture the REAL time functions BEFORE patching. ``sem._time`` is the
-    # shared ``time`` module (semantic.py does ``import time as _time``), so
-    # restoring with ``_real_time.time`` where ``_real_time`` IS ``sem._time``
-    # is a self-referential no-op — the patch leaked globally and froze time
-    # for every later test (it hung
-    # test_pending_work_is_bounded_and_never_calls_auto_wait).
-    _orig_time = time.time
-    _orig_monotonic = time.monotonic
-    try:
-        # started_at uses the first time() sample; later phases see a much
-        # larger clock, so the budget is already exhausted.
-        samples = {"t": 0.0}
-        def _fake_time():
-            now = samples["t"]
-            samples["t"] = 10.0
-            return now
-        sem._time.time = _fake_time
-        sem._time.monotonic = lambda: 100.0
-        resp = sem.search_nl("find crypto", limit=3, mode="quick", rerank=True, timeout_ms=1000)
-    finally:
-        rerank_mod.Reranker = _orig_reranker
-        sem._time.time = _orig_time
-        sem._time.monotonic = _orig_monotonic
+    sem.get_backend = lambda: (idx, None, "test.idb", "")
+    resp = sem.search_nl("find crypto", limit=3, mode="quick", rerank=True)
     assert resp["ok"] is True
     assert resp["rerank"]["applied"] is False
-    assert resp["rerank"]["reason"] == "timeout", resp["rerank"]
+    assert len(resp["_host_rerank_candidates"]) == 8
+    assert resp["_host_rerank_candidates"][0]["signature"] == "fn_0"
 
 
-def test_search_nl_expansion_scoped_to_top_recalled_eas():
-    """'expand' mode must run each extra query only over the top recalled EAs
-    (one (ea, ea+1) range per function) instead of re-scanning the binary."""
+def test_host_rerank_budget_skips_when_ida_search_spends_timeout(monkeypatch):
+    from ida_pro_mcp.host.intelligence import rerank as rerank_mod
+    from ida_pro_mcp.host.intelligence.rpc_advisory import _rank_search_candidates
+
+    class _ScriptedReranker:
+        last_error = None
+
+        def __init__(self):
+            pass
+
+        def is_enabled(self):
+            return True
+
+        def rerank(self, *_args, **_kwargs):
+            raise AssertionError("provider scoring must not start after timeout")
+
+    monkeypatch.setattr(rerank_mod, "Reranker", _ScriptedReranker)
+    result = {"items": [], "results": ""}
+    candidates = [{"ea": "0x401000", "name": "fn", "signature": "signature"}]
+    _rank_search_candidates(
+        result,
+        candidates,
+        {"query": "find crypto", "timeout_ms": 1000},
+        session_id="session",
+        elapsed_seconds=1.1,
+    )
+    assert result["rerank"]["applied"] is False
+    assert result["rerank"]["reason"] == "timeout"
+
+
+def test_search_nl_host_expansion_is_scoped_to_top_recalled_eas():
+    """Host-supplied expansions search only the top recalled EAs."""
     sem = _semantic()
     idx = _FakeIndex()
-    hits = [
-        {"behavior": "crypto_symmetric", "confidence": 0.9},
-        {"behavior": "network_http", "confidence": 0.9},
-    ]
-    sem.get_backend = lambda: (idx, _FakeClassifier(hits), "test.idb", "")
-    resp = sem.search_nl("find crypto", mode="expand", rerank=False)
+    sem.get_backend = lambda: (idx, None, "test.idb", "")
+    resp = sem.search_nl(
+        "find crypto",
+        mode="expand",
+        rerank=False,
+        host_expansion_queries=["crypto symmetric", "network http"],
+    )
     assert resp["ok"] is True
     extra = [c for c in idx.calls if c[0] in ("crypto symmetric", "network http")]
     assert len(extra) == 2, idx.calls
@@ -547,60 +486,37 @@ def test_search_nl_expansion_scoped_to_top_recalled_eas():
 
 
 def test_search_nl_large_binary_caps_expansion_queries():
-    """Very large indexes gate expansion to a single extra query so a behavior
-    explosion cannot push the search past its deadline."""
+    """Very large indexes cap host-supplied expansion to one extra query."""
     sem = _semantic()
     idx = _FakeIndex()
     idx.size = 20000
-    hits = [
-        {"behavior": "crypto_symmetric", "confidence": 0.9},
-        {"behavior": "network_http", "confidence": 0.9},
-    ]
-    sem.get_backend = lambda: (idx, _FakeClassifier(hits), "test.idb", "")
-    resp = sem.search_nl("find crypto", mode="expand", rerank=False)
+    sem.get_backend = lambda: (idx, None, "test.idb", "")
+    resp = sem.search_nl(
+        "find crypto",
+        mode="expand",
+        rerank=False,
+        host_expansion_queries=["crypto symmetric", "network http"],
+    )
     assert resp["ok"] is True
     extra = [c for c in idx.calls if c[0] in ("crypto symmetric", "network http")]
     assert len(extra) == 1, idx.calls
 
 
-def test_search_behavior_skips_cold_classifier():
-    """A classifier whose anchor cache was never populated cannot label
-    anything; skip the up-to-200 decompile loop and say so."""
+def test_search_behavior_returns_bounded_candidates_for_host_advisory(monkeypatch):
+    """IDA returns only bounded signatures; the host classifies them."""
     sem = _semantic()
-
-    class _ColdClassifier:
-        _anchor_embs = {}
-
-        def classify(self, text, threshold, top_k, block):
-            raise AssertionError("cold classifier must not run")
-
     sys.modules["ida_pro_mcp.ida_mcp.tools.search"]._query_insight_by_tags = lambda tags, mode="or": []
-    import idautils
-    idautils.Functions = lambda: (_ for _ in ()).throw(AssertionError("decompile loop ran"))
-    sem.get_backend = lambda: (_FakeIndex(), _ColdClassifier(), "test.idb", "")
+    monkeypatch.setattr(sem.idautils, "Functions", lambda: iter([0x401000]), raising=False)
+    monkeypatch.setattr(sem.idc, "get_func_name", lambda _ea: "sub_401000", raising=False)
+    monkeypatch.setattr(sem._compat, "get_func_info", lambda _ea: object())
+    monkeypatch.setattr(sem, "_build_fast_signature", lambda _ea, _func: "bounded signature")
 
-    resp = sem.search_behavior("crypto_symmetric")
+    resp = sem.search_behavior("crypto_symmetric", limit=10)
     assert resp["ok"] is True
-    assert resp.get("classifier_cold") is True, resp
-    assert resp.get("timed_out") is True
-    assert "Classifier cold" in resp["note"], resp["note"]
-
-
-def test_call_rerank_passes_deadline_when_supported():
-    sem = _semantic()
-
-    class _WithDeadline:
-        def rerank(self, query, docs, deadline=0.0):
-            return ("deadline", deadline)
-
-    class _WithoutDeadline:
-        def rerank(self, query, docs):
-            return ("plain", None)
-
-    got = sem._call_rerank(_WithDeadline(), "q", ["d"], 123.0)
-    assert got == ("deadline", 123.0)
-    got = sem._call_rerank(_WithoutDeadline(), "q", ["d"], 123.0)
-    assert got == ("plain", None)
+    assert resp["items"] == []
+    assert resp["_host_behavior_candidates"] == [
+        {"addr": "0x401000", "name": "sub_401000", "signature": "bounded signature"}
+    ]
 
 
 # ---------------------------------------------------------------------------

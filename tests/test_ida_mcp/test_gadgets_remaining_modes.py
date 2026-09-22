@@ -194,7 +194,6 @@ def test_pivot_chains_cover_arch_fallbacks_and_public_empty_notes(monkeypatch):
 
     monkeypatch.setattr(module, "_exec_region_has_heads", lambda _addr: True)
     monkeypatch.setattr(module, "_ACTIONS", {"rop": lambda *_args, **_kwargs: []})
-    monkeypatch.setattr(module, "_score_gadgets_behavior", lambda *_args: None)
     monkeypatch.setattr(module, "_get_arch", lambda: "x64")
     forced = gadget_tool(action="rop", raw=True)
     assert forced["note"].startswith("raw=True forced")
@@ -336,7 +335,7 @@ def test_gadget_public_dispatch_and_blackboard_opt_in_modes(monkeypatch):
 
     monkeypatch.setattr(module, "_get_arch", lambda: "x64")
     real_classify = module._classify_gadget_chain
-    assert module._score_gadgets_behavior([{"gadget": ""}], "rop") is None
+    assert module._gadget_behavior_signature([{"gadget": ""}]) == ""
     monkeypatch.setattr(module, "_find_shellcode_space", lambda *args: ["RWX region"])
     shell = gadget_tool(action="shellcode_space", address="0x1000")
     assert shell == {
@@ -390,34 +389,16 @@ def test_gadget_public_dispatch_and_blackboard_opt_in_modes(monkeypatch):
         calls.append((args, kwargs))
         return [{"gadget": "pop rdi ; ret"}]
 
-    real_score = module._score_gadgets_behavior
     monkeypatch.setattr(module, "_ACTIONS", {"rop": handler})
     monkeypatch.setattr(module, "_exec_region_has_heads", lambda _addr: True)
-    monkeypatch.setattr(module, "_score_gadgets_behavior", lambda *_args: {"confidence": 0.9})
     normal = gadget_tool(action="rop", limit=1)
     assert normal["count"] == 1 and normal["truncated"] is True
-    assert "exploit_potential" in normal and calls[0][1]["raw"] is False
+    assert normal["_provider_signature"] == "pop rdi ; ret"
+    assert "exploit_potential" not in normal
+    assert calls[0][1]["raw"] is False
 
     monkeypatch.setattr(module, "_ACTIONS", {"rop": lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))})
     assert gadget_tool(action="rop")["error"] is True
-
-    class ExplodingBehavior:
-        ANCHORS = {}
-
-        @classmethod
-        def instance(cls, _embedder):
-            raise RuntimeError("classifier unavailable")
-
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.BehaviorClassifier = ExplodingBehavior
-
-    def make_embedder():
-        return object()
-
-    services.BgeCodeEmbedder = make_embedder
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
-    monkeypatch.setattr(module, "_score_gadgets_behavior", real_score)
-    assert module._score_gadgets_behavior([{"gadget": "ret"}], "rop") is None
 
     real_import = builtins.__import__
 
@@ -433,23 +414,6 @@ def test_gadget_public_dispatch_and_blackboard_opt_in_modes(monkeypatch):
 
 
 def test_gadget_chain_blackboard_and_handler_failure_modes(monkeypatch):
-    classifier = types.SimpleNamespace(
-        ANCHORS={"memory_manipulation": "memory"},
-        clear_cache=lambda: None,
-        classify=lambda *_args, **_kwargs: [],
-    )
-
-    class Behavior:
-        ANCHORS = classifier.ANCHORS
-
-        @classmethod
-        def instance(cls, _embedder):
-            return classifier
-
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.BehaviorClassifier = Behavior
-    services.BgeCodeEmbedder = lambda: types.SimpleNamespace(backend="offline")
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
     monkeypatch.setattr(module, "_get_arch", lambda: "x64")
 
     def broken(*_args, **_kwargs):

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,57 @@ def _resolve_startup_timeout() -> int:
     except (TypeError, ValueError):
         timeout = 240
     return max(1, timeout)
+
+
+def ida_child_environment(parent_environment: Mapping[str, str]) -> dict[str, str]:
+    """Copy the host environment without intelligence configuration or secrets.
+
+    Provider requests run in the MCP host. IDA needs its RPC/session settings,
+    but it must not inherit provider credentials, provider selection, or the
+    path to the host's intelligence configuration.
+    """
+    environment = dict(parent_environment)
+    secret_names = {
+        "TYPESAFE_API_KEY",
+        "TYPESAFE_API_KEY_FILE",
+        "CUSTOM_PROVIDER_API_KEY",
+        "GEMINI_API_KEY",
+    }
+    config_names = {
+        "IDA_MCP_INTELLIGENCE_MODE",
+        "IDA_MCP_INTELLIGENCE_CONFIG",
+        "IDA_MCP_CUSTOM_API_KEY_ENV",
+        "IDA_MCP_CUSTOM_API_KEY_FILE",
+        "IDA_MCP_EXPANSION_MIN_CONFIDENCE",
+    }
+    dynamic_auth_name = str(environment.get("IDA_MCP_CUSTOM_API_KEY_ENV") or "").strip()
+    if dynamic_auth_name:
+        secret_names.add(dynamic_auth_name)
+    # Custom providers may choose a credential environment variable in the
+    # protected provider config. Resolve only local config metadata; never
+    # forward the chosen value into the child process.
+    try:
+        from ..intelligence.providers.config import _read_state_file, resolve_provider_config
+
+        state = _read_state_file()
+        provider_state = state.get("provider") if isinstance(state, Mapping) else None
+        auth_state = provider_state.get("auth") if isinstance(provider_state, Mapping) else None
+        if isinstance(auth_state, Mapping) and auth_state.get("env_var"):
+            secret_names.add(str(auth_state["env_var"]))
+        provider_config = resolve_provider_config()
+        auth = provider_config.auth
+        if auth is not None and auth.source == "env" and auth.env_var:
+            secret_names.add(auth.env_var)
+    except Exception:
+        pass
+    for key in tuple(environment):
+        if (
+            key in secret_names
+            or key in config_names
+            or key.startswith(("IDA_MCP_JEV_", "IDA_MCP_CUSTOM_", "IDA_MCP_GEMINI_"))
+        ):
+            environment.pop(key, None)
+    return environment
 
 
 class RpcQueueTimeout(TimeoutError):
@@ -2383,7 +2435,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             script_path = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_DIR)), "server_script.py")
 
             # Environment for IDA
-            env = os.environ.copy()
+            env = ida_child_environment(os.environ)
             ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir
@@ -2623,7 +2675,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
     def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
             # SCRIPT_DIR is host/server/; server_script.py is at the package root.
             script_path = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_DIR)), "server_script.py")
-            env = os.environ.copy()
+            env = ida_child_environment(os.environ)
             ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir

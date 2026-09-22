@@ -134,9 +134,8 @@ def test_index_backed_analysis_and_backend_failures(monkeypatch):
             return SimpleNamespace(fetchall=lambda: [("0x1000", "main", 32), ("0x2000", "helper", 16)])
 
     index = SimpleNamespace(size=2, _conn=lambda: Conn())  # noqa: PLW0108
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: SimpleNamespace(_get_index=lambda _path: index)
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.i64"))
 
     indexed = comb.search_analyze(scope="outlier", metric="size", offset=0, limit=1)
     assert indexed["ok"] is True and indexed["items"][0]["size"] == 32
@@ -147,11 +146,11 @@ def test_index_backed_analysis_and_backend_failures(monkeypatch):
             raise RuntimeError("database")
 
     broken = SimpleNamespace(size=2, _conn=lambda: BrokenConn())  # noqa: PLW0108
-    services.get_assembler = lambda: SimpleNamespace(_get_index=lambda _path: broken)
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (broken, "/tmp/sample.i64"))
     fallback = comb.search_analyze(scope="outlier", metric="tiny", limit=5)
     assert fallback["ok"] is True and fallback["note"].endswith("direct IDA enumeration.")
 
-    services.get_assembler = lambda: SimpleNamespace(_get_index=lambda _path: None)
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (None, "/tmp/sample.i64"))
     assert comb._get_index_metadata(0x1000) is None
     assert comb._get_embedding_similar(0x1000) == []
 
@@ -177,12 +176,8 @@ def test_semantic_and_vulnerable_index_candidates_are_filtered(monkeypatch):
             return [{"addr": "0x2000", "similarity": 0.6}, {"addr": "bad", "similarity": 0.5}]
 
     index = Index()
-    services = types.ModuleType("ida_pro_mcp.services")
-    services.get_assembler = lambda: SimpleNamespace(
-        _get_index=lambda _path: index,
-        _behavior_classifier=lambda: object(),  # noqa: PLW0108
-    )
-    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
+    lexical = __import__("ida_pro_mcp.ida_mcp.support.lexical_index", fromlist=["get_lexical_index"])
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (index, "/tmp/sample.i64"))
 
     semantic = comb.search_analyze(scope="semantic", pattern="crypto", limit=2)
     assert semantic["ok"] is True and semantic["items"][0]["size"] == 4
@@ -190,6 +185,6 @@ def test_semantic_and_vulnerable_index_candidates_are_filtered(monkeypatch):
     assert vulnerable["ok"] is True and vulnerable["count"] == 1
     assert vulnerable["items"][0]["vuln_type"] == "behavior_candidate"
 
-    services.get_assembler = lambda: (_ for _ in ()).throw(RuntimeError("classifier"))
+    monkeypatch.setattr(lexical, "get_lexical_index", lambda: (None, "/tmp/sample.i64"))
     assert comb.search_analyze(scope="vulnerable", depth=2)["ok"] is True
     assert comb.search_analyze(scope="semantic", pattern="crypto")["error"] is True
