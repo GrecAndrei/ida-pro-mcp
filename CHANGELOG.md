@@ -1,3 +1,19 @@
+## Unreleased — Jev advisor-stage cut
+
+- Added a single host advisor stage (`advisor_stage` / `advisor_gate` shim):
+  deterministic pool first, evidence card, disagreement flag, detail pool caps
+  (triage=4 / normal=8 / deep=16), and `accept_advisory` opt-in only.
+- Primary result lists are no longer soft-reordered by Jev; advisory lives in
+  `advisory_order`. Arch advisory no longer writes processor/bitness into the
+  inferred profile.
+
+## 2026-09-23 — Docs: `detail` is the one compact+truncation dial
+
+- Documented `detail=triage|normal|deep` as the single public dial for compact
+  budgets and truncation scaling (`4e83752`), with QoL as a pure alias and
+  `_compact` / `_response_mode` as deprecated mappings.
+- Noted `_response_max_*` / `_response_batch_compact` as advanced overrides only.
+
 ## 2026-09-23 — Make standalone installer builds self-contained
 
 - Package the project runtime and YAML support into the one-file Linux

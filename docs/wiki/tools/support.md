@@ -28,9 +28,11 @@ the original operation:
   a multi-session connection. Unscoped and previous-session tokens resolve
   cleanly without false expiration from ambient session switches.
 
-**Shipped** with truncation (a)–(c): opaque `cursor` / `next_cursor`,
-`_continue.reason` + `next` + `hint`, and per-tool budgets with
-`detail=triage|normal|deep` (proof keys never soft-truncated). See
+**Shipped:** one `detail=triage|normal|deep` dial for compact + truncation
+budgets; QoL is alias-only; `_compact` / `_response_mode` deprecated.
+Truncation (a)–(c): opaque `cursor` / `next_cursor`, `_continue.reason` +
+`next` + `hint` (proof keys never soft-truncated). Advanced `_response_max_*` /
+`_response_batch_compact` remain overrides only. See
 [Search and retrieval](../search-and-retrieval.md).
 
 `ida_python` is the escape hatch for anything the surface does not cover. It

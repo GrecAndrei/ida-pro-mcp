@@ -75,7 +75,8 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 ## Tool Call Dispatch Pipeline
 
 1. Canonicalize tool name (alias resolution)
-2. Strip and validate response options (`_response_mode`, `_qol_mode`, etc.)
+2. Strip and validate response options (`detail=triage|normal|deep`; legacy
+   `_compact` / `_response_mode` / `_qol_mode` map into it)
 3. Policy audit log
 4. Phase-gate preflight — skipped when `_risk_ack=true`
 5. Route to host-side handler (session/blackboard/workflow/etc.) or forward to IDA via TCP RPC

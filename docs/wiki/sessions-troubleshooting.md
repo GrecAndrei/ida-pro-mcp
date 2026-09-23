@@ -55,7 +55,7 @@ fields are listed) rather than repeating the original operation. Repeating can
 redo expensive analysis and may produce a different state after an edit.
 Continuation tokens have a 1-hour sliding TTL, retain up to 500 active tokens,
 expose `reason` / `next` / `hint`, report `has_more` / `done`, honor per-tool
-budgets via `detail=triage|normal|deep`, and support in-flight search via
+budgets via the one `detail=triage|normal|deep` dial (QoL/`_compact` are aliases), and support in-flight search via
 `pattern="..."`. See [Search and retrieval](search-and-retrieval.md).
 
 ## Intelligence or advisory scoring is unavailable
