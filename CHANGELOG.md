@@ -1,3 +1,18 @@
+## 2026-09-23 — Complete Jev advisor and Blackboard integration
+
+- Routed provider-backed choices and ranking through the shared host advisor
+  gate. Deterministic order remains primary by default; `advisory_order` and a
+  bounded evidence card include disagreement, confidence, budget use, and the
+  fail-closed order. `detail` caps pools at 4 / 8 / 16 for triage / normal / deep.
+- Added the explicit `accept_advisory` option to `ida_semantic_search` and
+  `ida_next_target`; the host consumes it and never forwards it to IDA RPC.
+- Completed the background Blackboard advisory path through the same gate. It
+  interleaves bounded findings, observed xrefs, and generated relations, stores
+  recommendations and evidence in Blackboard machinery, and never changes
+  finding state or links. Provider failures retain deterministic results.
+- Architecture advice remains a hypothesis and no longer populates inferred
+  processor, bitness, or endianness fields.
+
 ## 2026-09-23 — Docs: promote Jev advisor v2; Twin Board Planned
 
 - Promoted wiki/guide intelligence docs off Planned for the shipped advisor
@@ -5,15 +20,6 @@
   evidence card, disagreement, pool caps 4/8/16, arch suggest-only.
 - Added `docs/wiki/twin-board.md` as **Planned** for experimental
   `experimental/twin-board-v1` (not shipped on master).
-
-## Unreleased — Jev advisor-stage cut
-
-- Added a single host advisor stage (`advisor_stage` / `advisor_gate` shim):
-  deterministic pool first, evidence card, disagreement flag, detail pool caps
-  (triage=4 / normal=8 / deep=16), and `accept_advisory` opt-in only.
-- Primary result lists are no longer soft-reordered by Jev; advisory lives in
-  `advisory_order`. Arch advisory no longer writes processor/bitness into the
-  inferred profile.
 
 ## 2026-09-23 — Docs: `detail` is the one compact+truncation dial
 

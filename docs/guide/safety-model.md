@@ -160,16 +160,18 @@ an HTTP response-splitting primitive.
 - IDA child processes do not inherit Jev/custom/Gemini credential variables,
   provider selection, provider configuration paths, or provider-specific
   settings.
-- Provider answers annotate sibling `advisory_order` only; the primary list
-  stays deterministic unless the operator opts in via
-  `accept_advisory_requested`. They cannot satisfy `risk_ack`, authorize
-  mutations, write blackboard findings, apply GP/load-base into the IDB, or
-  replace deterministic lexical results when unavailable (fail closed).
+- Provider answers can annotate bounded results and return a sibling
+  `advisory_order` with an evidence card. Primary order remains deterministic
+  unless the caller explicitly sends `accept_advisory=true`; unavailable or
+  malformed providers fail closed to the deterministic order. Provider answers
+  cannot satisfy `risk_ack`, authorize mutations, write blackboard findings,
+  apply GP/load-base into the IDB, or set architecture processor options.
 - Natural-language queries are reduced to bounded identifier signatures
   before a provider request; raw operator prompts and decompilation text are
   not sent.
-- Architecture advisory **suggests only** — it does not write processor /
-  bitness / endian into the inferred spawn profile (`inference_applied=false`).
+- Architecture advisory suggests only (`inference_applied=false`). It never
+  writes processor, bitness, or endianness into the inferred profile or IDB;
+  IDA's processor metadata and explicit operator choices remain authoritative.
 
 Outcome: IDA analysis does not own provider transport or receive the host's
 provider credentials; advisory answers remain non-authorizing.

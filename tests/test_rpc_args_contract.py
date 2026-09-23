@@ -41,6 +41,7 @@ class TestPrepareRpcArgs:
                 "_risk_ack": True,
                 "risk_ack": True,
                 "_response_mode": "compact",
+                "accept_advisory": True,
             },
             schemas_data.TOOL_ARG_SCHEMAS,
         )
@@ -48,6 +49,7 @@ class TestPrepareRpcArgs:
         assert "_risk_ack" not in out
         assert "risk_ack" not in out
         assert "_response_mode" not in out
+        assert "accept_advisory" not in out
         assert out["action"] == "find"
         assert out["pattern"] == "recv"
 

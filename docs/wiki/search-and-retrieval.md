@@ -19,7 +19,16 @@ decompilation and does not download or start a model. `ida_index_status` and
 Provider scoring is advisory and optional. `ida_intelligence_status` reports
 whether Jev, custom, or disabled mode is selected. A disabled, unavailable,
 malformed, timed-out, or budget-blocked provider leaves lexical order intact and
-returns a structured advisory status rather than inventing a score.
+returns a structured advisory status rather than inventing a score. Successful
+scoring returns a sibling `advisory_order` and bounded evidence card; the
+primary list keeps deterministic order unless the caller explicitly sets
+`accept_advisory=true`. This host-only option is available on
+`ida_semantic_search` and `ida_next_target`, and is never sent to IDA.
+
+The shared advisor stage uses `detail` to cap its candidate pool: triage keeps
+up to 4 candidates, normal up to 8, and deep up to 16. Evidence records bounded
+signatures, confidence, provider budget use, whether orders disagreed, and the
+deterministic fail-closed order.
 
 `ida_reranker_status` remains a compatibility alias for the typed-question
 scoring capability. Vector-family clustering is intentionally not part of the
@@ -85,7 +94,7 @@ Shipped behavior today (truncation redesign (a)–(c)):
 
 ## Planned (not shipped)
 
-- Further operator-facing polish beyond `reason` / `next` / `hint` if clients
-  need a dedicated `why_truncated` alias
-- Removing advanced `_response_max_*` / `_response_batch_compact` overrides from
-  the public surface once clients all use `detail=`
+- Further truncation guidance polish beyond `reason` / `next` / `hint` if
+  clients need a dedicated `why_truncated` alias
+- Removing advanced `_response_max_*` / `_response_batch_compact` overrides
+  from the public surface once clients all use `detail=`

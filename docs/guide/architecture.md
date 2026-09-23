@@ -66,12 +66,12 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
   - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
-
 Blackboard organization runs in a host worker after a successful finding
 mutation. It receives bounded signatures and structured metadata, recommends
 lanes, and ranks only xrefs/relations already present in stored evidence or
 graph snapshots. `workspace_brief` surfaces the latest result; provider failure
-leaves deterministic findings and links unchanged.
+leaves deterministic findings and links unchanged. This work also passes
+through the shared advisor gate and stores its evidence card with the advisory.
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations
@@ -83,8 +83,9 @@ leaves deterministic findings and links unchanged.
 ## Tool Call Dispatch Pipeline
 
 1. Canonicalize tool name (alias resolution)
-2. Strip and validate response options (`detail=triage|normal|deep`; legacy
-   `_compact` / `_response_mode` / `_qol_mode` map into it)
+2. Strip and validate response controls (`detail=triage|normal|deep`,
+   `accept_advisory`; legacy `_compact` / `_response_mode` / `_qol_mode` map
+   into `detail`)
 3. Policy audit log
 4. Phase-gate preflight — skipped when `_risk_ack=true`
 5. Route to host-side handler (session/blackboard/workflow/etc.) or forward to IDA via TCP RPC
@@ -95,7 +96,7 @@ leaves deterministic findings and links unchanged.
    never write blackboard findings)
 9. Host: deterministic context injection and optional advisor-stage metadata
    (primary order untouched; sibling `advisory_order` + evidence card;
-   `applied` only on `accept_advisory_requested`)
+   `applied` only on explicit `accept_advisory=true`)
 10. Return MCP content
 
 Provider configuration and credential variables are removed from the IDA

@@ -597,15 +597,6 @@ class BlackboardOrchestrator:
 
         xrefs = self._blackboard_xref_candidates(store, rows, by_id, _extract_signature)
         relations = self._blackboard_relation_candidates(findings, tag_sets)
-        if not findings and not xrefs and not relations:
-            return {
-                "status": "ready",
-                "source": "provider_advisory",
-                "organization": [],
-                "xrefs": [],
-                "relations": [],
-                "reason": "no_findings_or_observed_relations",
-            }
         response = organize_blackboard(
             {"workspace_signature": " ".join(item["signature"] for item in findings[:8])[:1024]},
             findings,
@@ -614,7 +605,7 @@ class BlackboardOrchestrator:
             session_id=session_id,
         )
         if not isinstance(response, dict) or response.get("error"):
-            return {
+            unavailable = {
                 "status": "unavailable",
                 "source": "provider_advisory",
                 "error": (
@@ -625,7 +616,12 @@ class BlackboardOrchestrator:
                 "organization": [],
                 "xrefs": [],
                 "relations": [],
+                "applied": False,
+                "disagreement": False,
             }
+            if isinstance(response, dict) and isinstance(response.get("evidence"), dict):
+                unavailable["evidence"] = response["evidence"]
+            return unavailable
         response["status"] = "ready"
         response["candidate_counts"] = {
             "findings": len(findings),

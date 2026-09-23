@@ -17,11 +17,17 @@ automatically share the same investigation store.
 | `ida_list_findings` | List workspace items with lifecycle, kind, and category filters. | — |
 | `ida_search_findings(query=...)` | Search workspace items by keywords or semantic meaning. | `query` |
 | `ida_update_finding(entry_id=...)` | Revise an item's content, confidence, or transition its lifecycle status. | `entry_id` |
-| `ida_next_target` | Suggest what to analyze next using a named strategy (`unresolved`, `frontier`, `stale`, `conflict`, `coverage`). | Deterministic eligibility first; optional Jev/custom may attach an `advisory_ranking` crumb. Full evidence card / disagreement flag are **Planned**. |
+| `ida_next_target` | Suggest what to analyze next using a named strategy (`unresolved`, `frontier`, `stale`, `conflict`, `coverage`). | Deterministic eligibility first; optional Jev/custom returns `advisory_order` and an evidence card. Set `accept_advisory=true` to apply a valid reorder. |
 | `ida_analysis_brief` | Summarize confirmed knowledge, open questions, conflicts, stale claims, and coverage. | — |
 | `ida_export_findings` | Export findings as machine-readable JSON or human-readable Markdown (`format="markdown"`). | — |
 | `ida_publish_findings` | Write confirmed findings into the IDB as repeatable comments and symbol names. | `risk_ack` |
 | `ida_import_annotations` | Adopt names and comments already in the IDB as confirmed findings. | — |
+
+After a finding changes, the host may organize bounded finding metadata in a
+background advisory pass. It recommends lanes and scores only xrefs and
+relations already present in stored evidence or graph snapshots. The latest
+result is included in `ida_analysis_brief`; it remains advisory and does not
+change finding state, evidence, provenance, or links.
 
 ---
 

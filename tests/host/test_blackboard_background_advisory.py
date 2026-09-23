@@ -29,6 +29,14 @@ def test_blackboard_writes_refresh_advisory_in_background(tmp_path, monkeypatch)
             "organization": [],
             "xrefs": [],
             "relations": [],
+            "evidence": {
+                "signatures_seen": [],
+                "budget_burn": {},
+                "confidence": None,
+                "fail_closed_order": [],
+                "applied": False,
+                "disagreement": False,
+            },
         }
 
     monkeypatch.setattr(advisory, "organize_blackboard", fake_organize)
@@ -69,6 +77,7 @@ def test_blackboard_writes_refresh_advisory_in_background(tmp_path, monkeypatch)
     assert snapshot["candidate_counts"]["findings"] == 2
     assert snapshot["candidate_counts"]["xrefs"] >= 1
     assert snapshot["candidate_counts"]["relations"] >= 1
+    assert snapshot["evidence"]["applied"] is False
     assert len(seen) >= 2
     assert all(
         "RAW_DECOMP" not in str(group)

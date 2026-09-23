@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 from ida_pro_mcp.host.intelligence import advisory
 from ida_pro_mcp.host.intelligence.advisory import organize_blackboard
-from ida_pro_mcp.host.intelligence.providers import Answer, ProviderResponse, Usage
+from ida_pro_mcp.host.intelligence.providers import (
+    Answer,
+    ProviderResponse,
+    ProviderUnavailableError,
+    Usage,
+)
 
 
 class _Provider:
@@ -15,11 +20,13 @@ class _Provider:
     def __init__(self, *, invalid_lane: bool = False):
         self.questions = []
         self.state = None
+        self.call_kwargs = {}
         self.invalid_lane = invalid_lane
 
-    def invoke(self, state, questions, **_kwargs):
+    def invoke(self, state, questions, **kwargs):
         self.state = state
         self.questions = list(questions)
+        self.call_kwargs = dict(kwargs)
         answers = {}
         for question in self.questions:
             if question.type == "choice":
@@ -82,6 +89,11 @@ def test_organize_blackboard_returns_only_bounded_observed_recommendations():
     ]
     assert result["xrefs"][0]["to_address"] == "0x1010"
     assert result["relations"][0]["entry_b"] == "finding-2"
+    assert result["evidence"]["applied"] is False
+    assert result["evidence"]["fail_closed_order"]
+    assert result["evidence"]["budget_burn"]["total_tokens"] == 2
+    assert provider.call_kwargs["operation"] == "blackboard_organize"
+    assert provider.call_kwargs["deadline_seconds"] == 8.0
     serialized = str([question.to_wire() for question in provider.questions])
     assert "must never be sent" not in serialized
     assert all("content" not in question.instructions["candidate"] for question in provider.questions)
@@ -98,6 +110,58 @@ def test_organize_blackboard_rejects_provider_lanes_outside_fixed_choices():
 
     assert result["error"] is True
     assert result["code"] == "PROVIDER_PROTOCOL_ERROR"
+
+
+def test_organize_blackboard_respects_provider_question_limit_and_interleaves_candidates():
+    provider = _Provider()
+    provider.config = SimpleNamespace(
+        model="fixture-model", max_questions=2, max_input_chars=32_768
+    )
+
+    result = organize_blackboard(
+        {},
+        [
+            {"entry_id": "finding-1", "signature": "first", "current_lane": "lane_now"},
+            {"entry_id": "finding-2", "signature": "second", "current_lane": "lane_now"},
+        ],
+        [
+            {
+                "entry_id": "finding-1",
+                "from_address": "0x1000",
+                "to_address": "0x1010",
+                "from_signature": "xref signature",
+            }
+        ],
+        [],
+        provider=provider,
+    )
+
+    assert result["ok"] is True
+    assert [question.question_id for question in provider.questions] == [
+        "finding_0",
+        "xref_0",
+    ]
+
+
+def test_organize_blackboard_provider_selection_failure_preserves_bounded_evidence(monkeypatch):
+    def unavailable(**_kwargs):
+        raise ProviderUnavailableError("provider is unavailable")
+
+    monkeypatch.setattr(advisory, "_provider", unavailable)
+    result = organize_blackboard(
+        {},
+        [{"entry_id": "finding-1", "signature": "bounded parser signature"}],
+        [],
+        [],
+    )
+
+    assert result["error"] is True
+    assert result["code"] == "PROVIDER_UNAVAILABLE"
+    assert result["evidence"]["applied"] is False
+    assert result["evidence"]["signatures_seen"] == [
+        {"id": "finding_0", "preview": "bounded parser signature"}
+    ]
+    assert result["message"] == "provider is unavailable"
 
 
 def test_organize_blackboard_fails_closed_for_provider_limits_and_responses():
@@ -130,11 +194,10 @@ def test_organize_blackboard_fails_closed_for_provider_limits_and_responses():
             raise RuntimeError("private provider detail")
 
     failed = organize_blackboard({}, finding, [], [], provider=FailedProvider())
-    assert failed == {
-        "error": True,
-        "code": "PROVIDER_ERROR",
-        "message": "blackboard organization advisory failed",
-    }
+    assert failed["error"] is True
+    assert failed["code"] == "PROVIDER_ERROR"
+    assert failed["evidence"]["applied"] is False
+    assert "private provider detail" not in str(failed)
 
     assert advisory._bounded_probability(float("nan")) == 0.0
 

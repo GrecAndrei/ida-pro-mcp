@@ -286,6 +286,14 @@ IDB = {
     "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client.",
 }
 LIMIT = {"type": "integer", "description": "Maximum result items to return."}
+ACCEPT_ADVISORY = {
+    "type": "boolean",
+    "description": (
+        "Opt in to apply Jev/custom advisory_order to the primary result list. "
+        "Default false keeps deterministic order and returns advisory_order "
+        "and evidence as siblings."
+    ),
+}
 CALC_VALUE = {
     # Use a string for numeric values as well as addresses and symbols.  Vertex
     # converts JSON Schema type unions into ``any_of``, which cannot be
@@ -809,6 +817,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                         "Disabled or unavailable providers preserve lexical order."
                     ),
                 },
+                "accept_advisory": ACCEPT_ADVISORY,
                 "start": {"type": "string", "description": "Inclusive start address for result filtering."},
                 "end": {"type": "string", "description": "Exclusive end address for result filtering."},
                 "address": {"type": "string", "description": "Center address or function for radius filtering."},
@@ -1466,7 +1475,8 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
             },
             "query": {"type": "string", "description": "Optional theme; deterministic keyword overlap reorders candidates first, then Jev/custom may advisory-rank them without dropping any."},
             "limit": LIMIT,
-        }),
+            "accept_advisory": ACCEPT_ADVISORY,
+            }),
         example={"strategy": "coverage", "limit": 10},
         backend_tool="blackboard",
         backend_action="next_target",

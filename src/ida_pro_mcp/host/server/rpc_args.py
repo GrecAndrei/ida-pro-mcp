@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from ..errors import MCPError, make_error
 
-_HOST_ONLY_ARG_KEYS = frozenset({"risk_ack"})
+_HOST_ONLY_ARG_KEYS = frozenset({"risk_ack", "accept_advisory"})
 
 
 def prepare_rpc_args(
@@ -20,7 +20,8 @@ def prepare_rpc_args(
 ) -> dict[str, Any]:
     """Build the kwargs dict that will be sent over the IDA RPC bridge.
 
-    - Drops host-only keys (``risk_ack`` and anything starting with ``_``).
+    - Drops host-only keys (``risk_ack``, ``accept_advisory``, and anything
+      starting with ``_``).
     - If the tool has a non-empty arg schema, any remaining key not in the
       schema raises via a structured error dict (``error: true``).
     - If the schema is missing or empty, all non-underscore keys pass through

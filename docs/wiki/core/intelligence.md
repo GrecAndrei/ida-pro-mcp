@@ -47,7 +47,18 @@ variables are removed from the IDA child environment.
 (`ask_behavior`, `rank_targets`, typed-question rerank, arch / GP / load-base)
 route through `host/intelligence/advisor_stage.py` / `advisor_gate.py`
 (`invoke_advisor`). Existing operation names are kept as a **shim**; a
-future release may hard-break peppered paths.
+future release may hard-break peppered paths. The gate caps candidate pools
+from the shared `detail` setting, keeps deterministic order primary, and
+returns a sibling `advisory_order` with an evidence card. `accept_advisory=true`
+is the explicit opt-in that applies a valid reorder. The card records bounded
+signatures, budget use, confidence, disagreement, and deterministic fail-closed
+order.
+
+Background Blackboard organization uses the same gate after finding changes.
+It recommends lanes for bounded findings and scores only observed xrefs and
+relations already present in stored evidence or graph snapshots. The latest
+result is surfaced through `ida_analysis_brief` / `workspace_brief` and stored
+in Blackboard machinery; it does not edit findings, evidence, or links.
 
 A missing Jev credential or unavailable Jev endpoint returns `JEV_UNAVAILABLE`.
 Malformed provider responses return `PROVIDER_PROTOCOL_ERROR`; invalid mode,
@@ -68,8 +79,10 @@ not run a model or persist raw decompilation. Scope with `query`, `ranges`,
 `ida_semantic_search` is also a compatibility name. It performs deterministic
 lexical signature search and can optionally ask Jev/custom to score a bounded
 candidate pool. Provider failure, timeout, or budget blocking preserves the
-lexical order and reports the advisory failure; it never turns an unavailable
-provider into a fake semantic score.
+lexical order and reports the advisory failure. A successful score returns
+`advisory_order` and an evidence card. Primary order remains lexical unless
+the caller sends `accept_advisory=true`; the option is host-only and is not
+sent to IDA.
 
 `ida_next_target` uses the blackboard's deterministic strategy to choose the
 eligible candidate set (primary order). When Jev/custom is ready, it may score
@@ -78,6 +91,9 @@ eligibility, mutation policy, and all writes remain deterministic and
 analyst-controlled. Provider failure leaves the primary order intact with
 `applied=false`. Ranking metadata is an evidence card (see below), not a
 silent reorder of the primary list.
+
+Callers can explicitly set `accept_advisory=true` to use a valid advisory
+order as the primary list; the option remains host-side.
 
 `ida_reranker_status` reports the configured typed-question scoring capability
 as a compatibility alias. Vector-family clustering is not part of the current

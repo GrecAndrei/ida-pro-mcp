@@ -99,6 +99,7 @@ def test_semantic_search_translates_address_scope_and_score_controls():
         "radius": 1024,
         "min_score": 0.35,
         "limit": 12,
+        "accept_advisory": True,
     }
     assert not operation.validate(arguments)
     assert operation.to_backend_call(arguments) == (
@@ -110,6 +111,23 @@ def test_semantic_search_translates_address_scope_and_score_controls():
             "radius": 1024,
             "min_score": 0.35,
             "limit": 12,
+            "accept_advisory": True,
+        },
+    )
+
+
+def test_next_target_accepts_explicit_advisory_opt_in():
+    operation = get_agent_operation("ida_next_target")
+    assert operation is not None
+    arguments = {"strategy": "coverage", "limit": 10, "accept_advisory": True}
+    assert not operation.validate(arguments)
+    assert operation.to_backend_call(arguments) == (
+        "blackboard",
+        {
+            "action": "next_target",
+            "strategy": "coverage",
+            "limit": 10,
+            "accept_advisory": True,
         },
     )
 

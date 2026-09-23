@@ -29,11 +29,10 @@ In `disabled` mode, or when the provider is unavailable or malformed, the
 result fails closed and asks the analyst to provide explicit architecture
 options. No RISC-V host-side opcode/bitness heuristic is treated as authority.
 
-**Current footgun:** a successful advisory may still fill `processor` /
-`bitness` / `endian` into the **inferred profile** used at open time. Treat
-those fields as unverified hypotheses, not as IDA processor selection.
-**Planned:** no arch auto-fill until a unified advisor stage, evidence card,
-and disagreement flag ship (see [Intelligence](core/intelligence.md)).
+Architecture advice now goes through the shared host advisor stage and remains
+a hypothesis with an evidence card. It never fills `processor` / `bitness` /
+`endian` into the inferred profile or selects an IDA processor. Follow IDA's
+processor metadata and require an explicit operator choice.
 
 Provider transport never logs or persists raw decompilation, credentials,
 prompt payloads, completions, or response bodies. Custom origins require an

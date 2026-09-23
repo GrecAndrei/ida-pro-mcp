@@ -514,9 +514,16 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 res = {"ok": True, **res}
             if isinstance(res, dict) and not is_error_result(res):
                 try:
+                    # `accept_advisory` is a host-only control. Keep it out of
+                    # the IDA RPC payload while making the caller's explicit
+                    # choice available to the shared advisor stage.
+                    advisory_args = rpc_args
+                    if "accept_advisory" in kwargs:
+                        advisory_args = dict(rpc_args)
+                        advisory_args["accept_advisory"] = kwargs["accept_advisory"]
                     res = apply_rpc_advisory(
                         tool_name,
-                        rpc_args,
+                        advisory_args,
                         res,
                         session_id=_sid,
                         elapsed_seconds=max(0.0, time.monotonic() - _advisory_started),

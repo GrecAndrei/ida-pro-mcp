@@ -150,6 +150,33 @@ def test_call_tool_sends_host_expansion_metadata_and_postprocesses_provider_resu
     assert result["advisory_applied"] is True
 
 
+def test_accept_advisory_stays_host_side_and_reaches_advisor(monkeypatch):
+    host = _DispatchHost()
+    host._seed_index_from_matching_binary = lambda _session: None
+    seen = {}
+
+    def apply(tool, args, result, *, session_id, elapsed_seconds):
+        seen.update(tool=tool, args=dict(args), session_id=session_id)
+        return result
+
+    monkeypatch.setattr(dispatch_mod, "apply_rpc_advisory", apply)
+    monkeypatch.setattr(dispatch_mod, "truncate_response", lambda result, **_kwargs: result)
+    result = host.call_tool(
+        "search",
+        "target",
+        action="nl",
+        query="find parser",
+        accept_advisory=True,
+    )
+
+    payload, _port, _kwargs = host.sent[-1]
+    assert "accept_advisory" not in payload["args"]
+    assert seen["tool"] == "search"
+    assert seen["args"]["accept_advisory"] is True
+    assert seen["session_id"] == "ABC12345"
+    assert result["answer"] == 1
+
+
 def test_call_tool_rejects_missing_ownership_safe_mode_reload_and_start_errors():
     host = _DispatchHost()
     host._resolve_session_from_idb_ref = lambda _ref: None
