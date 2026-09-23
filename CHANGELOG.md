@@ -1,3 +1,9 @@
+## 2026-09-23 — Keep release metadata aligned
+
+- Updated the plugin manifest for v1.0.0a4 and made the release-version
+  contract check validate the project version against its published metadata
+  and installer defaults.
+
 ## 2026-09-23 — Prepare v1.0.0a4
 
 - Advanced the alpha version and release metadata to v1.0.0a4.
