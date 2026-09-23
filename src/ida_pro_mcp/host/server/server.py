@@ -229,53 +229,6 @@ class IDAMCPServer(
             min_value=0,
             max_value=5000,
         )
-        self._qol_profiles = {
-            "tiny": {
-                "detail": "triage",
-                "mode": "compact",
-                "max_items": 24,
-                "max_string": 800,
-                "char_budget": 12_000,
-                "drop_empty": True,
-                "drop_false": True,
-                "drop_ok": False,
-                "dedupe_counts": True,
-                "strip_meta": True,
-                "table_mode": False,
-                "batch_compact": True,
-                "error_details": "none",
-            },
-            "balanced": {
-                "detail": "deep" if self.default_response_mode == "full" else "normal",
-                "mode": self.default_response_mode,
-                "max_items": self.default_compact_max_items,
-                "max_string": self.default_compact_max_string,
-                "char_budget": self.default_compact_char_budget,
-                "drop_empty": True,
-                "drop_false": True,
-                "drop_ok": False,
-                "dedupe_counts": True,
-                "strip_meta": True,
-                "table_mode": self.default_table_mode,
-                "batch_compact": self.default_batch_compact,
-                "error_details": self.default_error_detail_level,
-            },
-            "debug": {
-                "detail": "deep",
-                "mode": "full",
-                "max_items": 10_000,
-                "max_string": 500_000,
-                "char_budget": 0,
-                "drop_empty": False,
-                "drop_false": False,
-                "drop_ok": False,
-                "dedupe_counts": False,
-                "strip_meta": False,
-                "table_mode": False,
-                "batch_compact": False,
-                "error_details": "full",
-            },
-        }
         self._next_cache: dict[str, dict[str, Any]] = {}
         self._next_cache_ttl_seconds = 1800
         self._activity_log: list[dict[str, Any]] = []

@@ -377,15 +377,15 @@ GLOBAL_RESPONSE_CONTROLS = {
     },
     "_response_max_items": {
         "type": "integer",
-        "description": "Max list items retained in compact mode.",
+        "description": "Advanced override for max list items. Prefer detail=; overrides detail-derived budget.",
     },
     "_response_max_string": {
         "type": "integer",
-        "description": "Max string length retained in compact mode.",
+        "description": "Advanced override for max string length. Prefer detail=; overrides detail-derived budget.",
     },
     "_response_char_budget": {
         "type": "integer",
-        "description": "Approximate max output chars before truncation middleware applies.",
+        "description": "Advanced override for char budget before truncation. Prefer detail=; overrides detail-derived budget.",
     },
     "_response_table": {
         "type": "boolean",
@@ -393,7 +393,7 @@ GLOBAL_RESPONSE_CONTROLS = {
     },
     "_response_batch_compact": {
         "type": "boolean",
-        "description": "Compact batch envelopes in compact mode.",
+        "description": "Advanced override for batch envelope compaction. Prefer detail= (triage/normal enable, deep disables).",
     },
     "_error_details": {
         "type": "string",
@@ -403,7 +403,10 @@ GLOBAL_RESPONSE_CONTROLS = {
     "_qol_mode": {
         "type": "string",
         "enum": ["tiny", "balanced", "debug"],
-        "description": "QoL profile shortcut for response compaction presets.",
+        "description": (
+            "Deprecated alias of detail: tiny→triage, balanced→normal, debug→deep. "
+            "Prefer detail=. Compact budgets derive from detail."
+        ),
     },
 }
 

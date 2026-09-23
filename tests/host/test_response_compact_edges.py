@@ -332,3 +332,37 @@ def test_detail_dial_wins_over_compact_aliases():
     _args, from_qol = host._extract_response_options({"qol_mode": "debug"})
     assert from_qol["detail"] == "deep"
     assert from_qol["mode"] == "full"
+
+
+def test_detail_drives_compact_budgets():
+    host = _CompactHost()
+    _a, triage = host._extract_response_options({"detail": "triage"})
+    _a, normal = host._extract_response_options({"detail": "normal"})
+    _a, deep = host._extract_response_options({"detail": "deep"})
+
+    assert triage["detail"] == "triage"
+    assert normal["detail"] == "normal"
+    assert deep["detail"] == "deep"
+    # triage and normal both compact-mode, but budgets must differ
+    assert triage["mode"] == normal["mode"] == "compact"
+    assert triage["max_items"] < normal["max_items"]
+    assert triage["max_string"] < normal["max_string"]
+    assert triage["char_budget"] < normal["char_budget"]
+    assert deep["mode"] == "full"
+    assert deep["char_budget"] == 0
+    assert deep["max_items"] == 10_000
+
+
+def test_qol_is_pure_alias_of_detail():
+    host = _CompactHost()
+    _a, from_qol = host._extract_response_options({"qol_mode": "tiny"})
+    _a, from_detail = host._extract_response_options({"detail": "triage"})
+    assert from_qol["detail"] == "triage"
+    assert from_qol["max_items"] == from_detail["max_items"]
+    assert from_qol["max_string"] == from_detail["max_string"]
+    assert from_qol["char_budget"] == from_detail["char_budget"]
+
+    # Explicit detail wins over qol alias — no desync with balanced preload
+    _a, mixed = host._extract_response_options({"qol_mode": "balanced", "detail": "triage"})
+    assert mixed["detail"] == "triage"
+    assert mixed["max_items"] == from_detail["max_items"]

@@ -16,6 +16,63 @@ from ..errors import is_error_result
 
 
 class ServerResponseCompactMixin:
+    def _detail_compact_budgets(self, detail: str) -> dict[str, Any]:
+        """Compact budgets derived from the single detail dial."""
+        base_items = int(self.default_compact_max_items)
+        base_string = int(self.default_compact_max_string)
+        base_chars = int(self.default_compact_char_budget)
+        if detail == "triage":
+            return {
+                "max_items": max(1, base_items // 2),
+                "max_string": max(64, base_string // 2),
+                "char_budget": max(500, base_chars // 2),
+                "drop_empty": True,
+                "drop_false": True,
+                "drop_ok": False,
+                "dedupe_counts": True,
+                "strip_meta": True,
+                "table_mode": False,
+                "batch_compact": True,
+                "error_details": "none",
+            }
+        if detail == "deep":
+            return {
+                "max_items": 10_000,
+                "max_string": 500_000,
+                "char_budget": 0,  # sentinel: no compact char budget
+                "drop_empty": False,
+                "drop_false": False,
+                "drop_ok": False,
+                "dedupe_counts": False,
+                "strip_meta": False,
+                "table_mode": False,
+                "batch_compact": False,
+                "error_details": "full",
+            }
+        # normal
+        return {
+            "max_items": base_items,
+            "max_string": base_string,
+            "char_budget": base_chars,
+            "drop_empty": True,
+            "drop_false": True,
+            "drop_ok": False,
+            "dedupe_counts": True,
+            "strip_meta": True,
+            "table_mode": bool(self.default_table_mode),
+            "batch_compact": bool(self.default_batch_compact),
+            "error_details": self.default_error_detail_level,
+        }
+
+    @staticmethod
+    def _qol_to_detail(qol_mode: str, default_response_mode: str = "compact") -> str:
+        if qol_mode == "tiny":
+            return "triage"
+        if qol_mode == "debug":
+            return "deep"
+        # balanced / unknown
+        return "deep" if default_response_mode == "full" else "normal"
+
     def _extract_response_options(self, args: Any) -> tuple[dict, dict]:
         if not isinstance(args, dict):
             return {}, self._default_response_options()
@@ -23,22 +80,15 @@ class ServerResponseCompactMixin:
         exec_args = dict(args)
         opts = self._default_response_options()
 
-        qol_mode = self._pop_first(exec_args, ["_qol_mode", "qol_mode"], None)
-        if isinstance(qol_mode, str):
-            qol_mode = qol_mode.strip().lower()
-        if qol_mode in {"tiny", "balanced", "debug"}:
-            profile = self._qol_profiles.get(qol_mode, {})
-            if profile:
-                opts.update(profile)
-        else:
-            qol_mode = self.default_qol_mode
-            profile = self._qol_profiles.get(qol_mode, {})
-            if profile:
-                opts.update(profile)
-        opts["qol_mode"] = qol_mode
+        # QoL is a pure alias of detail (no independent budget preload).
+        qol_raw = self._pop_first(exec_args, ["_qol_mode", "qol_mode"], None)
+        qol_mode = None
+        if isinstance(qol_raw, str):
+            qol_l = qol_raw.strip().lower()
+            if qol_l in {"tiny", "balanced", "debug"}:
+                qol_mode = qol_l
 
-        # One dial: detail=triage|normal|deep (shared with truncation + Jev).
-        # Legacy _compact / _response_mode / compact / response_mode map into it.
+        # One dial: detail=triage|normal|deep.
         detail = self._pop_first(exec_args, ["detail", "_detail"], None)
         if isinstance(detail, str):
             detail = detail.strip().lower()
@@ -60,29 +110,29 @@ class ServerResponseCompactMixin:
                 detail = "deep"
             elif legacy_mode == "compact":
                 detail = "normal"
-            elif qol_mode == "tiny":
-                detail = "triage"
-            elif qol_mode == "debug":
-                detail = "deep"
+            elif qol_mode is not None:
+                detail = self._qol_to_detail(qol_mode, self.default_response_mode)
             else:
-                # Default response mode compact → normal; full → deep.
-                default_mode = str(opts.get("mode", self.default_response_mode) or "compact")
+                default_mode = str(self.default_response_mode or "compact")
                 detail = "deep" if default_mode == "full" else "normal"
 
+        # Keep qol_mode as the reverse alias label for telemetry/debug.
+        if qol_mode is None:
+            qol_mode = {"triage": "tiny", "normal": "balanced", "deep": "debug"}.get(
+                detail, self.default_qol_mode
+            )
+        opts["qol_mode"] = qol_mode
         opts["detail"] = detail
-        # Internal compact machinery still keys off mode; derive it from detail.
-        # detail is the public dial; mode is an internal alias (deep→full, else compact).
         mode = "full" if detail == "deep" else "compact"
         opts["mode"] = mode
         compact_mode = mode == "compact"
 
+        # Compact budgets come from detail — not from a separate QoL preload.
+        opts.update(self._detail_compact_budgets(detail))
+
         detail_level = self._pop_first(exec_args, ["_error_details"], None)
         if detail_level is None:
-            detail_level = (
-                opts.get("error_details", self.default_error_detail_level)
-                if compact_mode
-                else "full"
-            )
+            detail_level = opts.get("error_details", self.default_error_detail_level)
         if isinstance(detail_level, str):
             detail_level = detail_level.strip().lower()
         if detail_level not in {"none", "basic", "full"}:
@@ -100,38 +150,31 @@ class ServerResponseCompactMixin:
         max_string_raw = self._pop_first(exec_args, ["_response_max_string"], None)
         char_budget_raw = self._pop_first(exec_args, ["_response_char_budget"], None)
 
-        opts["max_items"] = (
-            _bounded_int(
-                max_items_raw,
-                int(opts.get("max_items", self.default_compact_max_items)),
-                min_value=1,
-                max_value=10_000,
+        # Explicit _response_max_* remain advanced overrides only when passed.
+        if max_items_raw is not None:
+            opts["max_items"] = _bounded_int(
+                max_items_raw, int(opts["max_items"]), min_value=1, max_value=10_000
             )
-            if compact_mode or max_items_raw is not None
-            else 10_000
-        )
-        opts["max_string"] = (
-            _bounded_int(
-                max_string_raw,
-                int(opts.get("max_string", self.default_compact_max_string)),
-                min_value=64,
-                max_value=500_000,
+        elif not compact_mode:
+            opts["max_items"] = 10_000
+
+        if max_string_raw is not None:
+            opts["max_string"] = _bounded_int(
+                max_string_raw, int(opts["max_string"]), min_value=64, max_value=500_000
             )
-            if compact_mode or max_string_raw is not None
-            else 500_000
-        )
-        opts["char_budget"] = (
-            _bounded_int(
-                char_budget_raw,
-                int(opts.get("char_budget", self.default_compact_char_budget)),
-                min_value=500,
-                max_value=2_000_000,
+        elif not compact_mode:
+            opts["max_string"] = 500_000
+
+        if char_budget_raw is not None:
+            opts["char_budget"] = _bounded_int(
+                char_budget_raw, int(opts["char_budget"] or self.default_compact_char_budget),
+                min_value=500, max_value=2_000_000,
             )
-            if compact_mode or char_budget_raw is not None
-            else 0
-        )
+        elif not compact_mode:
+            opts["char_budget"] = 0
 
         opts["drop_empty"] = _coerce_bool(
+
             self._pop_first(exec_args, ["_response_drop_empty"], None),
             bool(opts.get("drop_empty", compact_mode)),
         )
@@ -180,22 +223,12 @@ class ServerResponseCompactMixin:
     def _default_response_options(self) -> dict:
         default_mode = self.default_response_mode
         default_detail = "deep" if default_mode == "full" else "normal"
-        return {
+        opts = {
             "mode": default_mode,
             "detail": default_detail,
+            "qol_mode": self.default_qol_mode,
             "fields": [],
             "omit": [],
-            "max_items": self.default_compact_max_items,
-            "max_string": self.default_compact_max_string,
-            "char_budget": self.default_compact_char_budget,
-            "drop_empty": True,
-            "drop_false": True,
-            "drop_ok": False,
-            "dedupe_counts": True,
-            "strip_meta": True,
-            "table_mode": self.default_table_mode,
-            "batch_compact": self.default_batch_compact,
-            "error_details": self.default_error_detail_level,
             "output_grep": None,
             "output_head": None,
             "output_tail": None,
@@ -203,6 +236,8 @@ class ServerResponseCompactMixin:
             "output_path": None,
             "output_pluck": None,
         }
+        opts.update(self._detail_compact_budgets(default_detail))
+        return opts
 
     def _compact_error_details(self, details: Any, opts: dict) -> Any:
         level = opts.get("error_details", "basic")
