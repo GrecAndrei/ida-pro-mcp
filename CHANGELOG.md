@@ -22,6 +22,12 @@
   `_compact` / `_response_mode` as deprecated mappings.
 - Noted `_response_max_*` / `_response_batch_compact` as advanced overrides only.
 
+## 2026-09-23 — Cover Blackboard advisory boundaries
+
+- Added regression coverage for provider budgets and malformed responses,
+  coalesced background refreshes, observed graph-edge filtering, and optional
+  scheduler/store failures.
+
 ## 2026-09-23 — Add advisory Blackboard organization and shared detail control
 
 - Added a host-side background Jev/custom pass that recommends finding lanes

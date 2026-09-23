@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from ida_pro_mcp.host.intelligence import advisory
 from ida_pro_mcp.host.intelligence.advisory import organize_blackboard
 from ida_pro_mcp.host.intelligence.providers import Answer, ProviderResponse, Usage
 
@@ -97,3 +98,73 @@ def test_organize_blackboard_rejects_provider_lanes_outside_fixed_choices():
 
     assert result["error"] is True
     assert result["code"] == "PROVIDER_PROTOCOL_ERROR"
+
+
+def test_organize_blackboard_fails_closed_for_provider_limits_and_responses():
+    finding = [{"entry_id": "f1", "signature": "packet parser", "current_lane": "lane_now"}]
+
+    bad_config = _Provider()
+    bad_config.config = SimpleNamespace(max_questions="invalid", max_input_chars=1000)
+    assert organize_blackboard({}, finding, [], [], provider=bad_config)["code"] == "PROVIDER_CONFIG_INVALID"
+
+    tiny_config = _Provider()
+    tiny_config.config = SimpleNamespace(model="fixture-model", max_questions=36, max_input_chars=1)
+    too_large = organize_blackboard({}, finding, [], [], provider=tiny_config)
+    assert too_large["reason"] == "no_candidates_fit_provider_budget"
+
+    invalid_model = _Provider()
+    invalid_model.config = SimpleNamespace(model=" ", max_questions=36, max_input_chars=1000)
+    invalid_request = organize_blackboard({}, finding, [], [], provider=invalid_model)
+    assert invalid_request["reason"] == "no_candidates_fit_provider_budget"
+
+    class MissingAnswer(_Provider):
+        def invoke(self, _state, _questions, **_kwargs):
+            return ProviderResponse("fixture-model", {}, Usage(1, 1, 2))
+
+    missing = organize_blackboard({}, finding, [], [], provider=MissingAnswer())
+    assert missing["error"] is True
+    assert missing["code"] == "PROVIDER_PROTOCOL_ERROR"
+
+    class FailedProvider(_Provider):
+        def invoke(self, _state, _questions, **_kwargs):
+            raise RuntimeError("private provider detail")
+
+    failed = organize_blackboard({}, finding, [], [], provider=FailedProvider())
+    assert failed == {
+        "error": True,
+        "code": "PROVIDER_ERROR",
+        "message": "blackboard organization advisory failed",
+    }
+
+    assert advisory._bounded_probability(float("nan")) == 0.0
+
+
+def test_organize_blackboard_omits_low_confidence_link_scores():
+    class LowScores(_Provider):
+        def invoke(self, state, questions, **_kwargs):
+            self.questions = list(questions)
+            return ProviderResponse(
+                "fixture-model",
+                {
+                    question.question_id: Answer(
+                        question.question_id,
+                        question.type,
+                        "keep_current" if question.type == "choice" else 0.0,
+                        confidence=0.1,
+                    )
+                    for question in questions
+                },
+                Usage(1, 1, 2),
+            )
+
+    result = organize_blackboard(
+        {},
+        [{"entry_id": "f1", "signature": "parser", "current_lane": "lane_now"}],
+        [{"entry_id": "f1", "from_address": "0x1000", "to_address": "0x1010"}],
+        [{"entry_a": "f1", "entry_b": "f2", "relation": "shared_tag"}],
+        provider=LowScores(),
+    )
+    assert result["ok"] is True
+    assert result["organization"] == []
+    assert result["xrefs"] == []
+    assert result["relations"] == []
