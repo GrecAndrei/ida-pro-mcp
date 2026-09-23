@@ -1,3 +1,9 @@
+## 2026-09-23 — Make standalone installer builds self-contained
+
+- Package the project runtime and YAML support into the one-file Linux
+  installer, add a packaged `--help` smoke check, and guard those release
+  workflow requirements in CI.
+
 ## 2026-09-23 — Keep release metadata aligned
 
 - Updated the plugin manifest for v1.0.0a4 and made the release-version

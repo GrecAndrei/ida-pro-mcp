@@ -121,6 +121,17 @@ def test_alpha_release_requires_existing_alpha_tag_and_protected_publish():
     assert inputs["tag"]["required"] is True
     assert inputs["publish"]["type"] == "boolean"
 
+    build_steps = wf["jobs"]["build"]["steps"]
+    install_steps = [step for step in build_steps if step.get("name") == "Install build tools"]
+    assert len(install_steps) == 1
+    assert "python -m pip install . pyyaml" in install_steps[0]["run"]
+    executable_steps = [step for step in build_steps if step.get("name") == "Build standalone Linux installer executable"]
+    assert len(executable_steps) == 1
+    assert "--paths src" in executable_steps[0]["run"]
+    smoke_steps = [step for step in build_steps if step.get("name") == "Smoke test standalone Linux installer"]
+    assert len(smoke_steps) == 1
+    assert "--help" in smoke_steps[0]["run"]
+
     publish = wf["jobs"]["publish"]
     assert publish["if"] == "inputs.publish == true"
     assert publish["environment"]["name"] == "release"
