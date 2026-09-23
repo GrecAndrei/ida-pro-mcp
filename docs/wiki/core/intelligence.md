@@ -43,9 +43,11 @@ classification, and reranking, IDA returns bounded candidate signatures and
 the host asks the provider after the RPC. Provider configuration and credential
 variables are removed from the IDA child environment.
 
-Jev is **not** a single advisor stage today. Host call sites include
-`ask_behavior`, `rank_targets`, typed-question rerank, and arch / GP /
-load-base advisories (`host/intelligence/advisory.py` and related RPC hooks).
+**Advisor stage (shipped, Jev v2 / `dd866be`):** host call sites
+(`ask_behavior`, `rank_targets`, typed-question rerank, arch / GP / load-base)
+route through `host/intelligence/advisor_stage.py` / `advisor_gate.py`
+(`invoke_advisor`). Existing operation names are kept as a **shim**; a
+future release may hard-break peppered paths.
 
 A missing Jev credential or unavailable Jev endpoint returns `JEV_UNAVAILABLE`.
 Malformed provider responses return `PROVIDER_PROTOCOL_ERROR`; invalid mode,
@@ -70,11 +72,12 @@ lexical order and reports the advisory failure; it never turns an unavailable
 provider into a fake semantic score.
 
 `ida_next_target` uses the blackboard's deterministic strategy to choose the
-eligible candidate set. When Jev/custom is ready, it may score and reorder a
-bounded target pool; eligibility, mutation policy, and all writes remain
-deterministic and analyst-controlled. Provider failure leaves the original
-target order intact. Ranking metadata is returned as an `advisory_ranking`
-crumb (applied flag / scores / reason) — **not** a full evidence card.
+eligible candidate set (primary order). When Jev/custom is ready, it may score
+a bounded pool into sibling `advisory_order` under the advisor stage —
+eligibility, mutation policy, and all writes remain deterministic and
+analyst-controlled. Provider failure leaves the primary order intact with
+`applied=false`. Ranking metadata is an evidence card (see below), not a
+silent reorder of the primary list.
 
 `ida_reranker_status` reports the configured typed-question scoring capability
 as a compatibility alias. Vector-family clustering is not part of the current
@@ -93,32 +96,45 @@ and 90%. `IDA_MCP_JEV_BUDGET_MODE=block` hard-blocks over-budget requests;
 `warn` records the warning and continues. Unknown pricing blocks by default;
 explicitly opt in only when the operator accepts unpriced usage.
 
-## RISC-V / architecture advisory boundary
+## Advisor stage contract (shipped)
+
+Primary list is **always** the deterministic pool order. Jev/custom lives only
+in sibling `advisory_order`. Reordering the primary list requires explicit
+opt-in via `accept_advisory_requested` (boolean / truthy strings only through
+that helper — never raw `bool(args.get(...))`).
+
+### Pool caps by `detail`
+
+| `detail` | Cap |
+|----------|-----|
+| triage   | 4   |
+| normal   | 8   |
+| deep     | 16  |
+
+### Evidence card (required on every advisory result)
+
+Bounded fields: `signatures_seen` (≤16 entries; id/hash + ≤64-char preview
+each), `budget_burn`, `confidence`, `fail_closed_order`, `applied`,
+`disagreement`. No full signature blobs.
+
+`disagreement=true` when `advisory_order` ≠ deterministic order; both orders
+are retained. `applied=true` only with opt-in — never default soft authority.
+
+### Architecture advisory
 
 MCP does not replace IDA's RISC-V processor module, disassembly,
 decompilation, register/CSR metadata, explicit architecture selection, or
 explicit `analysis(action="set_gp")`. Host-side raw architecture and GP
 hypotheses are bounded advisory data. Disabled/unavailable providers fail
-closed and never mutate the IDB. IDA's own analysis remains the authority.
+closed and never mutate the IDB.
 
-**Current footgun:** a successful arch advisory can still fill `processor` /
-`bitness` / `endian` into the **inferred profile** (`arch_profile.py`). That
-is not an IDB mutation and must not satisfy `risk_ack`, but operators should
-treat auto-filled inferred fields as unverified. **Planned:** no arch
-auto-fill into inferred profiles until the unified advisor stage, evidence
-card, and disagreement flag ship.
+**Shipped:** arch advisory suggests only (`architecture_advisory` /
+`inference_applied=false`). It does **not** write `processor` / `bitness` /
+`endian` into the inferred spawn profile.
 
 ## Planned (not shipped)
 
-Label the following as product direction only — do not claim they exist in
-the public contract yet:
-
-1. **Single advisor stage** — deterministic pool → bounded Jev rank/choose →
-   one return path (instead of peppered call sites).
-2. **Real evidence card** — signatures seen, confidence, budget burn, and
-   fail-closed lexical order in one structured card (beyond today's
-   `advisory_ranking` crumbs).
-3. **Disagreement flag** when Jev order differs from deterministic order.
-4. **`triage` / `deep` session profiles** that change advisory budgets or
-   depth (budget warn/block exists; profiles do not).
-5. **No architecture auto-fill** into inferred profiles until (1)–(3) land.
+1. **Hard-break** of peppered call-site names after the shim release —
+   callers must use the advisor gate only.
+2. **Twin Board** (experimental branch `experimental/twin-board-v1`) — durable
+   two-IDB delta object; see [Twin Board](../twin-board.md) (Planned).

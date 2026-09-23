@@ -54,6 +54,9 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 - `src/ida_pro_mcp/host/intelligence/`
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
+  - `advisor_stage.py` / `advisor_gate.py` — single advisor stage (deterministic
+    primary order, sibling `advisory_order`, evidence card, disagreement,
+    `accept_advisory_requested` opt-in, pool caps triage/normal/deep = 4/8/16)
   - `advisory.py` — bounded `choice`/`noul`/`score` questions (`ask_behavior`,
     `rank_targets`, arch/GP/load-base, relevance); never an authorization,
     `risk_ack`, or blackboard-write path
@@ -62,8 +65,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
   - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
-  - Jev is peppered across these call sites today; a **single advisor stage**
-    with a real evidence card and disagreement flag is **Planned** (not shipped)
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations
@@ -85,9 +86,9 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
    `has_more`/`done`, per-tool budgets via `detail=triage|normal|deep`)
 8. Host: auto-blackboard extraction from response payload (provider answers
    never write blackboard findings)
-9. Host: deterministic context injection and optional provider advisory metadata
-   (including bounded Jev/custom ranking crumbs / `advisory_ranking` on
-   deterministic blackboard targets — not a full evidence card)
+9. Host: deterministic context injection and optional advisor-stage metadata
+   (primary order untouched; sibling `advisory_order` + evidence card;
+   `applied` only on `accept_advisory_requested`)
 10. Return MCP content
 
 Provider configuration and credential variables are removed from the IDA

@@ -40,4 +40,5 @@ findings, and make reviewed IDB changes.
 - [Sessions Core Guide](core/sessions.md) — Process management, safe mode gate, lease files, and RPC concurrency.
 - [Investigation Workspace](core/investigation.md) — Binary-scoped knowledge store, item kinds, lifecycle states, and evidence models.
 - [Frontier Guide](core/frontier.md) — Target selection strategies (`unresolved`, `frontier`, `stale`, `conflict`, `coverage`).
-- [Intelligence Guide](core/intelligence.md) — Jev/custom/disabled providers, typed-question privacy, budgets, lexical retrieval, and Planned advisor redesign.
+- [Intelligence Guide](core/intelligence.md) — Jev/custom/disabled providers, typed-question privacy, budgets, lexical retrieval, and shipped advisor stage.
+- [Twin Board (Planned)](twin-board.md) — Durable two-IDB delta board on experimental/twin-board-v1 (not shipped).

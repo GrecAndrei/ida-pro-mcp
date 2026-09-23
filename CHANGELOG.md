@@ -1,3 +1,11 @@
+## 2026-09-23 — Docs: promote Jev advisor v2; Twin Board Planned
+
+- Promoted wiki/guide intelligence docs off Planned for the shipped advisor
+  stage (`dd866be`): deterministic primary order, sibling `advisory_order`,
+  evidence card, disagreement, pool caps 4/8/16, arch suggest-only.
+- Added `docs/wiki/twin-board.md` as **Planned** for experimental
+  `experimental/twin-board-v1` (not shipped on master).
+
 ## Unreleased — Jev advisor-stage cut
 
 - Added a single host advisor stage (`advisor_stage` / `advisor_gate` shim):
