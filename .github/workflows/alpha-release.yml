@@ -58,7 +58,7 @@ jobs:
       - name: Build wheel and source distribution
         run: python -m build --sdist --wheel --outdir dist
       - name: Build standalone Linux installer executable
-        run: pyinstaller --clean --noconfirm --onefile --paths src --name ida-pro-mcp-installer-linux-x86_64 install.py
+        run: pyinstaller --clean --noconfirm --onefile --paths src --collect-data ida_pro_mcp.installer --name ida-pro-mcp-installer-linux-x86_64 install.py
       - name: Smoke test standalone Linux installer
         run: dist/ida-pro-mcp-installer-linux-x86_64 --help
       - name: Package auto-installers

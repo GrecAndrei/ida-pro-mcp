@@ -128,6 +128,7 @@ def test_alpha_release_requires_existing_alpha_tag_and_protected_publish():
     executable_steps = [step for step in build_steps if step.get("name") == "Build standalone Linux installer executable"]
     assert len(executable_steps) == 1
     assert "--paths src" in executable_steps[0]["run"]
+    assert "--collect-data ida_pro_mcp.installer" in executable_steps[0]["run"]
     smoke_steps = [step for step in build_steps if step.get("name") == "Smoke test standalone Linux installer"]
     assert len(smoke_steps) == 1
     assert "--help" in smoke_steps[0]["run"]
