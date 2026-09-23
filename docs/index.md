@@ -17,6 +17,7 @@ versioning, and releases.
 
 ## Releases
 
+- [Release Notes (v1.0.0a4)](releases/v1.0.0a4.md) — explicit providers, host-owned Jev advisories, and guarded deterministic analysis
 - [Release Notes (v1.0.0a3)](releases/v1.0.0a3.md) — live-discovery contract and whole-session diff triage
 - [Release Notes (v1.0.0a2)](releases/v1.0.0a2.md) — Cross-session comparison and production hardening
 - [Release Notes (v1.0.0a1)](releases/v1.0.0a1.md) — Genesis alpha release overview and capabilities

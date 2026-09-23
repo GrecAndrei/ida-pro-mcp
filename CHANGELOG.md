@@ -1,3 +1,13 @@
+## 2026-09-23 — Prepare v1.0.0a4
+
+- Advanced the alpha version and release metadata to v1.0.0a4.
+- Consolidated explicit Jev/custom/disabled intelligence, moved advisory
+  transport to the MCP host, and removed provider credentials from IDA child
+  processes while retaining deterministic lexical fallback.
+- Removed the obsolete Rizin sidecar and unused firmware operations, hardened
+  IDA lifecycle, address, truncation, and raw-image handling, and documented
+  the compatibility changes in the release notes.
+
 ## 2026-09-22 — Keep Jev integration on the MCP host
 
 - Moved search expansion, behavior classification, reranking, gadget

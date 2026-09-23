@@ -1,6 +1,6 @@
 # IDA Pro MCP
 
-![IDA Pro MCP — deterministic binary analysis for AI agents](.github/launch-card-v1.0.0a3.png)
+![IDA Pro MCP — deterministic binary analysis for AI agents](.github/launch-card-v1.0.0a4.png)
 
 IDA Pro MCP is a local Model Context Protocol server for IDA Pro. It lets an
 MCP client inspect an IDB, ask IDA for deterministic analysis results, and,
@@ -22,7 +22,7 @@ for each session by default.
 - **Broad client support:** the installer understands more than 22 agent
   environments and their JSON, JSON5, TOML, and YAML configuration shapes.
 
-The current version is `1.0.0a3`. This is alpha software. The public
+The current version is `1.0.0a4`. This is alpha software. The public
 `ida_*` operation names, schemas, and workspace format may change before a
 stable 1.0.0 release. The default client surface contains 102 exact-schema operations.
 Use live discovery for the complete contract: `tools/list` enumerates every

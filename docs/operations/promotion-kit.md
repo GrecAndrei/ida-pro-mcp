@@ -10,7 +10,7 @@ IDA Pro MCP gives AI agents deterministic, local-first access to IDA Pro through
 deterministic lexical search, optional Jev/custom advisory scoring, and an
 evidence-backed findings workspace.
 
-The current release is `v1.0.0a3` and is alpha software. Testers and technical
+The current release is `v1.0.0a4` and is alpha software. Testers and technical
 feedback are welcome:
 https://github.com/GrecAndrei/ida-pro-mcp
 
