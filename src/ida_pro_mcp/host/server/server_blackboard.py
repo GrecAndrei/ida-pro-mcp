@@ -93,6 +93,17 @@ _PHASE_SNAPSHOT_ACTIONS = frozenset({
 #: Actions gated by the strict policy gate when enforced for the current phase.
 _STRICT_POLICY_ACTIONS = frozenset({"proposal_accept", "trace_run"})
 
+# Refresh suggestions after durable changes to analyst memory. The worker only
+# reads the resulting workspace and writes its advisory snapshot to machinery.
+_ADVISORY_REFRESH_ACTIONS = frozenset(
+    {
+        "write", "decision_card", "update", "delete", "clear", "add_evidence",
+        "contradict", "resolve", "calibrate", "decay", "proposal_accept",
+        "proposal_reject", "accept", "reject", "merge", "prune",
+        "import_annotations", "notes_import", "mark_examined",
+    }
+)
+
 #: Actions that only need phase/policy state (no store open).
 _POLICY_ONLY_ACTIONS = frozenset({
     "policy_set", "policy_status", "policy_check", "phase_status", "phase_set",
@@ -286,6 +297,23 @@ class ServerBlackboardMixin(
                 hint="Valid actions include write, read, list, search, update, workspace_brief, next_target, frontier, stats, and legacy analysis actions.",
             )
         result = handler(args, store, phase_state, policy_state)
+        if (
+            action in _ADVISORY_REFRESH_ACTIONS
+            and store is not None
+            and isinstance(result, dict)
+            and not is_error_result(result)
+        ):
+            try:
+                session_id = str(
+                    getattr(self.current_session, "session_id", "")
+                    if getattr(self, "current_session", None)
+                    else ""
+                )
+                self._orchestration().enqueue_blackboard_advisory(store, session_id)
+            except Exception:
+                # Provider advice is optional; a durable analyst write remains
+                # successful when background scheduling is unavailable.
+                pass
         if not isinstance(result, dict):
             return {"ok": True, "result": result}
         if action in _PHASE_SNAPSHOT_ACTIONS and "phase" not in result:
@@ -2236,12 +2264,16 @@ class ServerBlackboardMixin(
         return {"ok": True, "summary": store.campaign_summary()}
 
     def _bb_action_workspace_brief(self, args, store, phase_state, policy_state) -> dict:
-        return {
+        response = {
             "ok": True,
             "brief": store.workspace_brief(
                 limit=_bounded_int(args.get("limit", 8), 8, min_value=1, max_value=25)
             ),
         }
+        advisory = self._orchestration().blackboard_advisory(store)
+        if advisory is not None:
+            response["blackboard_advisory"] = advisory
+        return response
 
     def _bb_action_mark_examined(self, args, store, phase_state, policy_state) -> dict:
         try:

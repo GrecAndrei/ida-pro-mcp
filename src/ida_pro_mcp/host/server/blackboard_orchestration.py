@@ -26,7 +26,10 @@ defines the machinery tables yet.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
+import math
+import re
 import sqlite3
 import threading
 import time
@@ -45,11 +48,22 @@ NS_POLICY = "policy"
 NS_GRAVITY = "gravity"
 #: Machinery namespace for crawler state.
 NS_CRAWLER = "crawler"
+# Provider-produced organization advice is workspace-scoped machinery. It is
+# separate from analyst findings and never changes their lifecycle or links.
+NS_ADVISORY = "advisory"
 
 #: Task types recorded in ``bb_tasks``.
 TASK_TRACE = "trace"
 TASK_CRAWLER = "crawler"
 _MACHINERY_BUSY_TIMEOUT_MS = 30_000
+_BLACKBOARD_ADVISORY_LIMIT = 48
+_BLACKBOARD_ADVISORY_ADDR_RE = re.compile(r"(?i)^0x[0-9a-f]{1,16}$")
+_BLACKBOARD_XREF_EVIDENCE = frozenset(
+    {"xref", "xref_to", "xref_from", "caller", "callee", "call", "xref_graph"}
+)
+_BLACKBOARD_INTERNAL_CATEGORIES = frozenset(
+    {"evidence_gravity", "wm_now", "quest_log", "proposal_feedback"}
+)
 
 
 def _machinery_schema(conn: sqlite3.Connection) -> None:
@@ -351,6 +365,9 @@ class BlackboardOrchestrator:
         self._machinery: dict[str, MachineryDB] = {}
         self._shutdown = False
         self._trace_submit_lock = threading.Lock()
+        self._advisory_lock = threading.Lock()
+        self._advisory_active: set[str] = set()
+        self._advisory_dirty: set[str] = set()
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -418,6 +435,306 @@ class BlackboardOrchestrator:
             return mod.BlackboardStore(db_path=db_path)
         except Exception:
             return None
+
+    # -- background blackboard organization -------------------------------
+
+    def enqueue_blackboard_advisory(self, store, session_id: str = "") -> bool:
+        """Refresh advisory lane/link rankings after a findings mutation.
+
+        The worker reads the workspace after the mutation has committed. A
+        per-workspace dirty bit coalesces writes while one provider request is
+        already running, keeping background work bounded without losing the
+        latest refresh.
+        """
+        db_path = str(getattr(store, "db_path", "") or "").strip()
+        if not db_path or self._shutdown:
+            return False
+        with self._advisory_lock:
+            if db_path in self._advisory_active:
+                self._advisory_dirty.add(db_path)
+                self._machinery_for(store).set(
+                    NS_ADVISORY,
+                    "workspace",
+                    {"status": "pending", "source": "provider_advisory", "stale": True},
+                )
+                return True
+            self._advisory_active.add(db_path)
+        self._machinery_for(store).set(
+            NS_ADVISORY,
+            "workspace",
+            {"status": "pending", "source": "provider_advisory", "stale": False},
+        )
+        task_id = "bb-advisory-" + hashlib.sha256(db_path.encode("utf-8")).hexdigest()[:20]
+        queued = self._pool.submit(
+            task_id,
+            lambda path=db_path, sid=str(session_id or "")[:128]: self._run_blackboard_advisory(path, sid),
+        )
+        if queued:
+            return True
+        with self._advisory_lock:
+            self._advisory_active.discard(db_path)
+            self._advisory_dirty.discard(db_path)
+        self._machinery_for(store).set(
+            NS_ADVISORY,
+            "workspace",
+            {
+                "status": "unavailable",
+                "source": "provider_advisory",
+                "reason": "background worker pool is unavailable",
+            },
+        )
+        return False
+
+    def blackboard_advisory(self, store) -> dict[str, Any] | None:
+        """Return the latest advisory snapshot, if one has been requested."""
+        value = self._machinery_for(store).get(NS_ADVISORY, "workspace")
+        return value if isinstance(value, dict) else None
+
+    def _run_blackboard_advisory(self, db_path: str, session_id: str) -> None:
+        while True:
+            with self._advisory_lock:
+                self._advisory_dirty.discard(db_path)
+            store = self._open_store(db_path)
+            if store is None:
+                result = {
+                    "status": "unavailable",
+                    "source": "provider_advisory",
+                    "reason": "blackboard store is unavailable",
+                }
+            else:
+                try:
+                    result = self._build_blackboard_advisory(store, session_id)
+                except Exception:
+                    result = {
+                        "status": "unavailable",
+                        "source": "provider_advisory",
+                        "reason": "blackboard advisory could not be computed",
+                    }
+            result["generated_at"] = time.time()
+            machinery = self._machinery_for(store) if store is not None else MachineryDB(db_path, self._machinery_cache)
+            machinery.set(NS_ADVISORY, "workspace", result)
+            with self._advisory_lock:
+                if db_path in self._advisory_dirty:
+                    continue
+                self._advisory_active.discard(db_path)
+                return
+
+    def _build_blackboard_advisory(self, store, session_id: str) -> dict[str, Any]:
+        from ..intelligence.advisory import organize_blackboard
+        from ..intelligence.core import _extract_signature
+
+        try:
+            rows = store.list(
+                include_resolved=True,
+                include_contradicted=True,
+                limit=_BLACKBOARD_ADVISORY_LIMIT,
+            )
+        except Exception:
+            return {
+                "status": "unavailable",
+                "source": "provider_advisory",
+                "reason": "workspace findings could not be read",
+            }
+        findings: list[dict[str, Any]] = []
+        by_id: dict[str, dict[str, Any]] = {}
+        tag_sets: dict[str, set[str]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            entry_id = str(row.get("id") or "")[:128]
+            category = str(row.get("category") or "other").strip().lower()
+            if not entry_id or category in _BLACKBOARD_INTERNAL_CATEGORIES:
+                continue
+            raw_tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+            tags = {
+                term.lower()
+                for tag in raw_tags[:32]
+                for term in _extract_signature(str(tag)[:96]).split()
+            }
+            signature = _extract_signature(
+                " ".join(
+                    [
+                        str(row.get("title") or "")[:512],
+                        category[:64],
+                        " ".join(str(tag)[:64] for tag in raw_tags[:16])[:256],
+                    ]
+                ),
+                max_idents=24,
+            )[:512]
+            confidence = _blackboard_probability(row.get("confidence"))
+            priority = _blackboard_probability(row.get("priority"))
+            status = str(row.get("status") or "open").strip().lower()
+            if category in {"fact", "confirmed"}:
+                current_lane = "lane_facts"
+            elif category in {"hypothesis", "question"}:
+                current_lane = "lane_hypotheses"
+            elif category in {"frontier", "task", "proposal"} or status == "proposed":
+                current_lane = "lane_queue"
+            elif category in {"dead_end", "dead-end"} or status in {"rejected", "contradicted"}:
+                current_lane = "lane_dead_ends"
+            else:
+                current_lane = "lane_now"
+            item = {
+                "entry_id": entry_id,
+                "address": _blackboard_address(row.get("addr")),
+                "signature": signature,
+                "category": category if category in {"fact", "hypothesis", "question", "frontier", "dead_end", "general"} else "other",
+                "kind": (
+                    str(row.get("kind") or "finding").strip().lower()
+                    if str(row.get("kind") or "finding").strip().lower()
+                    in {"finding", "hypothesis", "question", "task", "decision", "examined"}
+                    else "other"
+                ),
+                "status": status if status in {"proposed", "open", "confirmed", "resolved", "rejected"} else "open",
+                "current_lane": current_lane,
+                "confidence": confidence,
+                "priority": priority,
+                "tag_count": len(raw_tags),
+            }
+            findings.append(item)
+            by_id[entry_id] = item
+            tag_sets[entry_id] = tags
+
+        xrefs = self._blackboard_xref_candidates(store, rows, by_id, _extract_signature)
+        relations = self._blackboard_relation_candidates(findings, tag_sets)
+        if not findings and not xrefs and not relations:
+            return {
+                "status": "ready",
+                "source": "provider_advisory",
+                "organization": [],
+                "xrefs": [],
+                "relations": [],
+                "reason": "no_findings_or_observed_relations",
+            }
+        response = organize_blackboard(
+            {"workspace_signature": " ".join(item["signature"] for item in findings[:8])[:1024]},
+            findings,
+            xrefs,
+            relations,
+            session_id=session_id,
+        )
+        if not isinstance(response, dict) or response.get("error"):
+            return {
+                "status": "unavailable",
+                "source": "provider_advisory",
+                "error": (
+                    {"code": str(response.get("code") or "PROVIDER_ERROR")[:64]}
+                    if isinstance(response, dict)
+                    else {"code": "PROVIDER_ERROR"}
+                ),
+                "organization": [],
+                "xrefs": [],
+                "relations": [],
+            }
+        response["status"] = "ready"
+        response["candidate_counts"] = {
+            "findings": len(findings),
+            "xrefs": len(xrefs),
+            "relations": len(relations),
+        }
+        return response
+
+    def _blackboard_xref_candidates(self, store, rows, by_id, extract_signature):
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        machinery = self._machinery_for(store)
+
+        def add(entry_id: str, source_addr: str, target_addr: str, direction: str, source_name: str = "", target_name: str = ""):
+            source_addr = _blackboard_address(source_addr)
+            target_addr = _blackboard_address(target_addr)
+            if not entry_id or not source_addr or not target_addr or source_addr == target_addr:
+                return
+            marker = (entry_id, source_addr, target_addr)
+            if marker in seen or len(candidates) >= 16:
+                return
+            seen.add(marker)
+            candidates.append(
+                {
+                    "entry_id": entry_id,
+                    "from_address": source_addr,
+                    "to_address": target_addr,
+                    "direction": direction if direction in {"caller", "callee", "neighbor"} else "neighbor",
+                    "from_signature": extract_signature(str(source_name or by_id.get(entry_id, {}).get("signature") or ""), max_idents=12)[:256],
+                    "to_signature": extract_signature(str(target_name or ""), max_idents=12)[:256],
+                }
+            )
+
+        for row in rows[:_BLACKBOARD_ADVISORY_LIMIT]:
+            if not isinstance(row, dict):
+                continue
+            entry_id = str(row.get("id") or "")[:128]
+            source_addr = _blackboard_address(row.get("addr"))
+            if not entry_id or not source_addr:
+                continue
+            snapshot = machinery.get(NS_GRAVITY, entry_id)
+            items = snapshot.get("items", []) if isinstance(snapshot, dict) else []
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict) or item.get("tool") != "graph":
+                    continue
+                graph = item.get("result")
+                if not isinstance(graph, dict):
+                    continue
+                names = {}
+                for node in graph.get("nodes", [])[:16] if isinstance(graph.get("nodes"), list) else []:
+                    if isinstance(node, dict):
+                        node_addr = _blackboard_address(node.get("addr"))
+                        if node_addr:
+                            names[node_addr] = str(node.get("name") or "")[:256]
+                for edge in graph.get("edges", [])[:16] if isinstance(graph.get("edges"), list) else []:
+                    if not isinstance(edge, dict):
+                        continue
+                    from_addr = _blackboard_address(edge.get("from"))
+                    to_addr = _blackboard_address(edge.get("to"))
+                    direction = "caller" if to_addr == source_addr else "callee" if from_addr == source_addr else "neighbor"
+                    add(entry_id, from_addr, to_addr, direction, names.get(from_addr, ""), names.get(to_addr, ""))
+
+            evidence = row.get("evidence") if isinstance(row.get("evidence"), list) else []
+            for evidence_item in evidence[:32]:
+                if not isinstance(evidence_item, dict):
+                    continue
+                relation_type = str(evidence_item.get("type") or "").strip().lower()
+                if relation_type not in _BLACKBOARD_XREF_EVIDENCE:
+                    continue
+                value = str(evidence_item.get("value") or "")[:256]
+                matches = re.findall(r"(?i)\b0x[0-9a-f]{1,16}\b", value)
+                for target in matches[:2]:
+                    direction = "caller" if relation_type in {"caller", "xref_to"} else "callee" if relation_type in {"callee", "xref_from"} else "neighbor"
+                    add(entry_id, source_addr, target, direction)
+        return candidates
+
+    @staticmethod
+    def _blackboard_relation_candidates(findings, tag_sets):
+        relations: list[dict[str, Any]] = []
+        for index, left in enumerate(findings[:_BLACKBOARD_ADVISORY_LIMIT]):
+            left_id = left["entry_id"]
+            left_terms = set(str(left.get("signature") or "").lower().split())
+            for right in findings[index + 1 : _BLACKBOARD_ADVISORY_LIMIT]:
+                right_id = right["entry_id"]
+                if left_id == right_id:
+                    continue
+                right_terms = set(str(right.get("signature") or "").lower().split())
+                shared_terms = sorted(left_terms & right_terms)
+                shared_tags = tag_sets.get(left_id, set()) & tag_sets.get(right_id, set())
+                same_address = bool(left.get("address") and left.get("address") == right.get("address"))
+                if same_address:
+                    relation = "same_address"
+                elif shared_tags:
+                    relation = "shared_tag"
+                elif len(shared_terms) >= 2:
+                    relation = "shared_signature"
+                else:
+                    continue
+                relations.append(
+                    {
+                        "entry_a": left_id,
+                        "entry_b": right_id,
+                        "relation": relation,
+                        "shared_terms": " ".join(shared_terms[:12]),
+                    }
+                )
+                if len(relations) >= 16:
+                    return relations
+        return relations
 
     def enqueue_trace_task(
         self, store, source_entry_id: str, source_text: str, depth: int, limit: int
@@ -790,10 +1107,30 @@ def is_governance_error(result: dict) -> bool:
     return bool(result.get("error")) and str(result.get("code") or "") == "POLICY_DENIED"
 
 
+def _blackboard_probability(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(number):
+        return 0.0
+    return round(max(0.0, min(1.0, number)), 4)
+
+
+def _blackboard_address(value: Any) -> str:
+    address = str(value or "").strip()
+    if not _BLACKBOARD_ADVISORY_ADDR_RE.fullmatch(address):
+        return ""
+    if not address.lower().startswith("0x"):
+        address = "0x" + address
+    return address.lower()
+
+
 __all__ = [
     "BlackboardOrchestrator",
     "EVIDENCE_GRAVITY_MAX_ITEMS",
     "MachineryDB",
+    "NS_ADVISORY",
     "NS_CRAWLER",
     "NS_GRAVITY",
     "NS_PHASE",

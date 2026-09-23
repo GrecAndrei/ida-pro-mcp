@@ -1817,12 +1817,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
         if isinstance(_trunc_detail, str):
             _trunc_detail = _trunc_detail.strip().lower()
         if _trunc_detail not in {"triage", "normal", "deep"}:
-            _resolved = getattr(self, "_resolved_detail", None)
-            _trunc_detail = (
-                _resolved
-                if isinstance(_resolved, str) and _resolved in {"triage", "normal", "deep"}
-                else "normal"
-            )
+            _trunc_detail = "normal"
         self._pending_truncation = {
             "no_truncate": _trunc_no_truncate,
             "max_tokens": _bounded_int(_trunc_max_tokens, 0, min_value=500, max_value=500000) if _trunc_max_tokens is not None else None,

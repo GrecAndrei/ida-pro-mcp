@@ -78,6 +78,8 @@ Shipped behavior today (truncation redesign (a)–(c)):
 - Per-tool char/list budgets follow the shared `detail` dial (see above).
   Proof/evidence paths are allowlisted and never soft-truncated
   (`reason=policy_risk` when that is why nothing was cut).
+- Every strict public `ida_*` operation accepts the optional `detail` enum;
+  omitting it uses `normal`.
 - `ida_continue` supports paging, `peek` (inspect without advancing),
   `summary`, and in-payload `pattern` search (optional regex).
 
@@ -87,4 +89,3 @@ Shipped behavior today (truncation redesign (a)–(c)):
   need a dedicated `why_truncated` alias
 - Removing advanced `_response_max_*` / `_response_batch_compact` overrides from
   the public surface once clients all use `detail=`
-

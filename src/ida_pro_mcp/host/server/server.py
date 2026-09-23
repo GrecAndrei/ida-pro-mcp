@@ -761,8 +761,6 @@ class IDAMCPServer(
             else:
                 call_args = args
                 response_opts = self._default_response_options()
-            # Single dial for truncation + compact: detail resolved above.
-            self._resolved_detail = str(response_opts.get("detail") or "normal")
 
             # Agent SSO: a per-call ``agent`` tag is host-level identity, not
             # an IDA argument. Pop it before operation validation / policy so
@@ -846,6 +844,14 @@ class IDAMCPServer(
                                 self._session_inflight_calls[sid_hint_text] = int(
                                     self._session_inflight_calls.get(sid_hint_text, 0) or 0
                                 ) + 1
+                        # Response options consume `detail` before operation
+                        # validation. Reattach the resolved value for dispatch
+                        # to capture as per-call truncation state; the dispatch
+                        # strips it before RPC argument admission.
+                        if isinstance(call_args, dict):
+                            call_args["detail"] = str(
+                                response_opts.get("detail") or "normal"
+                            )
                         res = self._execute_tool(tn, call_args)
                         # Agent identity is intentionally cleared in the
                         # finally block below. Capture the token scope while

@@ -64,6 +64,12 @@ Outcome: prevents arbitrary file read/write via the `/memory` tool surface. (`[F
 
 - Federation (blackboard_federate) was removed in the intelligence-theater cut. (`[FIXED: 1D.1]`)
 
+### Provider advice for Blackboard
+
+- Jev/custom organization is host-side, asynchronous advice over bounded
+  signatures and existing metadata. It cannot create findings, links, or IDB
+  changes; deterministic workspace state remains authoritative.
+
 ### 5) RPC request size limits (host side)
 
 - Host-side `_send_rpc_raw` enforces a maximum RPC request/response size (`IDA_MCP_MAX_RPC_BYTES`, default 64 MB).

@@ -31,7 +31,8 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `server_runtime_leases.py` — runtime lease file tracking
   - `server_response.py` / `server_response_compact.py` — response processing, compaction
   - `server_batch.py` — batch macro execution
-  - `server_blackboard.py` — blackboard tool integration
+  - `server_blackboard.py` — blackboard tool integration and background
+    advisory scheduling for durable finding mutations
   - `server_semantic.py` — deterministic gadget indexing and lexical retrieval integration
   - `server_client_state.py` — per-connection state and the session ownership guard
   - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
@@ -58,13 +59,19 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
     primary order, sibling `advisory_order`, evidence card, disagreement,
     `accept_advisory_requested` opt-in, pool caps triage/normal/deep = 4/8/16)
   - `advisory.py` — bounded `choice`/`noul`/`score` questions (`ask_behavior`,
-    `rank_targets`, arch/GP/load-base, relevance); never an authorization,
-    `risk_ack`, or blackboard-write path
+    `rank_targets`, Blackboard lane/xref/relation suggestions, arch/GP/load-base,
+    relevance); never an authorization, `risk_ack`, or blackboard-write path
   - `rpc_advisory.py` — host-side pre/post-RPC advisory processing for IDA results
   - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
   - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
+
+Blackboard organization runs in a host worker after a successful finding
+mutation. It receives bounded signatures and structured metadata, recommends
+lanes, and ranks only xrefs/relations already present in stored evidence or
+graph snapshots. `workspace_brief` surfaces the latest result; provider failure
+leaves deterministic findings and links unchanged.
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations

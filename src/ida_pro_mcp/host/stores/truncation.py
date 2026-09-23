@@ -149,7 +149,7 @@ def _is_proof_path(path: str) -> bool:
 def _field_priority(path: str) -> int:
     if _is_proof_path(path):
         return -100  # never prefer truncating proof
-    leaf = path.split(".")[-1] if path else ""
+    leaf = path.rsplit(".", maxsplit=1)[-1] if path else ""
     return _FIELD_PRIORITY.get(leaf, 50)
 
 
@@ -942,7 +942,7 @@ def _truncate_recursive(
         if _depth >= _MAX_TRUNCATION_DEPTH:
             return obj
         # Truncate low-priority fields first so evidence/code keep budget longer.
-        keys = sorted(obj.keys(), key=lambda k: _field_priority(f"{path}.{k}" if path else k), reverse=True)
+        keys = sorted(obj, key=lambda k: _field_priority(f"{path}.{k}" if path else k), reverse=True)
         out: dict[str, Any] = {}
         for k in keys:
             child_path = f"{path}.{k}" if path else k
@@ -956,7 +956,7 @@ def _truncate_recursive(
                 _depth=_depth + 1,
             )
         # Preserve original key order in the returned dict.
-        return {k: out[k] for k in obj.keys()}
+        return {k: out[k] for k in obj}
 
     return obj
 
@@ -1006,7 +1006,7 @@ def truncate_response(
 
     # 1. Strip verbose metadata first (never proof keys)
     _LOW_VALUE_KEYS = {"traceback", "raw_bytes", "hexdump_full"}
-    for key in list(pruned.keys()):
+    for key in list(pruned):
         if key in _PROOF_KEY_ALLOWLIST:
             continue
         if key in _LOW_VALUE_KEYS and isinstance(pruned[key], str) and len(pruned[key]) > 200:
@@ -1015,17 +1015,17 @@ def truncate_response(
     # 2. Recursively truncate nested lists and strings (priority-ordered).
     # Process low-priority keys first so proof/findings/code keep budget.
     keys = sorted(
-        [k for k in pruned.keys() if not str(k).startswith("_")],
-        key=lambda k: _field_priority(k),
+        [k for k in pruned if not str(k).startswith("_")],
+        key=_field_priority,
         reverse=True,
     )
     for key in keys:
         if key in _PROOF_KEY_ALLOWLIST:
             # Detect oversized proof fields but refuse to truncate them.
             val = pruned[key]
-            if isinstance(val, str) and len(val) > string_budget:
-                refused_proof = True
-            elif isinstance(val, list) and len(val) > list_budget:
+            if (
+                isinstance(val, str) and len(val) > string_budget
+            ) or (isinstance(val, list) and len(val) > list_budget):
                 refused_proof = True
             continue
         value = pruned[key]

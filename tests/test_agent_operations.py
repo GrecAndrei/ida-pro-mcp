@@ -10,6 +10,7 @@ from ida_pro_mcp.host.agent_operations import (
     translate_public_batch_arguments,
 )
 from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS
+from ida_pro_mcp.host.server import server_response as response_module
 from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.server import IDAMCPServer
 
@@ -25,6 +26,9 @@ def test_public_operations_have_strict_schemas_and_examples():
         assert schema["additionalProperties"] is False
         assert set(operation.example) <= set(schema["properties"])
         assert not operation.validate(operation.example)
+        assert schema["properties"]["detail"]["enum"] == ["triage", "normal", "deep"]
+        assert not operation.validate({**operation.example, "detail": "triage"})
+        assert operation.validate({**operation.example, "detail": "verbose"})
 
 
 def test_find_translates_to_the_legacy_backend_without_losing_its_required_query():
@@ -291,6 +295,32 @@ def test_agent_tools_list_avoids_schema_unions_without_vertex_compat(monkeypatch
 
     for tool in tools:
         assert_no_unions(tool["inputSchema"])
+
+
+def test_batch_response_uses_the_public_detail_budget(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_RESPONSE_MODE", "compact")
+    server = IDAMCPServer()
+    observed = {}
+    monkeypatch.setattr(server, "_handle_batch", lambda _args: {"ok": True})
+
+    def capture_truncation(response, **kwargs):
+        observed.update(kwargs)
+        return response
+
+    monkeypatch.setattr(response_module, "truncate_response", capture_truncation)
+    server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "ida_batch",
+                "arguments": {"calls": [{"name": "ida_overview"}], "detail": "triage"},
+            },
+        }
+    )
+
+    assert observed["detail"] == "triage"
 
 
 def test_public_batch_protocol_dispatches_translated_calls(monkeypatch):

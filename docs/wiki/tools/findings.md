@@ -78,6 +78,14 @@ Marking an uninteresting function as `boring` prevents autonomous agents and fut
 - `conflict`: Contradicting findings that require reconciliation.
 - `stale`: Claims whose underlying code or instructions changed after they were recorded.
 
+After a successful finding mutation, the host may schedule a bounded Jev/custom
+advisory pass in the background. `ida_analysis_brief` includes the latest
+`blackboard_advisory` snapshot when available: suggested finding lanes and
+rankings for xrefs/relations already present in stored evidence or graph
+snapshots. The pass uses signatures and metadata only, and never changes a
+finding, lifecycle state, or link. If the provider is disabled or unavailable,
+the deterministic brief remains usable and the advisory reports that status.
+
 ---
 
 ## 4. IDB Publishing & Import

@@ -259,7 +259,16 @@ def _validate_schema_value(
 
 
 def _schema(properties: dict[str, dict[str, Any]], required: list[str] | None = None) -> dict[str, Any]:
-    """Build a strict MCP input schema with no implicit argument surface."""
+    """Build a strict MCP input schema with one shared host response dial."""
+    properties = dict(properties)
+    properties.setdefault(
+        "detail",
+        {
+            "type": "string",
+            "enum": ["triage", "normal", "deep"],
+            "description": "Response detail budget: triage, normal, or deep. Defaults to normal.",
+        },
+    )
     return {
         "type": "object",
         "properties": properties,
