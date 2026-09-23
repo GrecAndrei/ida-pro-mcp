@@ -39,3 +39,29 @@ explicitly enabled loopback endpoints.
 returns bounded metadata records for auditing. Unknown pricing is fail-closed
 by default, and session/daily token and cost budgets are enforced before a
 provider request is sent.
+
+## Truncation and continuation (shipped)
+
+Large tool responses may be compacted by the host truncation store
+(`host/stores/truncation.py`). When truncated, the payload carries `_truncated`
+and `_continue` metadata. Call `ida_continue` with the token (and `field` when
+more than one field is truncated) rather than re-running the original tool.
+
+Shipped behavior today:
+
+- Continuation tokens: ~1 hour sliding TTL (refreshed on access), LRU store
+  capacity 500, scoped per connection/session owner.
+- Pagination indicators: `has_more`, `done`, character/UTF-8 byte offsets, and
+  `next_offset` / `next_offset_bytes` where applicable.
+- `ida_continue` supports paging, `peek` (inspect without advancing),
+  `summary`, and in-payload `pattern` search (optional regex).
+
+## Planned truncation redesign (not shipped)
+
+Do not document these as current contract:
+
+- Stable opaque cursors replacing offset-centric continuation
+- Explicit `why_truncated` / `how_to_fetch_next` operator fields
+- Per-tool truncation budgets beyond the existing global /
+  per-call truncate controls
+

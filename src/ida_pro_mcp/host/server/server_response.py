@@ -1014,6 +1014,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         trunc_limit=_tc.get("trunc_limit"),
                         session_id=_sid,
                         owner_id=_owner,
+                        tool_name=str(getattr(self, "_pending_tool_name", "") or opts.get("tool_name") or ""),
+                        detail=str(_tc.get("detail") or "normal"),
                     )
 
         # ---- Context Density Auto-Compaction Middleware ----

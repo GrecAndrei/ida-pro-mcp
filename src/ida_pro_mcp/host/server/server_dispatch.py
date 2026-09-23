@@ -591,6 +591,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     trunc_limit=_tc.get("trunc_limit"),
                     session_id=_sid,
                     owner_id=_owner,
+                    tool_name=str(tool_name or ""),
+                    detail=str(_tc.get("detail") or "normal"),
                 )
             try:
                 _slow_threshold = float(os.environ.get("IDA_MCP_SLOW_CALL_SEC", "5.0"))
@@ -1144,11 +1146,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 field = args.get("field")
                 offset = args.get("offset")
                 count = args.get("count")
+                cursor = args.get("cursor")
                 result = continue_truncated(
                     token,
                     field=field if isinstance(field, str) else None,
                     offset=_bounded_int(offset, 0, min_value=0, max_value=500000) if offset is not None else None,
                     count=_bounded_int(count, 0, min_value=1, max_value=5000) if count is not None else None,
+                    cursor=cursor if isinstance(cursor, str) else None,
                     session_id=sid,
                     owner_id=owner,
                 )
@@ -1807,11 +1811,19 @@ class ServerDispatchMixin(ServerClientStateMixin):
         _trunc_max_tokens = args.pop("max_tokens", None)
         _trunc_offset = args.pop("trunc_offset", None)
         _trunc_limit = args.pop("trunc_limit", None)
+        _trunc_detail = args.pop("detail", None)
+        if isinstance(_trunc_detail, str):
+            _trunc_detail = _trunc_detail.strip().lower()
+            if _trunc_detail not in {"triage", "normal", "deep"}:
+                _trunc_detail = "normal"
+        else:
+            _trunc_detail = "normal"
         self._pending_truncation = {
             "no_truncate": _trunc_no_truncate,
             "max_tokens": _bounded_int(_trunc_max_tokens, 0, min_value=500, max_value=500000) if _trunc_max_tokens is not None else None,
             "trunc_offset": _bounded_int(_trunc_offset, 0, min_value=0, max_value=500000) if _trunc_offset is not None else None,
             "trunc_limit": _bounded_int(_trunc_limit, 0, min_value=1, max_value=50000) if _trunc_limit is not None else None,
+            "detail": _trunc_detail,
         }
 
         # Snapshot the exact args that will reach call_tool (normalized,

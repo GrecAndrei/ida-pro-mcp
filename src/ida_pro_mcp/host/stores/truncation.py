@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import copy
 import json
@@ -39,12 +40,162 @@ _MAX_TRUNCATION_DEPTH = 64
 # pattern could stall the call; bound the scanned window per value.
 _SEARCH_MAX_CHARS = 1_000_000
 
+# Proof / evidence keys must never be soft-truncated (verifier lock).
+# reason=policy_risk means refuse-to-truncate these fields, not drop them.
+_PROOF_KEY_ALLOWLIST = frozenset({
+    "risk_ack",
+    "evidence",
+    "policy",
+    "proof",
+    "governance",
+    "policy_decision",
+    "required_ack",
+    "ack_required",
+    "acks",
+})
+
+# Multi-field budget priority: lower number is protected longer / truncated later.
+# Proof keys are hard-protected separately; this ranks everything else.
+_FIELD_PRIORITY = {
+    "code": 10,
+    "annotated_code": 10,
+    "disasm": 15,
+    "disassembly": 15,
+    "bytes": 20,
+    "data": 25,
+    "items": 30,
+    "results": 30,
+    "matches": 30,
+    "xrefs": 30,
+    "findings": 5,
+    "traceback": 90,
+    "raw_bytes": 95,
+    "hexdump_full": 95,
+}
+
+_DETAIL_SCALE = {"triage": 0.5, "normal": 1.0, "deep": 2.0}
+
+# Per-tool string char budgets (normal detail). detail scales ×0.5/1/2.
+_TOOL_STRING_BUDGET = {
+    "ida_decompile": 12_000,
+    "decompile": 12_000,
+    "code": 12_000,
+    "ida_disassemble": 12_000,
+    "disassemble": 12_000,
+    "disasm": 12_000,
+    "ida_read_bytes": 4_000,
+    "read_bytes": 4_000,
+    "bytes": 4_000,
+}
+
+# Per-tool list item budgets (normal detail).
+_TOOL_LIST_BUDGET = {
+    "ida_xrefs_to": 100,
+    "ida_xrefs_from": 100,
+    "xrefs": 100,
+    "ida_search": 100,
+    "search": 100,
+    "ida_find": 100,
+    "find": 100,
+    "list": 100,
+}
+
+_DEFAULT_STRING_BUDGET = 4_000
+_DEFAULT_LIST_BUDGET = 100
+
+
 _TRUNCATION_STORE: dict[str, dict[str, Any]] = {}
 _TRUNCATION_ORDER: deque[str] = deque()
 # Guards the two module-level stores above.  Truncation tokens are created and
 # consumed from concurrently dispatched tool calls (ida_continue / search),
 # so mutation must be serialized to avoid lost updates and partial entries.
 _STORE_LOCK = threading.Lock()
+
+
+def _detail_scale(detail: str | None) -> float:
+    key = str(detail or "normal").strip().lower()
+    return _DETAIL_SCALE.get(key, 1.0)
+
+
+def _resolve_budgets(
+    tool_name: str = "",
+    detail: str = "normal",
+    max_tokens: int | None = None,
+) -> tuple[int, int, int]:
+    """Return (char_budget, list_budget, string_chunk) for this tool/detail."""
+    scale = _detail_scale(detail)
+    tool = str(tool_name or "").strip()
+    # Prefer explicit max_tokens as the overall char envelope.
+    base_chars = _TOOL_STRING_BUDGET.get(tool, _DEFAULT_STRING_BUDGET)
+    base_list = _TOOL_LIST_BUDGET.get(tool, _DEFAULT_LIST_BUDGET)
+    string_chunk = max(_MIN_MAX_TOKENS, int(base_chars * scale))
+    list_budget = max(1, int(base_list * scale))
+    if max_tokens is not None:
+        char_budget = max(_MIN_MAX_TOKENS, int(max_tokens))
+        # Explicit max_tokens also caps the string page size.
+        string_chunk = min(string_chunk, char_budget)
+    else:
+        char_budget = string_chunk
+    return char_budget, list_budget, string_chunk
+
+
+def _is_proof_path(path: str) -> bool:
+    if not path:
+        return False
+    parts = path.split(".")
+    return any(p in _PROOF_KEY_ALLOWLIST for p in parts)
+
+
+def _field_priority(path: str) -> int:
+    if _is_proof_path(path):
+        return -100  # never prefer truncating proof
+    leaf = path.split(".")[-1] if path else ""
+    return _FIELD_PRIORITY.get(leaf, 50)
+
+
+def _encode_cursor(token: str, field: str, offset: int) -> str:
+    """Opaque store-bound cursor: token+field+offset (no HMAC theater)."""
+    payload = {"t": token, "f": field, "o": int(offset)}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> dict[str, Any] | None:
+    if not cursor or not isinstance(cursor, str):
+        return None
+    try:
+        pad = "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(cursor + pad)
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    token = data.get("t")
+    field = data.get("f")
+    offset = data.get("o")
+    if not isinstance(token, str) or not isinstance(field, str):
+        return None
+    try:
+        offset_i = int(offset)
+    except Exception:
+        return None
+    if offset_i < 0:
+        return None
+    return {"token": token, "field": field, "offset": offset_i}
+
+
+def _infer_reason(truncated_fields: dict[str, dict[str, Any]], refused_proof: bool) -> str:
+    if refused_proof and not truncated_fields:
+        return "policy_risk"
+    types = {info.get("type") for info in truncated_fields.values()}
+    if types == {"list"}:
+        return "budget_items"
+    if types == {"string"}:
+        return "budget_chars"
+    if "list" in types and "string" in types:
+        return "budget_chars"
+    return "budget_chars"
 
 
 def _prune_expired() -> None:
@@ -227,9 +378,33 @@ def continue_truncated(
     field: str | None = None,
     offset: int | None = None,
     count: int | None = None,
+    cursor: str | None = None,
     session_id: str = "",
     owner_id: str = "",
 ) -> dict[str, Any]:
+    """Page truncated content.
+
+    Prefer an opaque ``cursor`` (token+field+offset bound in the store entry).
+    Pages are pure functions of the cursor — no shared ``next_offset`` mutation
+    on the cursor path. Legacy offset / auto-advance still works without a cursor.
+    """
+    decoded = _decode_cursor(cursor) if cursor else None
+    if cursor and decoded is None:
+        return make_error(
+            MCPError.TRUNCATION_TOKEN_INVALID,
+            "Invalid continuation cursor",
+            hint="Re-run the original operation to get a fresh _continue.cursor.",
+        )
+    if decoded is not None:
+        if decoded["token"] != token:
+            return make_error(
+                MCPError.TRUNCATION_TOKEN_INVALID,
+                "Cursor does not match continuation token",
+                hint="Pass the token and cursor from the same _continue envelope.",
+            )
+        field = decoded["field"]
+        offset = decoded["offset"]
+
     entry = _get_entry(token, session_id, owner_id=owner_id)
     if not entry:
         return make_error(
@@ -246,31 +421,37 @@ def continue_truncated(
         return err
 
     info = entry["fields"][field]
+    use_cursor_path = decoded is not None or offset is not None
 
     if info.get("type") == "list" and isinstance(value, list):
-        # The cursor (next_offset) is shared live state in the module-level
-        # store; read-advance-write must be atomic so concurrent ida_continue
-        # calls on the same token emit disjoint pages instead of overlapping
-        # chunks with a lost update.
-        with _STORE_LOCK:
-            raw_next = info.get("next_offset", 0)
-            start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
-            chunk = count if count is not None else info.get("chunk_size", 0)
-            if chunk <= 0:
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "Invalid count for continuation",
-                    hint="Pass count=N with N>0.",
-                )
+        chunk = count if count is not None else info.get("chunk_size", 0)
+        if chunk <= 0:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Invalid count for continuation",
+                hint="Pass count=N with N>0.",
+            )
+        if use_cursor_path:
+            start = max(0, int(offset or 0))
             items = value[start : start + chunk]
             next_offset = start + len(items)
-            info["next_offset"] = next_offset
+            # Pure page: do not mutate shared next_offset.
+        else:
+            # Legacy auto-advance for callers that omit cursor/offset.
+            with _STORE_LOCK:
+                raw_next = info.get("next_offset", 0)
+                start = max(0, int(raw_next)) if raw_next is not None else 0
+                items = value[start : start + chunk]
+                next_offset = start + len(items)
+                info["next_offset"] = next_offset
         total = info.get("total", len(value))
         has_more = next_offset < total
+        next_cursor = _encode_cursor(token, field, next_offset) if has_more else None
         return {
             "ok": True,
             "token": token,
             "field": field,
+            "cursor": _encode_cursor(token, field, start),
             "items": items,
             "offset": start,
             "visible_offset": start,
@@ -278,46 +459,99 @@ def continue_truncated(
             "count": len(items),
             "total": total,
             "next_offset": next_offset if has_more else None,
+            "next_cursor": next_cursor,
             "has_more": has_more,
             "done": not has_more,
+            "_continue": (
+                {
+                    "token": token,
+                    "cursor": next_cursor,
+                    "reason": "budget_items",
+                    "fields": [
+                        {
+                            "path": field,
+                            "type": "list",
+                            "shown": len(items),
+                            "total": total,
+                            "unit": "items",
+                        }
+                    ],
+                    "next": {
+                        "tool": "ida_continue",
+                        "args": {"token": token, "cursor": next_cursor, "field": field},
+                    },
+                }
+                if has_more and next_cursor
+                else None
+            ),
         }
 
     if info.get("type") == "string" and isinstance(value, str):
-        with _STORE_LOCK:
-            raw_next = info.get("next_offset", 0)
-            start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
-            chunk = count if count is not None else info.get("chunk_size", 0)
-            if chunk <= 0:
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "Invalid count for continuation",
-                    hint="Pass count=N with N>0.",
-                )
-            text = value[start : start + chunk]
-            next_offset = start + len(text)
-            info["next_offset"] = next_offset
+        chunk = count if count is not None else info.get("chunk_size", 0)
+        if chunk <= 0:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Invalid count for continuation",
+                hint="Pass count=N with N>0.",
+            )
+        if use_cursor_path:
+            start = max(0, int(offset or 0))
+            page_text = value[start : start + chunk]
+            next_offset = start + len(page_text)
+        else:
+            with _STORE_LOCK:
+                raw_next = info.get("next_offset", 0)
+                start = max(0, int(raw_next)) if raw_next is not None else 0
+                page_text = value[start : start + chunk]
+                next_offset = start + len(page_text)
+                info["next_offset"] = next_offset
         total = info.get("total", len(value))
         has_more = next_offset < total
-        text_bytes = text.encode("utf-8")
+        text_bytes = page_text.encode("utf-8")
         prefix_bytes = len(value[:start].encode("utf-8"))
         next_offset_bytes = len(value[:next_offset].encode("utf-8")) if has_more else None
+        next_cursor = _encode_cursor(token, field, next_offset) if has_more else None
         return {
             "ok": True,
             "token": token,
             "field": field,
-            "text": text,
+            "cursor": _encode_cursor(token, field, start),
+            "text": page_text,
             "offset": start,
             "visible_offset": start,
-            "visible_count": len(text),
+            "visible_count": len(page_text),
             "visible_offset_bytes": prefix_bytes,
             "visible_count_bytes": len(text_bytes),
             "total_bytes": len(value.encode("utf-8")),
             "next_offset_bytes": next_offset_bytes,
-            "count": len(text),
+            "count": len(page_text),
             "total": total,
             "next_offset": next_offset if has_more else None,
+            "next_cursor": next_cursor,
             "has_more": has_more,
             "done": not has_more,
+            "_continue": (
+                {
+                    "token": token,
+                    "cursor": next_cursor,
+                    "reason": "budget_chars",
+                    "fields": [
+                        {
+                            "path": field,
+                            "type": "string",
+                            "shown": len(page_text),
+                            "total": total,
+                            "unit": "chars",
+                        }
+                    ],
+                    "next": {
+                        "tool": "ida_continue",
+                        "args": {"token": token, "cursor": next_cursor, "field": field},
+                    },
+                }
+                if has_more and next_cursor
+                else None
+            ),
         }
 
     return make_error(
@@ -645,12 +879,20 @@ def _truncate_recursive(
     path: str = "",
     trunc_offset: int | None = None,
     trunc_limit: int | None = None,
+    list_budget: int | None = None,
+    string_budget: int | None = None,
     _depth: int = 0,
 ) -> Any:
     """Recursively truncate large lists and strings in nested structures."""
+    if _is_proof_path(path):
+        # Never soft-truncate proof/evidence fields.
+        return obj
+
     if isinstance(obj, list) and len(obj) > 10:
         original_len = len(obj)
-        keep_count = max(32, max_tokens // 200)
+        keep_count = list_budget if list_budget is not None else max(32, max_tokens // 200)
+        # Cap by character budget so a tight max_tokens still pages fat item lists.
+        keep_count = min(keep_count, max(1, max_tokens // 50))
         if trunc_limit is not None and trunc_limit > 0:
             keep_count = min(keep_count, trunc_limit)
         if original_len > keep_count or trunc_offset is not None:
@@ -667,12 +909,14 @@ def _truncate_recursive(
                 "visible_offset": start,
                 "visible_count": visible_count,
                 "next_offset": next_off,
+                "unit": "items",
             }
             return sliced
         return obj
 
-    if isinstance(obj, str) and len(obj) > max_tokens:
-        chunk_size = trunc_limit if trunc_limit is not None and trunc_limit > 0 else max_tokens
+    string_limit = string_budget if string_budget is not None else max_tokens
+    if isinstance(obj, str) and len(obj) > string_limit:
+        chunk_size = trunc_limit if trunc_limit is not None and trunc_limit > 0 else string_limit
         start = max(0, trunc_offset or 0)
         end = start + chunk_size
         sliced = obj[start:end] if start < len(obj) else ""
@@ -680,7 +924,7 @@ def _truncate_recursive(
         next_off = min(end, len(obj)) if end < len(obj) else None
         truncated_fields[path] = {
             "type": "string",
-            "unit": "unicode_codepoints",
+            "unit": "chars",
             "total": len(obj),
             "total_bytes": len(obj.encode("utf-8")),
             "chunk_size": chunk_size,
@@ -695,22 +939,24 @@ def _truncate_recursive(
         return sliced
 
     if isinstance(obj, dict):
-        # Bound descent so a pathologically deep (or self-referential)
-        # response raises RecursionError instead of being misreported by the
-        # dispatcher as an IDA/connection failure. Beyond the limit the subtree
-        # is returned as-is; outer truncation already bounded the top level.
         if _depth >= _MAX_TRUNCATION_DEPTH:
             return obj
-        return {
-            k: _truncate_recursive(
-                v, max_tokens, truncated_fields,
-                path=f"{path}.{k}" if path else k,
+        # Truncate low-priority fields first so evidence/code keep budget longer.
+        keys = sorted(obj.keys(), key=lambda k: _field_priority(f"{path}.{k}" if path else k), reverse=True)
+        out: dict[str, Any] = {}
+        for k in keys:
+            child_path = f"{path}.{k}" if path else k
+            out[k] = _truncate_recursive(
+                obj[k], max_tokens, truncated_fields,
+                path=child_path,
                 trunc_offset=trunc_offset,
                 trunc_limit=trunc_limit,
+                list_budget=list_budget,
+                string_budget=string_budget,
                 _depth=_depth + 1,
             )
-            for k, v in obj.items()
-        }
+        # Preserve original key order in the returned dict.
+        return {k: out[k] for k in obj.keys()}
 
     return obj
 
@@ -725,6 +971,8 @@ def truncate_response(
     trunc_limit: int | None = None,
     session_id: str = "",
     owner_id: str = "",
+    tool_name: str = "",
+    detail: str = "normal",
 ) -> dict[str, Any]:
     """
     Intelligently truncate large MCP responses to fit within LLM context windows.
@@ -732,16 +980,21 @@ def truncate_response(
     Args:
         response: The original tool response dictionary.
         max_tokens: Approximate character limit (roughly 1 char = 1 token for simplicity).
-            Must be >= 500.
+            Must be >= 500. Explicit override still wins over per-tool budgets.
         trunc_offset: Start offset for paginating through truncated content.
         trunc_limit: Max items/chars to return when paginating.
         session_id: Scope the continuation token to this session.
         owner_id: Scope the continuation token to this MCP client connection.
+        tool_name: Calling tool (ida_decompile, list/xref tools, …) for per-tool budgets.
+        detail: Shared dial with Jev profiles — triage|normal|deep scales budgets.
 
     Returns:
         A pruned response with truncation markers. Original dict is never modified.
     """
-    max_tokens = max(max_tokens, _MIN_MAX_TOKENS)
+    char_budget, list_budget, string_budget = _resolve_budgets(
+        tool_name=tool_name, detail=detail, max_tokens=max_tokens
+    )
+    max_tokens = max(char_budget, _MIN_MAX_TOKENS)
 
     if _estimate_size(response, max_tokens) < max_tokens and trunc_offset is None and trunc_limit is None:
         return response
@@ -749,21 +1002,40 @@ def truncate_response(
     pruned = copy.deepcopy(response)
     pruned["_truncated"] = True
     truncated_fields: dict[str, dict[str, Any]] = {}
+    refused_proof = False
 
-    # 1. Strip verbose metadata first
+    # 1. Strip verbose metadata first (never proof keys)
     _LOW_VALUE_KEYS = {"traceback", "raw_bytes", "hexdump_full"}
     for key in list(pruned.keys()):
+        if key in _PROOF_KEY_ALLOWLIST:
+            continue
         if key in _LOW_VALUE_KEYS and isinstance(pruned[key], str) and len(pruned[key]) > 200:
             pruned[key] = pruned[key][:200] + "... [stripped for context economy]"
 
-    # 2. Recursively truncate nested lists and strings
-    for key in list(pruned.keys()):
+    # 2. Recursively truncate nested lists and strings (priority-ordered).
+    # Process low-priority keys first so proof/findings/code keep budget.
+    keys = sorted(
+        [k for k in pruned.keys() if not str(k).startswith("_")],
+        key=lambda k: _field_priority(k),
+        reverse=True,
+    )
+    for key in keys:
+        if key in _PROOF_KEY_ALLOWLIST:
+            # Detect oversized proof fields but refuse to truncate them.
+            val = pruned[key]
+            if isinstance(val, str) and len(val) > string_budget:
+                refused_proof = True
+            elif isinstance(val, list) and len(val) > list_budget:
+                refused_proof = True
+            continue
         value = pruned[key]
         pruned[key] = _truncate_recursive(
             value, max_tokens, truncated_fields,
             path=key,
             trunc_offset=trunc_offset,
             trunc_limit=trunc_limit,
+            list_budget=list_budget,
+            string_budget=string_budget,
         )
 
     if truncated_fields:
@@ -773,14 +1045,55 @@ def truncate_response(
             session_id=session_id,
             owner_id=owner_id,
         )
+        field_list = []
+        primary_cursor = None
+        primary_field = None
+        for path, info in truncated_fields.items():
+            ftype = info.get("type", "string")
+            unit = info.get("unit") or ("items" if ftype == "list" else "chars")
+            shown = int(info.get("visible_count") or 0)
+            total = int(info.get("total") or 0)
+            start = int(info.get("offset") or 0)
+            cursor = _encode_cursor(token, path, start)
+            if primary_cursor is None:
+                primary_cursor = cursor
+                primary_field = path
+            field_list.append(
+                {
+                    "path": path,
+                    "type": ftype,
+                    "shown": shown,
+                    "total": total,
+                    "unit": unit,
+                    "cursor": cursor,
+                }
+            )
+        reason = _infer_reason(truncated_fields, refused_proof=refused_proof)
+        next_args: dict[str, Any] = {"token": token, "cursor": primary_cursor}
+        if primary_field and len(field_list) > 1:
+            next_args["field"] = primary_field
         pruned["_continue"] = {
             "token": token,
-            "fields": truncated_fields,
+            "cursor": primary_cursor,
+            "reason": reason,
+            "fields": field_list,
+            # Legacy dict shape kept for older clients/tests that key by path.
+            "fields_by_path": truncated_fields,
+            "next": {"tool": "ida_continue", "args": next_args},
             "hint": (
-                f"Call ida_continue(token='{token}', field='<field name>') when "
-                "multiple fields are listed; use the exact key from fields. "
-                "With one field, field is optional."
+                f"Call ida_continue(token='{token}', cursor='…') or pass field when "
+                "multiple fields are listed. Expired cursor → re-run the original."
             ),
+        }
+    elif refused_proof:
+        # Oversized proof-only payload: do not strip; mark why we refused.
+        pruned["_continue"] = {
+            "token": None,
+            "cursor": None,
+            "reason": "policy_risk",
+            "fields": [],
+            "next": None,
+            "hint": "Proof/evidence fields are never soft-truncated; raise max_tokens or page upstream.",
         }
 
     return pruned

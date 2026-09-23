@@ -22,24 +22,30 @@ Legacy embedding, Gemini, native, and reranker settings fail closed with
 Use `ida_intelligence_status` to inspect the selected mode, safe provider
 identity, capabilities, and readiness. Credentials are not returned.
 
-## Typed-question advisory boundary
+## Typed-question advisory boundary (shipped)
 
-Provider requests contain bounded JSON state and typed `choice`, `noul`, or
-`score` questions. Context is compacted to metadata, bytes/disassembly samples,
-and signatures. Raw decompilation, prompts, completions, and credentials are
-never logged or persisted. Provider answers are advisory only: they cannot
-invoke tools, authorize mutations, satisfy `risk_ack`, or write blackboard
-findings. Deterministic IDA policy remains authoritative.
+Hard boundary — document and enforce as current behavior:
+
+- Typed questions only: `choice`, `noul`, and `score`.
+- Host-side HTTP only (Jev fixed TypeSafe endpoint, or allowlisted custom).
+- Compact signatures / metadata / bytes-disassembly samples only — no raw
+  decompilation, prompts, completions, or credentials logged or persisted.
+- Provider answers never authorize mutations, satisfy `risk_ack`, or write
+  blackboard findings. Deterministic IDA policy remains authoritative.
+- Disabled, unavailable, malformed, timed-out, or budget-blocked providers
+  **fail closed** back to lexical / deterministic order with a structured
+  advisory status — never invent a score.
 
 Provider transport runs in the MCP host. For query expansion the host asks its
 provider before the IDA RPC and sends only bounded expansion labels to the
 deterministic search. For behavior search, function classification, gadget
 classification, and reranking, IDA returns bounded candidate signatures and
 the host asks the provider after the RPC. Provider configuration and credential
-variables are removed from the IDA child environment. When a provider is
-disabled, unavailable, or times out, deterministic results remain available.
-Natural-language queries are reduced to bounded identifier signatures before
-provider requests; raw prompts and decompilation text are not sent.
+variables are removed from the IDA child environment.
+
+Jev is **not** a single advisor stage today. Host call sites include
+`ask_behavior`, `rank_targets`, typed-question rerank, and arch / GP /
+load-base advisories (`host/intelligence/advisory.py` and related RPC hooks).
 
 A missing Jev credential or unavailable Jev endpoint returns `JEV_UNAVAILABLE`.
 Malformed provider responses return `PROVIDER_PROTOCOL_ERROR`; invalid mode,
@@ -65,9 +71,10 @@ provider into a fake semantic score.
 
 `ida_next_target` uses the blackboard's deterministic strategy to choose the
 eligible candidate set. When Jev/custom is ready, it may score and reorder a
-bounded target pool; eligibility, evidence, mutation policy, and all writes
-remain deterministic and analyst-controlled. Provider failure leaves the
-original target order intact and is returned as advisory metadata.
+bounded target pool; eligibility, mutation policy, and all writes remain
+deterministic and analyst-controlled. Provider failure leaves the original
+target order intact. Ranking metadata is returned as an `advisory_ranking`
+crumb (applied flag / scores / reason) — **not** a full evidence card.
 
 `ida_reranker_status` reports the configured typed-question scoring capability
 as a compatibility alias. Vector-family clustering is not part of the current
@@ -86,11 +93,32 @@ and 90%. `IDA_MCP_JEV_BUDGET_MODE=block` hard-blocks over-budget requests;
 `warn` records the warning and continues. Unknown pricing blocks by default;
 explicitly opt in only when the operator accepts unpriced usage.
 
-## RISC-V boundary
+## RISC-V / architecture advisory boundary
 
 MCP does not replace IDA's RISC-V processor module, disassembly,
 decompilation, register/CSR metadata, explicit architecture selection, or
 explicit `analysis(action="set_gp")`. Host-side raw architecture and GP
-hypotheses are bounded advisory data; Jev/custom may select among supplied
-hypotheses, while disabled/unavailable providers fail closed and never mutate
-the IDB. IDA's own analysis remains the authority.
+hypotheses are bounded advisory data. Disabled/unavailable providers fail
+closed and never mutate the IDB. IDA's own analysis remains the authority.
+
+**Current footgun:** a successful arch advisory can still fill `processor` /
+`bitness` / `endian` into the **inferred profile** (`arch_profile.py`). That
+is not an IDB mutation and must not satisfy `risk_ack`, but operators should
+treat auto-filled inferred fields as unverified. **Planned:** no arch
+auto-fill into inferred profiles until the unified advisor stage, evidence
+card, and disagreement flag ship.
+
+## Planned (not shipped)
+
+Label the following as product direction only — do not claim they exist in
+the public contract yet:
+
+1. **Single advisor stage** — deterministic pool → bounded Jev rank/choose →
+   one return path (instead of peppered call sites).
+2. **Real evidence card** — signatures seen, confidence, budget burn, and
+   fail-closed lexical order in one structured card (beyond today's
+   `advisory_ranking` crumbs).
+3. **Disagreement flag** when Jev order differs from deterministic order.
+4. **`triage` / `deep` session profiles** that change advisory budgets or
+   depth (budget warn/block exists; profiles do not).
+5. **No architecture auto-fill** into inferred profiles until (1)–(3) land.

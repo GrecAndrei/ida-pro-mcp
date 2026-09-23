@@ -23,11 +23,17 @@ authoritative.
 
 For an opaque raw file, the host may send a compact byte sample and bounded
 candidate summaries to the configured Jev/custom provider as a typed advisory
-question. The provider can return a hypothesis or `unknown`, but it cannot
-select an IDA processor, rebase an IDB, seed functions, set GP, or authorize a
-mutation. In `disabled` mode, or when the provider is unavailable or malformed,
-the result fails closed and asks the analyst to provide explicit architecture
+question. The provider can return a hypothesis or `unknown`. It cannot rebase
+an IDB, seed functions, set GP, authorize a mutation, or satisfy `risk_ack`.
+In `disabled` mode, or when the provider is unavailable or malformed, the
+result fails closed and asks the analyst to provide explicit architecture
 options. No RISC-V host-side opcode/bitness heuristic is treated as authority.
+
+**Current footgun:** a successful advisory may still fill `processor` /
+`bitness` / `endian` into the **inferred profile** used at open time. Treat
+those fields as unverified hypotheses, not as IDA processor selection.
+**Planned:** no arch auto-fill until a unified advisor stage, evidence card,
+and disagreement flag ship (see [Intelligence](core/intelligence.md)).
 
 Provider transport never logs or persists raw decompilation, credentials,
 prompt payloads, completions, or response bodies. Custom origins require an

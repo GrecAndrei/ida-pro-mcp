@@ -54,12 +54,16 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 - `src/ida_pro_mcp/host/intelligence/`
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
-  - `advisory.py` — bounded provider questions; never an authorization or mutation path
+  - `advisory.py` — bounded `choice`/`noul`/`score` questions (`ask_behavior`,
+    `rank_targets`, arch/GP/load-base, relevance); never an authorization,
+    `risk_ack`, or blackboard-write path
   - `rpc_advisory.py` — host-side pre/post-RPC advisory processing for IDA results
   - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
   - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
+  - Jev is peppered across these call sites today; a **single advisor stage**
+    with a real evidence card and disagreement flag is **Planned** (not shipped)
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
   - IDA-side tool implementations
@@ -76,10 +80,13 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 4. Phase-gate preflight — skipped when `_risk_ack=true`
 5. Route to host-side handler (session/blackboard/workflow/etc.) or forward to IDA via TCP RPC
 6. IDA tool execution (deterministic SDK logic)
-7. Host: compact/truncate response
-8. Host: auto-blackboard extraction from response payload
+7. Host: compact/truncate response (`has_more`/`done` + continuation tokens;
+   stable cursors / why-truncateded / per-tool budgets are **Planned**)
+8. Host: auto-blackboard extraction from response payload (provider answers
+   never write blackboard findings)
 9. Host: deterministic context injection and optional provider advisory metadata
-   (including bounded Jev/custom ranking of deterministic blackboard targets)
+   (including bounded Jev/custom ranking crumbs / `advisory_ranking` on
+   deterministic blackboard targets — not a full evidence card)
 10. Return MCP content
 
 Provider configuration and credential variables are removed from the IDA
@@ -125,7 +132,7 @@ RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 - **Stable schemas**: prefer additive changes over breaking shape changes
 - **Backward compatibility**: preserve existing aliases and action compatibility
 - **Defensive errors**: return structured errors (`{"error": true, "code": "...", "message": "..."}`) with actionable hints
-- **Explicit advisory provider only**: deterministic IDA execution and policy remain authoritative; Jev/custom typed questions are opt-in, bounded, and cannot invoke tools, authorize mutations, or write findings
+- **Explicit advisory provider only**: deterministic IDA execution and policy remain authoritative; Jev/custom typed questions are opt-in, host-side, bounded to `choice`/`noul`/`score`, fail closed to lexical order, and cannot invoke tools, satisfy `risk_ack`, authorize mutations, or write findings
 - **Raw-image address discipline**: high canonical ARM64 bases are validated as unsigned 64-bit values; load-at-zero plus an explicit `va_delta`/`address_delta` is the supported raw-kernel mapping, and System.map import applies that delta only to bounded, loaded addresses
 
 ## Safe Areas For New Contributors

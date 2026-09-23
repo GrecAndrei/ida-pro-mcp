@@ -140,12 +140,24 @@ shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-install
 at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
 
 Provider mode is selected explicitly with `IDA_MCP_INTELLIGENCE_MODE=jev`,
-`custom`, or `disabled`. Jev uses the fixed TypeSafe endpoint; custom origins
-require an explicit HTTPS allowlist, with loopback-only HTTP as an opt-in. Do
-not persist credentials or send raw decompilation, prompts, or completions.
-Legacy local/Gemini/native settings fail closed with a structured configuration
-error. Provider tests use mocked transports; report any unavailable external
-Jev or licensed IDA runtime rather than substituting another backend.
+`custom`, or `disabled`. Jev uses the fixed TypeSafe endpoint over host-side
+HTTP; custom origins require an explicit HTTPS allowlist, with loopback-only
+HTTP as an opt-in. Typed questions are `choice` / `noul` / `score` only on
+compact signatures — never mutations, `risk_ack`, or blackboard writes. Do not
+persist credentials or send raw decompilation, prompts, or completions.
+Unavailable/malformed providers fail closed back to lexical order. Legacy
+local/Gemini/native settings fail closed with a structured configuration error.
+Provider tests use mocked transports; report any unavailable external Jev or
+licensed IDA runtime rather than substituting another backend.
+
+**Shipped vs Planned (intelligence):** Jev is called from multiple host sites
+(`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base), not a single
+advisor stage. `advisory_ranking` crumbs exist on some responses; a full
+evidence card, disagreement flag, triage/deep session profiles, and a unified
+advisor stage are **Planned** — do not document them as shipped. Architecture
+advisory may still fill processor/bitness into an inferred profile (footgun);
+**Planned** is no arch auto-fill until stage + evidence + disagreement land.
+See `docs/wiki/core/intelligence.md`.
 
 ## Tests, coverage, and live IDA
 
@@ -170,12 +182,14 @@ malformed-response, privacy/redaction, origin-policy, timeout, and budget
 coverage. Use the relevant `benchmarks/run.py --scope ...`; keep reports
 outside source control.
 
-The coverage hardening target is at least 90% of the measured project surface,
-with offline and real-IDA live reports kept separate until merged. Do not
-claim that target from catalog tests or fake IDA. Coverage is not yet a
-repository-wide blocking threshold; until the gate is installed, every change
-must report its measured result and uncovered external paths. Fake-IDA tests do
-not prove live behavior. `tests/integration/` is opt-in and requires licensed IDA:
+Offline `src/` coverage from the 2026-09-23 EEST suite is **94.55%** (54,720
+stmts / 2,289 miss) — the >=90% `src/` target is already met. The Survey Phase 0
+baseline of 64.27% is historical only (see `PROJECT.md`). Keep offline and
+real-IDA live reports separate until merged; do not claim live coverage from
+catalog tests or fake IDA. A repository-wide CI coverage **gate** is still not
+installed as a blocking threshold; until it is, coverage-impacting changes must
+report measured results and uncovered external paths. Fake-IDA tests do not
+prove live behavior. `tests/integration/` is opt-in and requires licensed IDA:
 
 ```bash
 IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \

@@ -111,10 +111,13 @@ the report and error log when diagnosing a partial setup.
 
 The provider mode is explicit: `disabled` (default), `jev`, or `custom`.
 Deterministic IDA analysis and lexical retrieval work in disabled mode. Jev
-uses `TYPESAFE_API_KEY`; custom mode requires an HTTPS base URL, an explicit
-origin allowlist, a model, and a credential environment variable or file.
-Loopback HTTP requires an explicit opt-in flag. Legacy embedding, Gemini,
-native, and reranker settings are rejected rather than translated.
+uses `TYPESAFE_API_KEY` over host-side HTTP; custom mode requires an HTTPS base
+URL, an explicit origin allowlist, a model, and a credential environment
+variable or file. Loopback HTTP requires an explicit opt-in flag. Legacy
+embedding, Gemini, native, and reranker settings are rejected rather than
+translated. Typed questions are `choice`/`noul`/`score` only; answers cannot
+authorize mutations or write findings. Triage/deep session profiles and a
+unified advisor stage are **Planned** — see [Intelligence](core/intelligence.md).
 
 The installer never writes API keys into client configuration. Providers read
 credentials at request time. Review `ida_intelligence_status`,

@@ -344,6 +344,8 @@ class ServerWorkflowBatchMixin:
                         trunc_limit=tc.get("trunc_limit"),
                         session_id=target_session.session_id,
                         owner_id=_owner,
+                        tool_name=str(resolved_name or name or ""),
+                        detail=str(tc.get("detail") or "normal"),
                     )
                 except Exception:
                     pass

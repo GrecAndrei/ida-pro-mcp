@@ -16,6 +16,9 @@ the original operation:
 - **Sliding-window TTL**: Tokens remain valid for 1 hour from creation or last
   access, refreshed automatically on every continuation call. The host LRU cache
   retains up to 500 active tokens.
+- **Pagination markers**: Continued chunks report `has_more` / `done` plus
+  character and UTF-8 byte offsets (`offset`, `next_offset`,
+  `next_offset_bytes` where applicable).
 - **Search within truncated results**: Pass `pattern="needle"` (with optional
   `is_regex: true` and `case_sensitive: true`) to grep within the full stored
   response without materializing every intermediate chunk.
@@ -24,6 +27,10 @@ the original operation:
 - **Session safety**: Pass `idb=<session_id>` if targeting a specific session on
   a multi-session connection. Unscoped and previous-session tokens resolve
   cleanly without false expiration from ambient session switches.
+
+**Planned** (not shipped): stable opaque cursors, explicit `why_truncated` /
+`how_to_fetch_next` fields, and per-tool truncation budgets. See
+[Search and retrieval](../search-and-retrieval.md).
 
 `ida_python` is the escape hatch for anything the surface does not cover. It
 runs arbitrary code inside IDA, so it requires `risk_ack: true`, is gated by

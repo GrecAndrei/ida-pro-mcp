@@ -13,7 +13,7 @@ When a change touches IDA-side behavior, validate the smallest relevant path:
 - decompilation, disassembly, and xrefs;
 - the intended IDB mutation and its persisted result;
 - snapshot or undo behavior when rollback is involved;
-- deterministic lexical retrieval and, when explicitly configured, bounded Jev/custom advisory scoring;
+- deterministic lexical retrieval and, when explicitly configured, bounded Jev/custom advisory scoring (typed questions only; fail closed to lexical order);
 - architecture-specific behavior for firmware or raw blobs.
 
 Record the IDA version, runtime mode, binary, retrieval mode, and safe provider

@@ -19,6 +19,17 @@
 - Removed the obsolete Rizin sidecar and unused firmware operations, hardened
   IDA lifecycle, address, truncation, and raw-image handling, and documented
   the compatibility changes in the release notes.
+## 2026-09-23 — Documentation sync: live coverage + Jev/truncation Planned labels
+
+- Synced human-facing docs with the 2026-09-23 EEST offline suite: `src/` coverage
+  94.55% (>=90% met); Survey Phase 0 64.27% retained as historical only.
+- Clarified shipped Jev hard boundary (typed `choice`/`noul`/`score`, host-side,
+  fail-closed lexical order, no mutation/`risk_ack`/blackboard writes) versus
+  **Planned** advisor stage, evidence card, disagreement flag, triage/deep
+  profiles, and no arch auto-fill.
+- Landed truncation (a)–(c): first-class `_continue` (required `reason` + `next`),
+  store-bound opaque cursors / pure pages, per-tool budgets, shared `detail=triage|normal|deep`,
+  and proof-key allowlist. Remaining Planned: fold legacy `_compact` into the one `detail` dial.
 
 ## 2026-09-22 — Keep Jev integration on the MCP host
 

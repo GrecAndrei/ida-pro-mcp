@@ -9,8 +9,9 @@ versioning, and releases.
 ## Guides
 
 - [Project README](../README.md) — overview, install, tool surface, runtime behavior
+- [PROJECT.md](../PROJECT.md) — coverage metrics (Phase 0 historical + live offline `src/` >=90%)
 - [Architecture](guide/architecture.md) — module boundaries and runtime data flow
-- [Safety model](guide/safety-model.md) — trust boundaries and mutation controls
+- [Safety model](guide/safety-model.md) — trust boundaries, mutation controls, provider host boundary
 - [Use cases](guide/use-cases.md) — supported analysis workflows
 - [Versioning](guide/versioning.md) — release scheme and checklist
 - [Roadmap](guide/roadmap.md) — planned compatibility work

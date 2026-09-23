@@ -275,9 +275,14 @@ makes the selected advisory requests network-visible:
   decompilation, findings, and other results. The client or its model provider
   may transmit that context according to its own account, model, and retention
   settings. IDA Pro MCP cannot control those transfers.
-- Jev and custom providers receive only bounded typed-question state: metadata,
-  bytes/disassembly samples, and signatures. Raw decompilation, prompts,
-  completions, and credentials are not logged or persisted.
+- Jev and custom providers receive only bounded typed-question state (`choice` /
+  `noul` / `score`) over host-side HTTP: metadata, bytes/disassembly samples,
+  and compact signatures. Raw decompilation, prompts, completions, and
+  credentials are not logged or persisted. Answers cannot authorize mutations,
+  satisfy `risk_ack`, or write blackboard findings; failures fail closed to
+  lexical order. A unified advisor stage, full evidence card, disagreement
+  flag, and triage/deep profiles are **Planned** — see
+  [Intelligence](docs/wiki/core/intelligence.md).
 - Custom cloud origins require an explicit HTTPS allowlist. Plain HTTP is
   accepted only for loopback endpoints when explicitly enabled.
 - Installer dependency downloads and optional threat-corpus downloads can make
@@ -353,6 +358,15 @@ the client is using the same install root and `IDADIR` that the installer
 recorded. The default `idat` backend gives each session its own process; do not
 switch to experimental `idalib` while diagnosing a basic installation.
 
+## Tests and coverage (offline)
+
+The offline suite (`pytest --ignore=tests/integration`) is the default gate.
+As of 2026-09-23 EEST: 5362 passed / 7 skipped (~6m15s); offline `src/` line
+coverage **94.55%** (54,720 stmts / 2,289 miss) — >=90% `src/` target met. The
+Survey Phase 0 figure of 64.27% is historical only (`PROJECT.md`). Live IDA and
+optional Jev remote checks stay opt-in; see `AGENTS.md` and
+[Live IDA testing](docs/operations/live-ida-testing.md).
+
 ## Reference material
 
 - [Project wiki](https://github.com/GrecAndrei/ida-pro-mcp/wiki) — task-oriented
@@ -366,7 +380,8 @@ switch to experimental `idalib` while diagnosing a basic installation.
 - [Investigation workspace](docs/wiki/core/investigation.md) — findings,
   evidence, targets, and exports.
 - [Intelligence and providers](docs/wiki/core/intelligence.md) — Jev, custom
-  BYOK, disabled mode, usage budgets, and deterministic lexical retrieval.
+  BYOK, disabled mode, usage budgets, lexical retrieval, and Planned advisor
+  redesign notes.
 - [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration.
 - [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
   flow for readers who need implementation detail.

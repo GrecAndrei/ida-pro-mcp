@@ -39,8 +39,8 @@ an optional `idb` parameter to target a specific open session instead of the act
 | `ida_index_functions` | Build a scoped deterministic lexical signature index in responsive background slices. | Stores bounded names, disassembly, and structural metadata; no model or raw decompilation. Gated in safe mode. |
 | `ida_index_status(task_id=...)` | Check progress or retrieve the result of a background indexing job. | Poll with the `task_id` returned by `ida_index_functions`. |
 | `ida_cancel_index(task_id=...)` | Cancel a running background semantic-index task. | Stops after the current slice. |
-| `ida_semantic_search(query=...)` | Find functions by bounded lexical behavior signatures. | Optional Jev/custom typed-question scoring is advisory; disabled/unavailable providers preserve lexical order. |
-| `ida_reranker_status` | Report the Jev/custom typed-question scoring capability. | Compatibility alias; no local cross-encoder is started. |
+| `ida_semantic_search(query=...)` | Find functions by bounded lexical behavior signatures. | Optional Jev/custom typed-question scoring is advisory; disabled/unavailable providers fail closed to lexical order. |
+| `ida_reranker_status` | Report the Jev/custom typed-question scoring capability. | Compatibility alias; no local cross-encoder is started. Full evidence cards / disagreement flags are **Planned**. |
 
 ---
 

@@ -12,7 +12,9 @@ finding.
 The server uses deterministic IDA SDK calls. Intelligence is explicitly
 configured as `jev`, `custom`, or `disabled`; disabled mode provides
 fully-local lexical retrieval and there is no local/Gemini/native model
-fallback.
+fallback. Jev/custom answers are host-side typed questions only and cannot
+authorize mutations — see [Intelligence](core/intelligence.md) for shipped
+vs Planned advisor redesign.
 
 When an alpha release is published, the GitHub release also includes a source
 bundle with the installer. Verify its `SHA256SUMS`, extract it, and run

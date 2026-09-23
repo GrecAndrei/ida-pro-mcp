@@ -17,7 +17,7 @@ class TestNestedFieldContinuation:
         big = {"meta": {"items": list(range(200))}}
         res = T.truncate_response(big, max_tokens=500)
         assert res.get("_truncated") is True
-        fields = res["_continue"]["fields"]
+        fields = res["_continue"]["fields_by_path"]
         assert "meta.items" in fields
         token = res["_continue"]["token"]
         con = T.continue_truncated(token, field="meta.items")
@@ -31,7 +31,7 @@ class TestNestedFieldContinuation:
         big = {"results": {"code": "mov eax, 1" * 200}}
         res = T.truncate_response(big, max_tokens=200)
         assert res.get("_truncated") is True
-        fields = res["_continue"]["fields"]
+        fields = res["_continue"]["fields_by_path"]
         assert "results.code" in fields
         token = res["_continue"]["token"]
         con = T.continue_truncated(token, field="results.code")

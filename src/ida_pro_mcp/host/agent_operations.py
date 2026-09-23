@@ -1901,6 +1901,10 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                     "type": "string",
                     "description": "Continuation token from the response's _continue.token field.",
                 },
+                "cursor": {
+                    "type": "string",
+                    "description": "Opaque cursor from _continue.cursor / next_cursor (preferred over offset).",
+                },
                 "field": {
                     "type": "string",
                     "description": (
