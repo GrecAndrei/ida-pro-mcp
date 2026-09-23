@@ -323,6 +323,37 @@ def test_batch_response_uses_the_public_detail_budget(monkeypatch):
     assert observed["detail"] == "triage"
 
 
+def test_single_tool_detail_reaches_dispatch_and_truncation(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_RESPONSE_MODE", "compact")
+    server = IDAMCPServer()
+    observed = {}
+
+    def fake_execute(_tool_name, arguments):
+        observed["dispatch_detail"] = arguments.get("detail")
+        server._pending_truncation = {"detail": arguments.get("detail")}
+        return {"ok": True, "items": [1, 2, 3]}
+
+    def capture_truncation(response, **kwargs):
+        observed["truncation_detail"] = kwargs["detail"]
+        return response
+
+    monkeypatch.setattr(server, "_execute_tool", fake_execute)
+    monkeypatch.setattr(response_module, "truncate_response", capture_truncation)
+    server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "ida_overview",
+                "arguments": {"detail": "triage"},
+            },
+        }
+    )
+
+    assert observed == {"dispatch_detail": "triage", "truncation_detail": "triage"}
+
+
 def test_public_batch_protocol_dispatches_translated_calls(monkeypatch):
     server = IDAMCPServer()
     observed = {}

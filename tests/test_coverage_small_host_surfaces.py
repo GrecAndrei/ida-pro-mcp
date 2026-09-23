@@ -106,6 +106,7 @@ def test_postprocess_structured_and_invalid_inputs():
 
 class _ResponseHarness(ServerResponseCompactMixin):
     default_response_mode = "compact"
+    default_qol_mode = "balanced"
     default_compact_max_items = 2
     default_compact_max_string = 64
     default_compact_char_budget = 500

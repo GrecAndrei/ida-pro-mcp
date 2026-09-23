@@ -28,6 +28,12 @@
   coalesced background refreshes, observed graph-edge filtering, and optional
   scheduler/store failures.
 
+## 2026-09-23 — Keep response test harnesses aligned with the detail dial
+
+- Added a regular-tool regression check proving the public detail setting
+  reaches per-call dispatch and response truncation, and updated a compact
+  response test harness with the default QoL alias used by the shared dial.
+
 ## 2026-09-23 — Add advisory Blackboard organization and shared detail control
 
 - Added a host-side background Jev/custom pass that recommends finding lanes
