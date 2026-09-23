@@ -365,7 +365,7 @@ def test_next_target_strategy_summary_uses_address_key(tmp_path):
     assert summary["briefs"][0]["addr"] == "0x401000"
 
 
-def test_next_target_applies_advisory_ranking_without_changing_candidates(monkeypatch, tmp_path):
+def test_next_target_keeps_deterministic_order_without_accept_advisory(monkeypatch, tmp_path):
     server, store = _server_with_workspace(tmp_path)
     store.upsert_finding("First open question", addr="0x401000", kind="question", status="open", priority=0.1)
     store.upsert_finding("Second open question", addr="0x402000", kind="question", status="open", priority=0.1)
@@ -391,10 +391,43 @@ def test_next_target_applies_advisory_ranking_without_changing_candidates(monkey
 
     assert result["ok"] is True
     assert len(seen) == 2
+    assert result["advisory_ranking"]["applied"] is False
+    assert result["advisory_ranking"]["disagreement"] is True
+    # Primary stays deterministic (first seen candidate).
+    assert result["targets"][0]["address"] == seen[0]["address"]
+    assert result["targets"][0]["advisory_score"] == 0.1
+    assert result["advisory_order"][0]["address"] == seen[1]["address"]
+    assert {item["address"] for item in result["targets"]} == {"0x401000", "0x402000"}
+
+
+def test_next_target_applies_advisory_only_with_opt_in(monkeypatch, tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    store.upsert_finding("First open question", addr="0x401000", kind="question", status="open", priority=0.1)
+    store.upsert_finding("Second open question", addr="0x402000", kind="question", status="open", priority=0.1)
+    seen = []
+
+    def fake_rank(_state, candidates, **_kwargs):
+        seen.extend(candidates)
+        return {
+            "ok": True,
+            "source": "provider_advisory",
+            "model": "fixture",
+            "scores": [
+                {"index": 0, "score": 0.1, "confidence": 0.9},
+                {"index": 1, "score": 0.9, "confidence": 0.9},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.intelligence.advisory.rank_targets",
+        fake_rank,
+    )
+    result = server._handle_blackboard(
+        {"action": "next_target", "strategy": "unresolved", "limit": 2, "accept_advisory": True}
+    )
+    assert result["ok"] is True
     assert result["advisory_ranking"]["applied"] is True
     assert result["targets"][0]["address"] == seen[1]["address"]
-    assert result["targets"][0]["advisory_score"] == 0.9
-    assert {item["address"] for item in result["targets"]} == {"0x401000", "0x402000"}
 
 
 # ---------------------------------------------------------------------------

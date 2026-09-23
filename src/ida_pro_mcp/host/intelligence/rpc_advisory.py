@@ -13,6 +13,8 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from .advisor_gate import accept_advisory_requested, build_evidence_card, orders_disagree, pool_cap, run_advisor_stage
+from .advisor_stage import invoke_advisor, resolve_detail
 from .advisory import BEHAVIOR_LABELS, ask_behavior, ask_gp, ask_load_base
 from .providers import (
     ProviderError,
@@ -156,49 +158,71 @@ def _classify_behavior_candidates(
     *,
     session_id: str,
     deadline_seconds: float = 10.0,
+    detail: str = "normal",
+    accept_advisory: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     try:
         provider = resolve_provider(with_ledger=True)
-        questions, indices, request_error = _bounded_question_set(candidates, tag, provider)
+        detail_key = resolve_detail(detail)
+        capped = list(candidates)[: pool_cap(detail_key)]
+        questions, indices, request_error = _bounded_question_set(capped, tag, provider)
         if request_error:
             return [], request_error
         if not questions:
             return [], {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "no function signatures fit the configured provider request limit"}
         state = {"requested_behavior": tag}
-        response = provider.invoke(
+        pool_meta = [dict(capped[index]) for index in indices]
+
+        def _answer(response):
+            matches = []
+            for index in indices:
+                answer = response.answers.get(f"function_{index}")
+                if answer is None:
+                    raise ProviderError("provider omitted a function classification")
+                label = str(answer.value or "")
+                if label != tag:
+                    continue
+                confidence = answer.confidence
+                if confidence is None:
+                    confidence = (answer.probabilities or {}).get(label, 0.0)
+                try:
+                    confidence = float(confidence or 0.0)
+                except (TypeError, ValueError, OverflowError):
+                    confidence = 0.0
+                if not math.isfinite(confidence):
+                    continue
+                candidate = capped[index]
+                matches.append(
+                    {
+                        "addr": str(candidate.get("addr") or ""),
+                        "name": str(candidate.get("name") or ""),
+                        "source": "classifier",
+                        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+                    }
+                )
+            return matches
+
+        stage = invoke_advisor(
             state,
             questions,
+            deterministic_pool=pool_meta,
+            detail=detail_key,
+            accept_advisory=accept_advisory,
             session_id=session_id,
             operation="search_behavior_candidates",
             deadline_seconds=deadline_seconds,
+            provider=provider,
+            signatures=pool_meta,
+            advisory_order_from_response=lambda response, _pool: _answer(response),
+            confidence_from_response=lambda response: max(
+                (float(item.get("confidence") or 0.0) for item in (_answer(response) or [])),
+                default=0.0,
+            ),
+            answer_from_response=_answer,
         )
-        matches = []
-        for index in indices:
-            answer = response.answers.get(f"function_{index}")
-            if answer is None:
-                return [], {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "provider omitted a function classification"}
-            label = str(answer.value or "")
-            if label != tag:
-                continue
-            confidence = answer.confidence
-            if confidence is None:
-                confidence = (answer.probabilities or {}).get(label, 0.0)
-            try:
-                confidence = float(confidence or 0.0)
-            except (TypeError, ValueError, OverflowError):
-                confidence = 0.0
-            if not math.isfinite(confidence):
-                continue
-            candidate = candidates[index]
-            matches.append(
-                {
-                    "addr": str(candidate.get("addr") or ""),
-                    "name": str(candidate.get("name") or ""),
-                    "source": "classifier",
-                    "confidence": round(max(0.0, min(1.0, confidence)), 4),
-                }
-            )
-        return matches, None
+        if stage.error:
+            return [], dict(stage.error)
+        return list(stage.answer or []), None
     except ProviderError as exc:
         return [], provider_error_payload(exc)
     except Exception:
@@ -254,12 +278,21 @@ def _rank_search_candidates(
     deadline = None
     if limit_ms > 0:
         deadline = time.monotonic() + max(0.0, (limit_ms / 1000.0) - elapsed_seconds)
+    detail = str(args.get("detail") or "normal").strip().lower()
+    if detail not in {"triage", "normal", "deep"}:
+        detail = "normal"
+    accept_advisory = accept_advisory_requested(args)
+    cap = pool_cap(detail)
+    deterministic = [dict(item) for item in pool[:cap]]
+    docs = docs[:cap]
     try:
         scored = reranker.rerank(
             str(args.get("query") or args.get("pattern") or "")[:_RERANK_DOC_CHARS],
             docs,
             deadline=deadline,
             session_id=session_id,
+            detail=detail,
+            accept_advisory=accept_advisory,
         )
     except Exception:
         scored = None
@@ -270,6 +303,7 @@ def _rank_search_candidates(
             "message": "advisory scoring failed",
         }
     rerank_meta["latency_ms"] = round((time.monotonic() - started) * 1000)
+
     if scored:
         try:
             by_index = {int(item["index"]): float(item["score"]) for item in scored}
@@ -280,34 +314,44 @@ def _rank_search_candidates(
                 "code": "PROVIDER_PROTOCOL_ERROR",
                 "message": "provider scoring response is malformed",
             }
-        all_indices = len(by_index) == len(pool) and set(by_index) == set(range(len(pool)))
+        all_indices = len(by_index) == len(deterministic) and set(by_index) == set(range(len(deterministic)))
         if all_indices and len(set(by_index.values())) > 1:
-            for index, item in enumerate(pool):
-                item["rerank_score"] = by_index[index]
-                item["score"] = by_index[index]
-                item["rank_reason"] = {
-                    **(item.get("rank_reason") or {}),
+            annotated = []
+            for index, item in enumerate(deterministic):
+                row = dict(item)
+                row["rerank_score"] = by_index[index]
+                row["rank_reason"] = {
+                    **(row.get("rank_reason") or {}),
                     "rerank": round(by_index[index], 4),
                 }
-            pool.sort(key=lambda item: float(item.get("rerank_score") or 0.0), reverse=True)
-            min_score = float(args.get("min_score") or 0.0)
-            if min_score <= 0.0:
-                scores = sorted(float(item.get("score") or item.get("similarity") or 0.0) for item in pool)
-                if scores:
-                    q50 = scores[len(scores) // 2]
-                    q75 = scores[min(len(scores) - 1, int(round((len(scores) - 1) * 0.75)))]
-                    gate = q50 + max(0.0, q75 - q50)
-                    filtered = [item for item in pool if float(item.get("score") or item.get("similarity") or 0.0) >= gate]
-                    pool = (filtered or pool)
-            else:
-                pool = [item for item in pool if float(item.get("score") or item.get("similarity") or 0.0) >= min_score]
+                annotated.append(row)
+            advisory_sorted = sorted(
+                annotated,
+                key=lambda item: float(item.get("rerank_score") or 0.0),
+                reverse=True,
+            )
+
+            def _score_fn(_pool):
+                return advisory_sorted, None, {"latency_ms": rerank_meta.get("latency_ms"), "pool": len(by_index)}
+
+            stage = run_advisor_stage(
+                annotated,
+                detail=detail,
+                accept_advisory=accept_advisory,
+                score_fn=_score_fn,
+                budget_burn={"latency_ms": rerank_meta.get("latency_ms"), "pool": len(by_index)},
+            )
+            # Primary list stays deterministic unless accept_advisory.
+            primary = stage["items"] if stage["applied"] else annotated
             try:
                 limit = max(1, min(int(args.get("limit") or 10), 256))
             except (TypeError, ValueError, OverflowError):
                 limit = 10
-            pool = pool[:limit]
-            result["items"] = [
-                {
+            primary = primary[:limit]
+            advisory_order = (stage.get("advisory_order") or [])[:limit]
+
+            def _item_row(item: dict) -> dict:
+                return {
                     "addr": item.get("ea"),
                     "name": item.get("name"),
                     "similarity": item.get("similarity"),
@@ -317,8 +361,9 @@ def _rank_search_candidates(
                     "expansion_query": item.get("expansion_query"),
                     "rank_reason": item.get("rank_reason"),
                 }
-                for item in pool
-            ]
+
+            result["items"] = [_item_row(item) for item in primary]
+            result["advisory_order"] = [_item_row(item) for item in advisory_order]
             result["results"] = "\n".join(
                 f"{item.get('addr') or ''}  {item.get('name') or ''}  similarity={float(item.get('similarity') or 0.0):.3f}"
                 for item in result["items"]
@@ -328,19 +373,45 @@ def _rank_search_candidates(
             if isinstance(context, dict):
                 addresses = {str(item.get("addr") or "") for item in result["items"]}
                 result["blackboard_context"] = {key: value for key, value in context.items() if str(key) in addresses}
-            rerank_meta["applied"] = True
+            rerank_meta["applied"] = bool(stage["applied"])
+            rerank_meta["disagreement"] = bool(stage["disagreement"])
             rerank_meta["pool"] = len(by_index)
             rerank_meta["profile"] = RERANK_PROFILE
+            rerank_meta["detail"] = detail
+            result["evidence"] = stage["evidence"]
         else:
             rerank_meta["reason"] = "non_discriminating_or_partial_scores"
+            result["evidence"] = build_evidence_card(
+                pool=deterministic,
+                advisory_order=None,
+                fail_closed_order=deterministic,
+                applied=False,
+                disagreement=False,
+                reason=rerank_meta["reason"],
+            )
     elif not rerank_meta.get("error"):
         rerank_meta["reason"] = "provider_unavailable"
         if getattr(reranker, "last_error", None):
             rerank_meta["error"] = reranker.last_error
+        result["evidence"] = build_evidence_card(
+            pool=deterministic,
+            advisory_order=None,
+            fail_closed_order=deterministic,
+            applied=False,
+            disagreement=False,
+            reason=rerank_meta.get("reason"),
+        )
     result["rerank"] = rerank_meta
-    if rerank_meta["applied"]:
+    if rerank_meta.get("applied"):
         note = str(result.get("note") or "")
         result["note"] = note.replace("rerank=off", "rerank=on")
+    elif orders_disagree(
+        [item.get("ea") for item in result.get("items") or []],
+        [item.get("ea") for item in result.get("advisory_order") or []],
+    ):
+        note = str(result.get("note") or "")
+        suffix = " advisory_order available (accept_advisory=true to apply)"
+        result["note"] = (note + suffix).strip()
 
 
 def _apply_gp_advisories(value: Any, *, session_id: str, cache: dict[tuple[str, str, str], dict[str, Any]]) -> None:
@@ -451,11 +522,23 @@ def apply_rpc_advisory(
                     [candidate for candidate in candidates if isinstance(candidate, Mapping)],
                     session_id=session_id,
                     deadline_seconds=min(30.0, remaining),
+                    detail=str(args.get("detail") or "normal"),
+                    accept_advisory=accept_advisory_requested(args),
                 )
             result["advisory"] = advisory
             choice = advisory.get("choice") if isinstance(advisory, dict) else None
             result["recommended_base"] = choice if choice and not advisory.get("error") else None
-            if result["recommended_base"]:
+            if isinstance(advisory, dict):
+                result["advisory_order"] = advisory.get("advisory_order")
+                if advisory.get("evidence") is not None:
+                    result["evidence"] = advisory.get("evidence")
+            # Primary candidate list stays deterministic unless accept_advisory.
+            if (
+                result["recommended_base"]
+                and accept_advisory_requested(args)
+                and isinstance(advisory, dict)
+                and advisory.get("applied")
+            ):
                 selected = next(
                     (
                         candidate
@@ -490,6 +573,8 @@ def apply_rpc_advisory(
                     str(result.get("behavior") or ""),
                     session_id=session_id,
                     deadline_seconds=min(30.0, remaining),
+                    detail=str(args.get("detail") or "normal"),
+                    accept_advisory=accept_advisory_requested(args),
                 )
             existing = result.get("items") if isinstance(result.get("items"), list) else []
             seen = {str(item.get("addr") or "").lower() for item in existing if isinstance(item, Mapping)}

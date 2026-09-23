@@ -174,10 +174,12 @@ def test_architecture_recommendations_inference_warning_and_stale_checkpoint(mon
         "confidence": 0.95, "candidates": [{"processor": "riscv", "bitness": 64, "confidence": 0.99}],
         "endian": "little", "load_base": 0x8000,
     })
-    assert warning and opts == {"processor": "riscv", "bitness": 64, "endian": "little", "baseaddr": 0x8000}
-    assert host._auto_apply_inferred_profile({"processor": "arm", "bitness": 32, "endian": "little", "baseaddr": 1}, {
+    assert warning and "riscv" in warning and opts == {}
+    already = {"processor": "arm", "bitness": 32, "endian": "little", "baseaddr": 1}
+    warn_already = host._auto_apply_inferred_profile(already, {
         "confidence": 1.0, "processor": "arm", "bitness": 32, "endian": "little", "load_base": 2,
-    }) is None
+    })
+    assert warn_already and already == {"processor": "arm", "bitness": 32, "endian": "little", "baseaddr": 1}
     assert host._auto_apply_inferred_profile({}, {"ambiguous": True, "confidence": 1.0, "processor": "arm", "bitness": 32}) is None
     assert host._auto_apply_inferred_profile({}, {"confidence": 0.8, "processor": "arm", "bitness": 32}) is None
     assert host._auto_apply_inferred_profile({}, {"confidence": 1.0}) is None

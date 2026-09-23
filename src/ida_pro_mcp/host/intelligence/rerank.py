@@ -2,7 +2,8 @@
 
 There is no local cross-encoder or subprocess lifecycle.  When an explicit
 Jev/custom provider is ready, a bounded batch of typed score questions may
-reorder lexical candidates; otherwise callers keep deterministic lexical order.
+propose an advisory order; callers keep deterministic lexical order unless
+``accept_advisory`` is explicitly opted in through the advisor stage.
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import math
 import time
 from typing import Any
 
+from .advisor_stage import DETAIL_POOL_CAPS, invoke_advisor, pool_cap, resolve_detail
 from .core import _extract_signature
 from .providers import (
-    ProviderError,
     ProviderRequest,
     Question,
     StateSnapshot,
@@ -25,7 +26,7 @@ from .providers import (
 )
 
 RERANK_MAX_CANDIDATES = 64
-RERANK_POOL_MAX = 8
+RERANK_POOL_MAX = DETAIL_POOL_CAPS["normal"]  # shared normal dial (=8)
 RERANK_DOC_BUDGET_CHARS = 800
 RERANK_MAX_DOC_CHARS = 6000
 RERANK_PROFILE = "typed-question"
@@ -52,6 +53,8 @@ class Reranker:
         self._provider = provider
         self._provider_error: dict[str, Any] | None = None
         self._last_error: dict[str, Any] | None = None
+        self._last_evidence: dict[str, Any] | None = None
+        self._last_advisory_order: list[Any] | None = None
         if self._provider is None:
             try:
                 self._provider = resolve_provider(with_ledger=True)
@@ -119,6 +122,14 @@ class Reranker:
         """Return the latest safe advisory failure, if any."""
         return dict(self._last_error) if self._last_error else None
 
+    @property
+    def last_evidence(self) -> dict[str, Any] | None:
+        return dict(self._last_evidence) if self._last_evidence else None
+
+    @property
+    def last_advisory_order(self) -> list[Any] | None:
+        return None if self._last_advisory_order is None else list(self._last_advisory_order)
+
     def rerank(
         self,
         query: str,
@@ -126,7 +137,11 @@ class Reranker:
         *,
         deadline: float | None = None,
         session_id: str = "",
+        detail: str = "normal",
+        accept_advisory: bool = False,
     ) -> list[dict[str, Any]] | None:
+        self._last_evidence = None
+        self._last_advisory_order = None
         if not documents or not self.is_enabled():
             if self._mode in {"jev", "custom"} and self._provider is not None:
                 code = "JEV_UNAVAILABLE" if self._mode == "jev" else "PROVIDER_UNAVAILABLE"
@@ -135,6 +150,8 @@ class Reranker:
         if deadline is not None and time.monotonic() >= deadline:
             self._last_error = {"error": True, "code": "PROVIDER_TIMEOUT", "message": "advisory scoring deadline elapsed"}
             return None
+        detail_key = resolve_detail(detail)
+        capped_docs = list(documents)[: pool_cap(detail_key)]
         state = {"query_signature": _extract_signature(str(query)[:RERANK_DOC_BUDGET_CHARS])[:2048]}
         criteria = [
             "Unrelated: the signature provides no meaningful evidence for the query.",
@@ -148,11 +165,12 @@ class Reranker:
         except (TypeError, ValueError, OverflowError):
             self._last_error = {"error": True, "code": "PROVIDER_CONFIG_INVALID", "message": "advisory request limits are malformed"}
             return None
-        max_questions = min(max_questions, RERANK_MAX_CANDIDATES)
+        max_questions = min(max_questions, RERANK_MAX_CANDIDATES, pool_cap(detail_key))
         model = str(getattr(config, "model", "jev-latest") or "jev-latest")
         candidate_indices: list[int] = []
         questions: list[Question] = []
-        for index, raw_doc in enumerate(documents[:RERANK_MAX_CANDIDATES]):
+        pool_meta: list[dict[str, Any]] = []
+        for index, raw_doc in enumerate(capped_docs):
             if len(questions) >= max_questions:
                 break
             doc = str(raw_doc or "")[:RERANK_MAX_DOC_CHARS]
@@ -183,41 +201,64 @@ class Reranker:
                 break
             questions.append(question)
             candidate_indices.append(index)
+            pool_meta.append({"id": index, "signature": signature, "preview": signature})
         if not questions:
             self._last_error = {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "rerank candidates exceed the configured request limit"}
             return None
-        try:
-            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            if remaining is not None and remaining <= 0.0:
-                self._last_error = {"error": True, "code": "PROVIDER_TIMEOUT", "message": "advisory scoring deadline elapsed"}
-                return None
-            response = self._provider.invoke(
-                state,
-                questions,
-                operation="rerank_candidates",
-                session_id=session_id,
-                deadline_seconds=remaining,
-            )
+
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        if remaining is not None and remaining <= 0.0:
+            self._last_error = {"error": True, "code": "PROVIDER_TIMEOUT", "message": "advisory scoring deadline elapsed"}
+            return None
+
+        def _scores(response, _pool):
             scored: list[dict[str, Any]] = []
             for index in candidate_indices:
                 answer = response.answers.get(f"doc_{index}")
                 if answer is None:
-                    self._last_error = {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "provider omitted a score answer"}
-                    return None
+                    raise ValueError("provider omitted a score answer")
                 question = questions[candidate_indices.index(index)]
                 score, _confidence = normalize_score_answer(answer, question.criteria)
                 if not math.isfinite(score) or score < -1e-9 or score > 1.0 + 1e-9:
-                    self._last_error = {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "provider score answer is outside 0..1"}
-                    return None
+                    raise ValueError("provider score answer is outside 0..1")
                 scored.append({"index": index, "score": max(0.0, min(1.0, score))})
-            self._last_error = None
             return scored
-        except ProviderError as exc:
-            self._last_error = provider_error_payload(exc)
+
+        def _advisory_order(response, pool_items):
+            scored = _scores(response, pool_items)
+            by_index = {int(item["index"]): float(item["score"]) for item in scored}
+            order = sorted(range(len(pool_items)), key=lambda idx: by_index.get(idx, 0.0), reverse=True)
+            return [pool_items[idx] for idx in order]
+
+        stage = invoke_advisor(
+            state,
+            questions,
+            deterministic_pool=pool_meta,
+            detail=detail_key,
+            accept_advisory=accept_advisory,
+            session_id=session_id,
+            operation="rerank_candidates",
+            deadline_seconds=remaining,
+            provider=self._provider,
+            signatures=pool_meta,
+            advisory_order_from_response=_advisory_order,
+            confidence_from_response=lambda response: max(
+                (float(item.get("score") or 0.0) for item in (_scores(response, pool_meta) or [])),
+                default=0.0,
+            ),
+            scores_from_response=_scores,
+        )
+        self._last_evidence = dict(stage.evidence or {})
+        if stage.error:
+            self._last_error = dict(stage.error)
             return None
-        except (TypeError, ValueError, OverflowError):
-            self._last_error = {"error": True, "code": "PROVIDER_PROTOCOL_ERROR", "message": "provider scoring response is malformed"}
-            return None
+        self._last_error = None
+        self._last_advisory_order = (
+            None
+            if stage.advisory_order is None
+            else [item.get("id") if isinstance(item, dict) else item for item in stage.advisory_order]
+        )
+        return list(stage.scores or [])
 
 
 __all__ = [

@@ -555,10 +555,9 @@ def test_auto_apply_cortex_m_high_confidence(tmp_path):
     opts = {}
     warn = _session_host()._auto_apply_inferred_profile(opts, inf)
     assert warn is not None and "arm 32-bit" in warn
-    assert opts["processor"] == "arm"
-    assert opts["bitness"] == 32
-    assert opts["endian"] == "little"
-    assert opts.get("baseaddr") == 0x08000100  # reset-vector-derived load base
+    assert "not applied" in warn.lower() or "advisory" in warn.lower()
+    # Advisory never writes spawn options.
+    assert opts == {}
 
 
 def test_auto_apply_riscv_requires_ida_or_provider_advisory(tmp_path):
@@ -578,9 +577,7 @@ def test_auto_apply_riscv_requires_ida_or_provider_advisory(tmp_path):
 
 
 def test_prepare_open_args_applies_inference_and_surfaces_warning(tmp_path):
-    """The open path (shared by blocking create + background) applies the
-    inferred arch into the spawn options and surfaces the warning on the open
-    envelope, while explicit user options always win."""
+    """Open path surfaces architecture advisory but never auto-fills spawn options."""
     host = _session_host()
     path = _write_blob(tmp_path, _cortex_m_blob(), name="mcu2.bin")
     binary_path, analysis_options, arch_meta, force_new, ida_args, err = (
@@ -588,11 +585,10 @@ def test_prepare_open_args_applies_inference_and_surfaces_warning(tmp_path):
     )
     assert err is None
     assert binary_path == path
-    assert analysis_options["processor"] == "arm"
-    assert analysis_options["bitness"] == 32
-    assert analysis_options.get("baseaddr") == 0x08000100
-    assert arch_meta["inference_applied"] is True
+    assert "processor" not in analysis_options or analysis_options.get("processor") is None
+    assert arch_meta["inference_applied"] is False
     assert "inference_warning" in arch_meta
+    assert arch_meta.get("architecture_advisory", {}).get("applied") is False
 
     # Explicit user options take precedence and disable auto-apply for those keys.
     _, opts2, meta2, _, _, err2 = host._prepare_open_args(
@@ -600,7 +596,7 @@ def test_prepare_open_args_applies_inference_and_surfaces_warning(tmp_path):
     )
     assert err2 is None
     assert opts2["processor"] == "mips"  # user choice untouched
-    assert opts2["bitness"] == 32  # only the unset key is filled
+    assert "bitness" not in opts2  # advisory never fills unset keys
     assert "inference_warning" in meta2
 
 

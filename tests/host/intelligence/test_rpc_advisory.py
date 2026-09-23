@@ -82,7 +82,7 @@ def test_behavior_candidate_questions_bind_each_signature_to_its_question(monkey
     assert seen["kwargs"]["session_id"] == "session-2"
 
 
-def test_host_rerank_reorders_the_bounded_pool_and_applies_result_limit(monkeypatch):
+def test_host_rerank_keeps_deterministic_primary_and_exposes_advisory_order(monkeypatch):
     monkeypatch.setattr(
         advisory,
         "provider_status",
@@ -90,6 +90,14 @@ def test_host_rerank_reorders_the_bounded_pool_and_applies_result_limit(monkeypa
     )
     class _Reranker:
         last_error = None
+        last_evidence = {
+            "signatures_seen": [],
+            "budget_burn": {},
+            "confidence": 0.9,
+            "fail_closed_order": ["0x401000", "0x402000"],
+            "applied": False,
+            "disagreement": True,
+        }
 
         def __init__(self):
             pass
@@ -97,11 +105,12 @@ def test_host_rerank_reorders_the_bounded_pool_and_applies_result_limit(monkeypa
         def is_enabled(self):
             return True
 
-        def rerank(self, query, documents, *, deadline=None, session_id=""):
+        def rerank(self, query, documents, *, deadline=None, session_id="", detail="normal", accept_advisory=False):
             assert query == "find crypto"
             assert documents == ["low", "high"]
             assert deadline is not None
             assert session_id == "session-3"
+            assert accept_advisory is False
             return [{"index": 0, "score": 0.1}, {"index": 1, "score": 0.9}]
 
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.rerank.Reranker", _Reranker)
@@ -119,12 +128,52 @@ def test_host_rerank_reorders_the_bounded_pool_and_applies_result_limit(monkeypa
         result,
         session_id="session-3",
     )
-    assert cooked["rerank"]["applied"] is True
+    assert cooked["rerank"]["applied"] is False
+    assert cooked["rerank"]["disagreement"] is True
     assert cooked["rerank"]["pool"] == 2
-    assert cooked["items"][0]["addr"] == "0x402000"
-    assert cooked["items"][0]["rerank_score"] == 0.9
+    # Primary stays deterministic (first pool item), advisory_order has Jev ranking.
+    assert cooked["items"][0]["addr"] == "0x401000"
+    assert cooked["advisory_order"][0]["addr"] == "0x402000"
+    assert cooked["advisory_order"][0]["rerank_score"] == 0.9
+    assert cooked["evidence"]["applied"] is False
     assert cooked["advisory_provider"] == "jev"
     assert "_host_rerank_candidates" not in cooked
+
+
+def test_host_rerank_applies_only_with_accept_advisory(monkeypatch):
+    monkeypatch.setattr(
+        advisory,
+        "provider_status",
+        lambda: {"ok": True, "provider": {"provider_id": "jev"}},
+    )
+    class _Reranker:
+        last_error = None
+        last_evidence = None
+
+        def is_enabled(self):
+            return True
+
+        def rerank(self, query, documents, *, deadline=None, session_id="", detail="normal", accept_advisory=False):
+            assert accept_advisory is True
+            return [{"index": 0, "score": 0.1}, {"index": 1, "score": 0.9}]
+
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.rerank.Reranker", _Reranker)
+    result = {
+        "items": [],
+        "results": "",
+        "_host_rerank_candidates": [
+            {"ea": "0x401000", "name": "low_fn", "similarity": 0.8, "signature": "low"},
+            {"ea": "0x402000", "name": "high_fn", "similarity": 0.7, "signature": "high"},
+        ],
+    }
+    cooked = advisory.apply_rpc_advisory(
+        "search",
+        {"action": "nl", "query": "find crypto", "limit": 1, "timeout_ms": 8000, "accept_advisory": True},
+        result,
+        session_id="session-3",
+    )
+    assert cooked["rerank"]["applied"] is True
+    assert cooked["items"][0]["addr"] == "0x402000"
 
 
 def test_nested_gp_advisory_is_added_without_applying_candidate(monkeypatch):
@@ -212,7 +261,8 @@ def test_gadget_and_firmware_results_keep_legacy_advisory_shapes(monkeypatch):
         session_id="session-6",
     )
     assert firmware["recommended_base"] == "0x10000000"
-    assert firmware["candidates"][0]["base"] == "0x10000000"
+    # Primary candidate order stays deterministic without accept_advisory.
+    assert firmware["candidates"][0]["base"] == "0x20000000"
 
 
 def test_rerank_failure_keeps_lexical_result_and_strips_private_pool(monkeypatch):

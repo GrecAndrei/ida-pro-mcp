@@ -574,6 +574,7 @@ TOOL_ARG_SCHEMAS = {
         # Combinator / NL kwargs (must be admitted — host rejects unknown keys)
         "mode": {"type": "string", "description": "nl mode: quick|expand (default expand)"},
         "rerank": {"type": "boolean", "description": "Optionally score bounded lexical signatures with the configured Jev/custom provider; disabled or unavailable providers preserve lexical order."},
+        "accept_advisory": {"type": "boolean", "description": "Opt in to apply Jev advisory_order to the primary search list. Default false keeps deterministic lexical order and returns advisory_order + evidence as siblings."},
 
         "target": {"type": "string", "description": "Alias for pattern/addr for ref searches"},
         "ea": {"type": "string", "description": "Address alias for pattern/addr"},
@@ -930,6 +931,8 @@ TOOL_ARG_SCHEMAS = {
         "force": {"type": "boolean", "description": "Force a fresh deterministic lexical recall of matching entries"},
         "offset": {"type": "integer", "description": "Pagination offset"},
         "db_path": {"type": "string", "description": "Override path to blackboard SQLite DB"},
+        "accept_advisory": {"type": "boolean", "description": "For next_target: opt in to apply Jev advisory_order to the primary target list. Default false keeps deterministic order."},
+        "strategy": {"type": "string", "description": "next_target strategy override"},
     },
     "governance": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},

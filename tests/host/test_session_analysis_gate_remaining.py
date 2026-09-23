@@ -135,7 +135,7 @@ def test_architecture_recommendation_and_inference_boundaries():
     assert host._auto_apply_inferred_profile(options, None) is None
     assert host._auto_apply_inferred_profile(options, {"ambiguous": True, "confidence": 1}) is None
     assert host._auto_apply_inferred_profile(options, {"confidence": "not-a-number"}) is None
-    assert host._auto_apply_inferred_profile(
+    warn = host._auto_apply_inferred_profile(
         options,
         {
             "confidence": 0.99,
@@ -144,7 +144,8 @@ def test_architecture_recommendation_and_inference_boundaries():
             "load_base": 0x1000,
         },
     )
-    assert options == {"processor": "riscv", "bitness": 64, "endian": "little", "baseaddr": 0x1000}
+    assert warn and "riscv" in warn
+    assert options == {}
 
 
 def test_background_create_and_switch_select_paths(tmp_path, monkeypatch):

@@ -204,6 +204,7 @@ class ArchInference:
     warning: str | None = None           # honest caveat for raw blobs / provisional guesses
     ambiguous: bool = False              # top candidates are indistinguishable (same-score tie)
     provider_error: dict[str, Any] | None = None  # advisory failure, never a policy decision
+    advisory: dict[str, Any] | None = None  # sibling suggestion; never applied processor/bitness
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -225,6 +226,8 @@ class ArchInference:
             d["warning"] = self.warning
         if self.provider_error:
             d["provider_error"] = dict(self.provider_error)
+        if self.advisory:
+            d["advisory"] = dict(self.advisory)
         return d
 
 
@@ -671,14 +674,25 @@ def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
         inf.warning = "provider returned unknown architecture; set architecture explicitly"
         return inf.to_dict()
     elif isinstance(advisory, dict) and advisory.get("ok") and advisory.get("choice") not in {None, "unknown"}:
-        # Jev/custom is advisory only: expose its bounded hypothesis, but do
-        # not auto-select an IDA processor or mutate an IDB here.
-        inf.processor = advisory.get("processor")
-        inf.bitness = advisory.get("bitness")
-        inf.endian = advisory.get("endian")
+        # Jev advisor-stage cut: suggestion is sibling-only. Never write
+        # processor/bitness/endian into the inferred profile callers treat as applied.
+        inf.processor = None
+        inf.bitness = None
+        inf.endian = None
         inf.confidence = float(advisory.get("confidence") or 0.0)
         inf.reason = "typed-question provider architecture advisory"
         inf.warning = "provider advisory; verify architecture explicitly before IDA analysis"
+        inf.advisory = {
+            "choice": advisory.get("choice"),
+            "processor": advisory.get("processor"),
+            "bitness": advisory.get("bitness"),
+            "endian": advisory.get("endian"),
+            "confidence": advisory.get("confidence"),
+            "source": advisory.get("source"),
+            "model": advisory.get("model"),
+            "evidence": advisory.get("evidence"),
+            "applied": False,
+        }
         return inf.to_dict()
     if candidates:
         # Keep candidate ranking only for raw ambiguous blobs.

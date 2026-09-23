@@ -353,7 +353,16 @@ GLOBAL_RESPONSE_CONTROLS = {
         "enum": ["triage", "normal", "deep"],
         "description": (
             "Primary response/truncation dial (shared with Jev session profiles). "
-            "triage=small budgets, normal=default compact, deep=full output."
+            "triage=small budgets, normal=default compact, deep=full output. "
+            "Also caps the Jev advisor pool: triage=4, normal=8, deep=16."
+        ),
+    },
+    "accept_advisory": {
+        "type": "boolean",
+        "description": (
+            "Opt in to apply Jev advisory_order to the primary result list. "
+            "Default false: primary stays deterministic; advisory_order and evidence "
+            "are returned as siblings when Jev disagrees."
         ),
     },
     "_response_mode": {

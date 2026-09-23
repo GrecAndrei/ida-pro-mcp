@@ -880,13 +880,23 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             arch_meta = dict(arch_meta or {})
             inferred = infer_binary_arch_profile(binary_path)
             arch_meta["inferred_profile"] = inferred
-            arch_meta["inference_applied"] = True
-            # Auto-apply only deterministic, non-provider inferences such as a
-            # validated Cortex-M vector table. Provider architecture answers
-            # remain advisory and are never copied into IDA spawn options.
+            # Jev/advisor v2: never auto-fill processor/bitness into spawn options.
+            # Advisory may suggest; explicit operator options still apply.
+            arch_meta["inference_applied"] = False
             warning = self._auto_apply_inferred_profile(analysis_options, inferred)
             if warning:
                 arch_meta["inference_warning"] = warning
+                arch_meta["architecture_advisory"] = {
+                    "suggested": {
+                        "processor": (inferred or {}).get("processor"),
+                        "bitness": (inferred or {}).get("bitness"),
+                        "endian": (inferred or {}).get("endian"),
+                        "load_base": (inferred or {}).get("load_base"),
+                        "confidence": (inferred or {}).get("confidence"),
+                    },
+                    "applied": False,
+                    "hint": "Pass explicit architecture options to apply; advisory never writes.",
+                }
 
         if not binary_path:
             return (
@@ -1645,20 +1655,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return arch_meta.get("inference_warning")
 
     def _auto_apply_inferred_profile(self, analysis_options: dict, inferred) -> str | None:
-        """Apply a high-confidence architecture inference to the spawn options
-        of an opaque blob (h02 q02).
+        """Suggest architecture for opaque blobs — never write spawn options.
 
-        Policy: auto-apply only when the inference is NOT ambiguous and its
-        confidence is >= 0.9 and it carries a definite processor + bitness.
-        Provider architecture answers are explicitly marked advisory and are
-        never forced. Native containers that let the loader drive the arch
-        (ELF/Mach-O), and sub-0.9 guesses are never forced. Returns a warning
-        string when options were applied, else None.
+        Advisories (deterministic or provider) may recommend processor/bitness/
+        endian/load_base. They never mutate ``analysis_options``. Explicit
+        operator options remain the only write path. Kept name for shim
+        compatibility with existing call sites/tests.
         """
         if not isinstance(inferred, dict):
             return None
         if str(inferred.get("warning") or "").startswith("provider advisory"):
-            return "Provider architecture advisory is informational; pass explicit architecture options before IDA analysis."
+            return (
+                "Provider architecture advisory is informational; pass explicit "
+                "architecture options before IDA analysis. Advisory never auto-fills."
+            )
         if inferred.get("ambiguous"):
             return None
         try:
@@ -1669,10 +1679,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return None
         processor = inferred.get("processor")
         bitness = inferred.get("bitness")
-        # Raw blobs may rank a candidate list while the top-level
-        # processor/bitness stay None. Lift a deterministic top candidate only
-        # after the confidence and ambiguity checks above; provider advisories
-        # returned earlier are never passed through this compatibility path.
         if not processor or not bitness:
             candidates = inferred.get("candidates") or []
             top = candidates[0] if candidates else None
@@ -1683,26 +1689,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     conf = max(conf, float(top.get("confidence") or 0.0))
         if not processor or not bitness:
             return None
-        applied: dict = {}
-        if not analysis_options.get("processor"):
-            applied["processor"] = processor
-        if not analysis_options.get("bitness"):
-            applied["bitness"] = bitness
-        if not analysis_options.get("endian") and inferred.get("endian"):
-            applied["endian"] = inferred["endian"]
+        # Suggest only — do not write into analysis_options (Jev advisor v2).
+        _ = analysis_options  # kept for call-signature compatibility
         load_base = inferred.get("load_base")
-        if load_base is not None and not (analysis_options.get("baseaddr") or analysis_options.get("load_base")):
-            # _build_ida_command reads baseaddr for the -b paragraph flag.
-            applied["baseaddr"] = load_base
-        if not applied:
-            return None
-        analysis_options.update(applied)
         load_note = f" 0x{int(load_base):X}" if load_base is not None else ""
         return (
-            f"Applied high-confidence architecture inference for opaque blob: "
-            f"{processor} {bitness}-bit (confidence={conf:.2f}, load base "
-            f"{load_note}). If this is wrong, re-open with explicit "
-            "architecture options."
+            f"Architecture advisory (not applied): {processor} {bitness}-bit "
+            f"(confidence={conf:.2f}, load base{load_note}). Pass explicit "
+            "architecture options to apply; advisory never writes processor/bitness."
         )
 
     @staticmethod
