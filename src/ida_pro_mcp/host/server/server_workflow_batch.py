@@ -262,7 +262,14 @@ class ServerWorkflowBatchMixin:
                 "max_tokens": rpc_args.pop("max_tokens", None),
                 "trunc_offset": rpc_args.pop("trunc_offset", None),
                 "trunc_limit": rpc_args.pop("trunc_limit", None),
+                "detail": (
+                    opts.get("detail")
+                    if isinstance(opts, dict)
+                    else None
+                ) or rpc_args.pop("detail", None) or "normal",
             }
+            rpc_args.pop("detail", None)
+            rpc_args.pop("_detail", None)
             rpc_args.pop("_purpose", None)
             rpc_args.pop("_risk_ack", None)
             rpc_args.pop("_guardrail_ack", None)

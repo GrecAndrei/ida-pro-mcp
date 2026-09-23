@@ -16,9 +16,9 @@ class _CompactHost(ServerResponseCompactMixin):
     default_batch_compact = False
     default_error_detail_level = "basic"
     _qol_profiles = {
-        "tiny": {"mode": "compact", "max_items": 2, "max_string": 64},
-        "balanced": {"mode": "compact", "max_items": 10, "max_string": 100},
-        "debug": {"mode": "full", "max_items": 100, "max_string": 500},
+        "tiny": {"detail": "triage", "mode": "compact", "max_items": 2, "max_string": 64},
+        "balanced": {"detail": "normal", "mode": "compact", "max_items": 10, "max_string": 100},
+        "debug": {"detail": "deep", "mode": "full", "max_items": 100, "max_string": 500},
     }
 
     @staticmethod
@@ -32,6 +32,7 @@ class _CompactHost(ServerResponseCompactMixin):
 def _opts(**overrides):
     result = {
         "mode": "compact",
+        "detail": "normal",
         "fields": [],
         "omit": [],
         "max_items": 10,
@@ -69,7 +70,8 @@ def test_extract_response_options_handles_aliases_precedence_and_preserves_backe
 
     assert exec_args == {"query": "decrypt", "mode": "backend-mode"}
     assert opts["qol_mode"] == "tiny"
-    assert opts["mode"] == "compact"  # compact toggle wins over response_mode
+    assert opts["detail"] == "normal"  # compact=True maps to detail=normal (legacy)
+    assert opts["mode"] == "compact"  # derived from detail
     assert opts["max_items"] == 1
     assert opts["max_string"] == 500_000
     assert opts["char_budget"] == 5_000
@@ -83,10 +85,12 @@ def test_extract_response_options_invalid_modes_fall_back_to_defaults():
     args, opts = host._extract_response_options({"qol_mode": "unknown", "response_mode": "wat"})
     assert args == {}
     assert opts["qol_mode"] == "balanced"
+    assert opts["detail"] == "normal"
     assert opts["mode"] == "compact"
     assert opts["error_details"] == "basic"
 
     _args, full = host._extract_response_options({"response_mode": "full", "_error_details": "wat"})
+    assert full["detail"] == "deep"
     assert full["mode"] == "full"
     assert full["error_details"] == "full"
 
@@ -311,3 +315,20 @@ def test_compact_batch_result_is_noop_when_not_enabled_or_shape_is_not_batch():
     payload = {"results": []}
     assert host._compact_batch_result(payload, _opts(batch_compact=False)) is payload
     assert host._compact_batch_result([payload], _opts(batch_compact=True)) == [payload]
+
+
+def test_detail_dial_wins_over_compact_aliases():
+    host = _CompactHost()
+    _args, opts = host._extract_response_options(
+        {"detail": "deep", "_compact": True, "_response_mode": "compact"}
+    )
+    assert opts["detail"] == "deep"
+    assert opts["mode"] == "full"  # derived; detail wins over legacy compact
+
+    _args, triage = host._extract_response_options({"detail": "triage"})
+    assert triage["detail"] == "triage"
+    assert triage["mode"] == "compact"
+
+    _args, from_qol = host._extract_response_options({"qol_mode": "debug"})
+    assert from_qol["detail"] == "deep"
+    assert from_qol["mode"] == "full"

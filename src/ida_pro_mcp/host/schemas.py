@@ -348,14 +348,22 @@ ACTION_ALIASES_BY_TOOL = _build_action_aliases()
 ARG_ALIASES_BY_TOOL = _build_tool_arg_aliases()
 
 GLOBAL_RESPONSE_CONTROLS = {
+    "detail": {
+        "type": "string",
+        "enum": ["triage", "normal", "deep"],
+        "description": (
+            "Primary response/truncation dial (shared with Jev session profiles). "
+            "triage=small budgets, normal=default compact, deep=full output."
+        ),
+    },
     "_response_mode": {
         "type": "string",
         "enum": ["compact", "full"],
-        "description": "Output mode. compact is default and reduces token usage.",
+        "description": "Deprecated alias for detail: compact→normal, full→deep. Prefer detail=",
     },
     "_compact": {
         "type": "boolean",
-        "description": "Shortcut for compact/full mode toggle.",
+        "description": "Deprecated alias for detail: true→normal, false→deep. Prefer detail=",
     },
     "_response_fields": {
         "type": ["array", "string"],

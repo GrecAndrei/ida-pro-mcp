@@ -37,14 +37,42 @@ class ServerResponseCompactMixin:
                 opts.update(profile)
         opts["qol_mode"] = qol_mode
 
+        # One dial: detail=triage|normal|deep (shared with truncation + Jev).
+        # Legacy _compact / _response_mode / compact / response_mode map into it.
+        detail = self._pop_first(exec_args, ["detail", "_detail"], None)
+        if isinstance(detail, str):
+            detail = detail.strip().lower()
+        if detail not in {"triage", "normal", "deep"}:
+            detail = None
+
         mode = self._pop_first(exec_args, ["_response_mode", "response_mode"], None)
         compact_toggle = self._pop_first(exec_args, ["_compact", "compact"], None)
+        legacy_mode = None
         if compact_toggle is not None:
-            mode = "compact" if _coerce_bool(compact_toggle, True) else "full"
-        if isinstance(mode, str):
-            mode = mode.strip().lower()
-        if mode not in {"compact", "full"}:
-            mode = opts.get("mode", self.default_response_mode)
+            legacy_mode = "compact" if _coerce_bool(compact_toggle, True) else "full"
+        elif isinstance(mode, str):
+            mode_l = mode.strip().lower()
+            if mode_l in {"compact", "full"}:
+                legacy_mode = mode_l
+
+        if detail is None:
+            if legacy_mode == "full":
+                detail = "deep"
+            elif legacy_mode == "compact":
+                detail = "normal"
+            elif qol_mode == "tiny":
+                detail = "triage"
+            elif qol_mode == "debug":
+                detail = "deep"
+            else:
+                # Default response mode compact → normal; full → deep.
+                default_mode = str(opts.get("mode", self.default_response_mode) or "compact")
+                detail = "deep" if default_mode == "full" else "normal"
+
+        opts["detail"] = detail
+        # Internal compact machinery still keys off mode; derive it from detail.
+        # detail is the public dial; mode is an internal alias (deep→full, else compact).
+        mode = "full" if detail == "deep" else "compact"
         opts["mode"] = mode
         compact_mode = mode == "compact"
 
@@ -150,8 +178,11 @@ class ServerResponseCompactMixin:
         return exec_args, opts
 
     def _default_response_options(self) -> dict:
+        default_mode = self.default_response_mode
+        default_detail = "deep" if default_mode == "full" else "normal"
         return {
-            "mode": self.default_response_mode,
+            "mode": default_mode,
+            "detail": default_detail,
             "fields": [],
             "omit": [],
             "max_items": self.default_compact_max_items,

@@ -231,6 +231,7 @@ class IDAMCPServer(
         )
         self._qol_profiles = {
             "tiny": {
+                "detail": "triage",
                 "mode": "compact",
                 "max_items": 24,
                 "max_string": 800,
@@ -245,6 +246,7 @@ class IDAMCPServer(
                 "error_details": "none",
             },
             "balanced": {
+                "detail": "deep" if self.default_response_mode == "full" else "normal",
                 "mode": self.default_response_mode,
                 "max_items": self.default_compact_max_items,
                 "max_string": self.default_compact_max_string,
@@ -259,6 +261,7 @@ class IDAMCPServer(
                 "error_details": self.default_error_detail_level,
             },
             "debug": {
+                "detail": "deep",
                 "mode": "full",
                 "max_items": 10_000,
                 "max_string": 500_000,
@@ -805,6 +808,8 @@ class IDAMCPServer(
             else:
                 call_args = args
                 response_opts = self._default_response_options()
+            # Single dial for truncation + compact: detail resolved above.
+            self._resolved_detail = str(response_opts.get("detail") or "normal")
 
             # Agent SSO: a per-call ``agent`` tag is host-level identity, not
             # an IDA argument. Pop it before operation validation / policy so
