@@ -28,8 +28,9 @@ the original operation:
   a multi-session connection. Unscoped and previous-session tokens resolve
   cleanly without false expiration from ambient session switches.
 
-**Planned** (not shipped): stable opaque cursors, explicit `why_truncated` /
-`how_to_fetch_next` fields, and per-tool truncation budgets. See
+**Shipped** with truncation (a)–(c): opaque `cursor` / `next_cursor`,
+`_continue.reason` + `next` + `hint`, and per-tool budgets with
+`detail=triage|normal|deep` (proof keys never soft-truncated). See
 [Search and retrieval](../search-and-retrieval.md).
 
 `ida_python` is the escape hatch for anything the surface does not cover. It

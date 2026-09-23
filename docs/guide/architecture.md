@@ -80,8 +80,8 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 4. Phase-gate preflight — skipped when `_risk_ack=true`
 5. Route to host-side handler (session/blackboard/workflow/etc.) or forward to IDA via TCP RPC
 6. IDA tool execution (deterministic SDK logic)
-7. Host: compact/truncate response (`has_more`/`done` + continuation tokens;
-   stable cursors / why-truncateded / per-tool budgets are **Planned**)
+7. Host: compact/truncate response (`_continue` with `reason`/`next`/`cursor`,
+   `has_more`/`done`, per-tool budgets via `detail=triage|normal|deep`)
 8. Host: auto-blackboard extraction from response payload (provider answers
    never write blackboard findings)
 9. Host: deterministic context injection and optional provider advisory metadata

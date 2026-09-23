@@ -44,24 +44,27 @@ provider request is sent.
 
 Large tool responses may be compacted by the host truncation store
 (`host/stores/truncation.py`). When truncated, the payload carries `_truncated`
-and `_continue` metadata. Call `ida_continue` with the token (and `field` when
-more than one field is truncated) rather than re-running the original tool.
+and a first-class `_continue` envelope. Prefer `ida_continue` with that
+envelope rather than re-running the original tool.
 
-Shipped behavior today:
+Shipped behavior today (truncation redesign (a)–(c)):
 
 - Continuation tokens: ~1 hour sliding TTL (refreshed on access), LRU store
   capacity 500, scoped per connection/session owner.
-- Pagination indicators: `has_more`, `done`, character/UTF-8 byte offsets, and
-  `next_offset` / `next_offset_bytes` where applicable.
+- `_continue` envelope: required `reason` (why truncated / refused), store-bound
+  opaque `cursor` / `next_cursor`, `fields` list, and `next` (`tool` + `args`)
+  plus a human `hint` for how to fetch the next page.
+- Pagination: `has_more`, `done`. Legacy `next_offset` / auto-advance still
+  works; cursor path does not share a single `next_offset` across fields.
+- Per-tool char/list budgets with shared `detail=triage|normal|deep` (scales
+  ×0.5 / 1 / 2). Proof/evidence paths are allowlisted and never soft-truncated
+  (`reason=policy_risk` when that is why nothing was cut).
 - `ida_continue` supports paging, `peek` (inspect without advancing),
   `summary`, and in-payload `pattern` search (optional regex).
 
-## Planned truncation redesign (not shipped)
+## Planned (not shipped)
 
-Do not document these as current contract:
-
-- Stable opaque cursors replacing offset-centric continuation
-- Explicit `why_truncated` / `how_to_fetch_next` operator fields
-- Per-tool truncation budgets beyond the existing global /
-  per-call truncate controls
+- Further operator-facing polish beyond `reason` / `next` / `hint` if clients
+  need a dedicated `why_truncated` alias
+- Tighter per-risk budgets separate from the shared `detail` dial
 

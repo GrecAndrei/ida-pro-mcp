@@ -49,15 +49,14 @@ lease cleanup; verify the ownership report first.
 
 ## A result is truncated
 
-Responses may include `_truncated` / `_continue`. Call `ida_continue` with the
-returned token (and `field` when needed) rather than repeating the original
-operation. Repeating can redo expensive analysis and may produce a different
-state after an edit. Continuation tokens have a 1-hour sliding TTL refreshed on
-every continuation call, retain up to 500 active tokens in the host store,
-report `has_more` / `done` with character/UTF-8 offsets, and support in-flight
-search via `pattern="..."` without retrieving all chunks. Stable cursors,
-`why_truncated`, and per-tool budgets are **Planned** — see
-[Search and retrieval](search-and-retrieval.md).
+Responses may include `_truncated` / `_continue`. Prefer `ida_continue` using
+`_continue.next` (or the opaque `cursor` + `token`, and `field` when multiple
+fields are listed) rather than repeating the original operation. Repeating can
+redo expensive analysis and may produce a different state after an edit.
+Continuation tokens have a 1-hour sliding TTL, retain up to 500 active tokens,
+expose `reason` / `next` / `hint`, report `has_more` / `done`, honor per-tool
+budgets via `detail=triage|normal|deep`, and support in-flight search via
+`pattern="..."`. See [Search and retrieval](search-and-retrieval.md).
 
 ## Intelligence or advisory scoring is unavailable
 
