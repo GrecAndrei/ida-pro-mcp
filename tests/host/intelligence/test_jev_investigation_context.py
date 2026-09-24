@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ from ida_pro_mcp.host.intelligence.providers import (
     resolve_provider_config,
 )
 from ida_pro_mcp.host.intelligence.providers.registry import default_usage_ledger
+from ida_pro_mcp.host.intelligence.providers.types import MAX_STATE_BYTES
 
 
 def _decompile_payload() -> dict:
@@ -221,7 +223,7 @@ def test_context_assembly_builds_safe_focus_and_neighborhood_packet(monkeypatch)
 
 @pytest.mark.parametrize(
     ("detail", "expected_candidates"),
-    (("triage", 4), ("normal", 8), ("deep", 16)),
+    (("triage", 8), ("normal", 16), ("deep", 30)),
 )
 def test_neighborhood_advisory_uses_one_bounded_typed_request(detail, expected_candidates):
     functions = [
@@ -232,7 +234,7 @@ def test_neighborhood_advisory_uses_one_bounded_typed_request(detail, expected_c
             "signature": f"calls=1; call symbols: api_{index}; identifier terms: arg_{index}",
             "api_calls": [f"api_{index}"],
         }
-        for index in range(17)
+        for index in range(65)
     ]
     provider = _RecordingProvider()
     result = assess_function_neighborhood(
@@ -262,6 +264,60 @@ def test_neighborhood_advisory_uses_one_bounded_typed_request(detail, expected_c
     assert result["applied"] is False
 
 
+def test_deep_neighborhood_fills_the_available_state_window():
+    functions = [
+        {
+            "address": f"0x{0x401000 + index * 0x100:x}",
+            "name": f"function_{index}",
+            "relationship": "callee",
+            "signature": f"symbol_{index}; " + ("call_symbol " * 1_000),
+            "api_calls": [f"api_{index}"],
+        }
+        for index in range(30)
+    ]
+    provider = _RecordingProvider()
+
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000", "focus_signature": "focus calls=30"},
+        functions,
+        provider=provider,
+        detail="deep",
+    )
+
+    state_size = len(
+        json.dumps(provider.state, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+    assert result["ok"] is True
+    assert len(provider.state["functions"]) == 30
+    assert len(provider.questions) == 63
+    assert MAX_STATE_BYTES - state_size < 2_000
+    assert state_size <= MAX_STATE_BYTES
+    assert len(provider.state["functions"][0]["signature"]) > 2_048
+
+
+def test_neighborhood_adapts_candidate_count_to_provider_question_limit():
+    provider = _RecordingProvider()
+    provider.config = SimpleNamespace(
+        model="fixture", mode="custom", max_questions=5, max_input_chars=262_144
+    )
+    functions = [
+        {
+            "address": f"0x{0x401000 + index * 0x100:x}",
+            "name": f"function_{index}",
+            "signature": f"calls=1; api_{index}",
+        }
+        for index in range(10)
+    ]
+
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000"}, functions, provider=provider, detail="deep"
+    )
+
+    assert result["ok"] is True
+    assert len(provider.state["functions"]) == 1
+    assert len(provider.questions) == 5
+
+
 def test_malformed_neighborhood_response_fails_closed():
     provider = _RecordingProvider(omit_answers=True)
     result = assess_function_neighborhood(
@@ -282,8 +338,9 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
     jev_budget = BudgetConfig.from_env({}, provider_mode="jev")
     custom_budget = BudgetConfig.from_env({}, provider_mode="custom")
     assert jev_budget.request_input_tokens == 65_536
+    assert jev_budget.request_output_tokens == 8_192
     assert jev_budget.token_budget_session == 15_000_000
-    assert jev_budget.token_budget_daily == 140_000_000
+    assert jev_budget.token_budget_daily == 150_000_000
     assert (jev_budget.cost_budget_session, jev_budget.cost_budget_daily) == (5.0, 20.0)
     assert custom_budget.request_input_tokens == 8_192
     assert custom_budget.token_budget_session == 100_000
@@ -314,7 +371,8 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
         }
     )
     assert ledger.budget.request_input_tokens == 65_536
-    assert ledger.budget.token_budget_daily == 140_000_000
+    assert ledger.budget.request_output_tokens == 8_192
+    assert ledger.budget.token_budget_daily == 150_000_000
 
     generic = registry.default_usage_ledger(
         env={

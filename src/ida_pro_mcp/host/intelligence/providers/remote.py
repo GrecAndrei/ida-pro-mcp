@@ -13,6 +13,8 @@ from .base import StateQuestionProvider, assert_capability, invoke_http_json, no
 from .config import ProviderConfig
 from .http import JsonHttpTransport, TransportError
 from .types import (
+    MAX_JEV_REQUEST_BYTES,
+    MAX_STATE_AND_LONGEST_QUESTION_BYTES,
     ProviderBudgetError,
     ProviderConfigError,
     ProviderError,
@@ -129,12 +131,31 @@ class HttpTypedQuestionProvider(StateQuestionProvider):
     def build_request(self, state, questions) -> ProviderRequest:
         snapshot = state if isinstance(state, StateSnapshot) else StateSnapshot.from_mapping(state)
         normalized = normalize_questions(questions)
-        from .types import ProviderRequest
-
         request = ProviderRequest(snapshot, tuple(normalized), str(self.config.model or ""))
         if len(request.questions) > self.config.max_questions:
             raise ProviderProtocolError("provider question count exceeds the configured limit")
-        if len(json.dumps(request.to_wire(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > self.config.max_input_chars:
+        if self.config.mode == "jev":
+            state_bytes = len(
+                json.dumps(
+                    request.state.to_wire(), ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+            )
+            longest_question_bytes = max(
+                len(
+                    json.dumps(
+                        {question.question_id: question.to_wire()},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                )
+                for question in request.questions
+            )
+            if state_bytes + longest_question_bytes > MAX_STATE_AND_LONGEST_QUESTION_BYTES:
+                raise ProviderProtocolError(
+                    "Jev state and longest question exceed the compact context limit"
+                )
+        request_limit = min(self.config.max_input_chars, MAX_JEV_REQUEST_BYTES) if self.config.mode == "jev" else self.config.max_input_chars
+        if len(json.dumps(request.to_wire(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > request_limit:
             raise ProviderProtocolError("provider request exceeds the configured context limit")
         assert_capability(self, request.questions)
         return request
@@ -187,7 +208,8 @@ class HttpTypedQuestionProvider(StateQuestionProvider):
         except (TypeError, ValueError):
             self._last_error_code = "PROVIDER_PROTOCOL_ERROR"
             raise ProviderProtocolError("provider request contains unsupported JSON values") from None
-        if len(encoded_request) > self.config.max_input_chars:
+        request_limit = min(self.config.max_input_chars, MAX_JEV_REQUEST_BYTES) if self.config.mode == "jev" else self.config.max_input_chars
+        if len(encoded_request) > request_limit:
             self._last_error_code = "PROVIDER_PROTOCOL_ERROR"
             raise ProviderProtocolError("provider request exceeds the configured context limit")
         estimated_input_tokens = max(1, math.ceil(len(encoded_request) / 4))

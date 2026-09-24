@@ -12,7 +12,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-MAX_STATE_BYTES = 98_304
+MAX_STATE_BYTES = 120 * 1024
+# Jev documents 32K tokens for state plus its longest question. The host uses
+# a four-byte-per-token approximation for its byte-based preflight.
+MAX_STATE_AND_LONGEST_QUESTION_BYTES = 128 * 1024
+# Jev's documented 64K combined request window, represented as an approximate
+# four-byte-per-token host preflight. Provider usage remains authoritative.
+MAX_JEV_REQUEST_BYTES = 256 * 1024
 # Kept as an alias for integrations that imported the old internal name.  The
 # limit has always been measured after UTF-8 JSON encoding, so bytes is the
 # accurate unit.
@@ -21,6 +27,7 @@ MAX_TEXT_CHARS = 32_768
 MAX_NESTED_TEXT_CHARS = 8_192
 MAX_QUESTION_CHARS = 2_048
 MAX_QUESTIONS = 64
+MAX_CHOICE_OPTIONS = 255
 MAX_RESPONSE_BYTES = 1_048_576
 
 _SECRET_KEY_RE = re.compile(
@@ -188,7 +195,8 @@ def _compact_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
         return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
-        for raw_key, item in list(value.items())[:128]:
+        entry_limit = MAX_CHOICE_OPTIONS if key == "choice_criteria" else 128
+        for raw_key, item in list(value.items())[:entry_limit]:
             child_key = str(raw_key)
             compact = _compact_value(item, key=child_key, depth=depth + 1)
             if compact is not None:
@@ -196,7 +204,8 @@ def _compact_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
         return result
     if isinstance(value, (list, tuple)):
         result = []
-        for item in list(value)[:128]:
+        entry_limit = MAX_CHOICE_OPTIONS if key == "choice_criteria" else 128
+        for item in list(value)[:entry_limit]:
             compact = _compact_value(item, key=key, depth=depth + 1)
             if compact is not None:
                 result.append(compact)
@@ -294,10 +303,14 @@ class Question:
         if kind == "choice":
             if not isinstance(self.criteria, (Mapping, list, tuple)) or not self.criteria:
                 raise ProviderProtocolError("choice questions require criteria")
-            if len(self.criteria) > 64:
+            if len(self.criteria) > MAX_CHOICE_OPTIONS:
                 raise ProviderProtocolError("choice criteria is too large")
         if kind in {"choice", "score"}:
-            compact_criteria = _compact_value(self.criteria, depth=1)
+            compact_criteria = _compact_value(
+                self.criteria,
+                key="choice_criteria" if kind == "choice" else "",
+                depth=1,
+            )
             if compact_criteria in (None, "", {}, []):
                 raise ProviderProtocolError("question criteria must be non-empty")
             if len(json.dumps(compact_criteria, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_QUESTION_CHARS:
@@ -329,12 +342,18 @@ class Question:
             "instructions": _compact_value(self.instructions, depth=1),
         }
         if self.criteria is not None:
-            criteria = _compact_value(self.criteria, depth=1)
+            criteria = _compact_value(
+                self.criteria,
+                key="choice_criteria" if str(self.type).lower() == "choice" else "",
+                depth=1,
+            )
             # TypeSafe Choice criteria are option->description maps.  Accept a
             # bounded list in the provider-neutral helper and normalize it at
             # the wire boundary so Jev receives its native shape.
             if str(self.type).lower() == "choice" and isinstance(criteria, list):
-                criteria = {str(option): None for option in criteria[:64]}
+                criteria = {
+                    str(option): None for option in criteria[:MAX_CHOICE_OPTIONS]
+                }
             result["criteria"] = criteria
         return result
 
@@ -423,7 +442,11 @@ class Answer:
             probabilities = value.get("probabilities")
             parsed_probabilities = None
             if probabilities is not None:
-                if not isinstance(probabilities, Mapping) or not probabilities or len(probabilities) > 64:
+                if (
+                    not isinstance(probabilities, Mapping)
+                    or not probabilities
+                    or len(probabilities) > MAX_CHOICE_OPTIONS
+                ):
                     raise ProviderProtocolError("choice answer probabilities are malformed")
                 parsed_probabilities = {}
                 for label, raw_probability in probabilities.items():

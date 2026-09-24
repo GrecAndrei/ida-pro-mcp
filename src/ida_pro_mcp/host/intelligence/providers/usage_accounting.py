@@ -75,14 +75,14 @@ class BudgetConfig:
     ) -> "BudgetConfig":
         values = os.environ if env is None else env
 
-        # Jev is priced per input token at a fraction of a cent per full
-        # context.  Its request/token ceilings should permit a complete shared
-        # investigation packet; custom providers retain the conservative
-        # generic defaults unless the operator raises them explicitly.
+        # Jev charges for input tokens only; output is free. Reserve enough
+        # output tokens for a broad typed-question fan-out. Custom providers
+        # retain the generic defaults unless the operator raises them.
         jev_mode = str(provider_mode or "").strip().lower() == "jev"
         default_request_input_tokens = 65_536 if jev_mode else 8_192
+        default_request_output_tokens = 8_192 if jev_mode else 2_048
         default_session_tokens = 15_000_000 if jev_mode else 100_000
-        default_daily_tokens = 140_000_000 if jev_mode else 500_000
+        default_daily_tokens = 150_000_000 if jev_mode else 500_000
 
         def integer(
             names: tuple[str, ...],
@@ -164,7 +164,11 @@ class BudgetConfig:
                 1,
                 65_536 if jev_mode else 10_000_000,
             ),
-            request_output_tokens=integer(("IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS"), 2_048, 1),
+            request_output_tokens=integer(
+                ("IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS"),
+                default_request_output_tokens,
+                1,
+            ),
             request_count_session=integer(("IDA_MCP_JEV_SESSION_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_SESSION_REQUEST_LIMIT"), 200, 1),
             request_count_daily=integer(("IDA_MCP_JEV_DAILY_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_DAILY_REQUEST_LIMIT"), 2_000, 1),
             token_budget_session=integer(

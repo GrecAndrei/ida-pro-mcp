@@ -21,6 +21,7 @@ from .advisor_stage import (
     fail_closed,
     invoke_advisor,
     pool_cap,
+    resolve_detail,
     signature_previews,
 )
 from .providers import (
@@ -32,6 +33,11 @@ from .providers import (
     normalize_score_answer,
     provider_error_payload,
     resolve_provider,
+)
+from .providers.types import (
+    MAX_JEV_REQUEST_BYTES,
+    MAX_QUESTIONS,
+    MAX_STATE_AND_LONGEST_QUESTION_BYTES,
 )
 
 # Stable labels are local application metadata, not model instructions.  The
@@ -103,6 +109,9 @@ _COMPACT_STRUCTURE_FIELDS = (
     "back_edges",
     "cyclomatic_complexity",
 )
+_NEIGHBORHOOD_POOL_CAPS = {"triage": 8, "normal": 16, "deep": 30}
+_NEIGHBORHOOD_QUESTIONS_PER_FUNCTION = 2
+_NEIGHBORHOOD_SHARED_QUESTIONS = 3
 
 BLACKBOARD_LANES = {
     "lane_now": "Active finding to address next.",
@@ -368,7 +377,70 @@ def assess_function_neighborhood(
         }
         candidate.update(_compact_candidate_features(raw))
         bounded_functions.append(candidate)
-    pool = cap_pool(bounded_functions, detail)
+    neighborhood_cap = _NEIGHBORHOOD_POOL_CAPS[resolve_detail(detail)]
+    if not bounded_functions:
+        empty = fail_closed([], detail=detail, signatures=[])
+        return {
+            "ok": True,
+            "source": "provider_advisory",
+            "functions": [],
+            "recommended_next": None,
+            "recommended_evidence": "insufficient_context",
+            "evidence_sufficiency": None,
+            "evidence": empty.evidence,
+            "advisory_order": None,
+            "applied": False,
+            "disagreement": False,
+        }
+    try:
+        selected = _provider(provider=provider, ledger=ledger)
+        provider_config = getattr(selected, "config", None)
+        max_questions = min(
+            MAX_QUESTIONS,
+            max(1, int(getattr(provider_config, "max_questions", MAX_QUESTIONS))),
+        )
+        max_input_bytes = max(
+            1, int(getattr(provider_config, "max_input_chars", 262_144))
+        )
+        model = str(getattr(provider_config, "model", "jev-latest") or "jev-latest")
+    except (TypeError, ValueError, OverflowError):
+        failed = fail_closed(
+            bounded_functions[:neighborhood_cap],
+            detail=detail,
+            signatures=bounded_functions[:neighborhood_cap],
+            error={
+                "error": True,
+                "code": "PROVIDER_CONFIG_INVALID",
+                "message": "provider request limits are malformed",
+            },
+        )
+        return {**dict(failed.error or {}), "evidence": dict(failed.evidence)}
+    except ProviderError as exc:
+        failed = fail_closed(
+            bounded_functions[:neighborhood_cap],
+            detail=detail,
+            signatures=bounded_functions[:neighborhood_cap],
+            error=provider_error_payload(exc),
+        )
+        return {**dict(failed.error or {}), "evidence": dict(failed.evidence)}
+    except Exception:
+        failed = fail_closed(
+            bounded_functions[:neighborhood_cap],
+            detail=detail,
+            signatures=bounded_functions[:neighborhood_cap],
+            error={
+                "error": True,
+                "code": "PROVIDER_ERROR",
+                "message": "provider selection failed",
+            },
+        )
+        return {**dict(failed.error or {}), "evidence": dict(failed.evidence)}
+    question_cap = max(
+        0,
+        (max_questions - _NEIGHBORHOOD_SHARED_QUESTIONS)
+        // _NEIGHBORHOOD_QUESTIONS_PER_FUNCTION,
+    )
+    pool = bounded_functions[: min(neighborhood_cap, question_cap)]
     if not pool:
         empty = fail_closed([], detail=detail, signatures=[])
         return {
@@ -383,33 +455,6 @@ def assess_function_neighborhood(
             "applied": False,
             "disagreement": False,
         }
-
-    state: dict[str, Any] = {}
-    for signature_limit in (8_192, 4_096, 2_048, 1_024, 512):
-        packed_pool = [
-            {**candidate, "signature": candidate["signature"][:signature_limit]}
-            for candidate in pool
-        ]
-        candidate_state = {**bounded_context, "functions": packed_pool}
-        try:
-            StateSnapshot.from_mapping(candidate_state)
-        except ProviderProtocolError:
-            continue
-        pool = packed_pool
-        state = candidate_state
-        break
-    if not state:
-        failed = fail_closed(
-            pool,
-            detail=detail,
-            signatures=pool,
-            error={
-                "error": True,
-                "code": "PROVIDER_PROTOCOL_ERROR",
-                "message": "function neighborhood exceeds the compact context limit",
-            },
-        )
-        return {**dict(failed.error or {}), "evidence": dict(failed.evidence)}
 
     questions: list[Question] = []
     for index, candidate in enumerate(pool):
@@ -490,6 +535,77 @@ def assess_function_neighborhood(
             ),
         )
     )
+
+    # Fill the state budget with the largest deterministic signature summaries
+    # that fit the selected provider's full request limit. Jev also requires
+    # the state plus its longest question to stay within one context window.
+    jev_mode = getattr(provider_config, "mode", "jev") == "jev"
+    request_byte_limit = (
+        min(max_input_bytes, MAX_JEV_REQUEST_BYTES) if jev_mode else max_input_bytes
+    )
+    source_pool = list(pool)
+    best_pool: list[dict[str, Any]] = []
+    best_state: dict[str, Any] = {}
+    low_signature_limit = 0
+    high_signature_limit = 8_192
+    while low_signature_limit <= high_signature_limit:
+        signature_limit = (low_signature_limit + high_signature_limit) // 2
+        packed_pool = [
+            {**candidate, "signature": candidate["signature"][:signature_limit]}
+            for candidate in source_pool
+        ]
+        candidate_state = {**bounded_context, "functions": packed_pool}
+        try:
+            snapshot = StateSnapshot.from_mapping(candidate_state)
+            request = ProviderRequest(snapshot, tuple(questions), model)
+        except ProviderProtocolError:
+            high_signature_limit = signature_limit - 1
+            continue
+
+        encoded_request = json.dumps(
+            request.to_wire(), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        state_bytes = len(
+            json.dumps(
+                snapshot.to_wire(), ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        )
+        longest_question_bytes = max(
+            len(
+                json.dumps(
+                    {question.question_id: question.to_wire()},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            for question in questions
+        )
+        fits_question_window = (
+            not jev_mode
+            or state_bytes + longest_question_bytes
+            <= MAX_STATE_AND_LONGEST_QUESTION_BYTES
+        )
+        if len(encoded_request) <= request_byte_limit and fits_question_window:
+            best_pool = packed_pool
+            best_state = candidate_state
+            low_signature_limit = signature_limit + 1
+        else:
+            high_signature_limit = signature_limit - 1
+
+    if not best_state:
+        failed = fail_closed(
+            source_pool,
+            detail=detail,
+            signatures=source_pool,
+            error={
+                "error": True,
+                "code": "PROVIDER_PROTOCOL_ERROR",
+                "message": "function neighborhood exceeds the compact context limit",
+            },
+        )
+        return {**dict(failed.error or {}), "evidence": dict(failed.evidence)}
+    pool = best_pool
+    state = best_state
 
     def _answers(response):
         classified: list[dict[str, Any]] = []
@@ -627,7 +743,7 @@ def assess_function_neighborhood(
         detail=detail,
         session_id=session_id,
         operation=operation,
-        provider=provider,
+        provider=selected,
         ledger=ledger,
         signatures=pool,
         advisory_order_from_response=_advisory_order,
@@ -1123,8 +1239,11 @@ def organize_blackboard(
         }
     config = getattr(selected, "config", None)
     try:
-        max_questions = min(16, max(1, int(getattr(config, "max_questions", 16))))
-        max_input_chars = max(1, int(getattr(config, "max_input_chars", 32_768)))
+        max_questions = min(
+            MAX_QUESTIONS,
+            max(1, int(getattr(config, "max_questions", MAX_QUESTIONS))),
+        )
+        max_input_chars = max(1, int(getattr(config, "max_input_chars", 262_144)))
     except (TypeError, ValueError, OverflowError):
         failed = fail_closed(
             [],
@@ -1239,9 +1358,11 @@ def organize_blackboard(
         ("xref", xrefs),
         ("relation", relations),
     )
-    for index in range(max((min(len(items), 12) for _group, items in groups), default=0)):
+    for index in range(
+        max((min(len(items), max_questions) for _group, items in groups), default=0)
+    ):
         for group, items in groups:
-            if index < min(len(items), 12):
+            if index < len(items):
                 add_question(group, index, items[index])
 
     if selection_error and questions:
@@ -1326,9 +1447,9 @@ def organize_blackboard(
         ranked_xrefs.sort(key=lambda row: (-row["score"], -row["confidence"]))
         ranked_relations.sort(key=lambda row: (-row["score"], -row["confidence"]))
         return {
-            "organization": organization[:12],
-            "xrefs": ranked_xrefs[:8],
-            "relations": ranked_relations[:8],
+            "organization": organization,
+            "xrefs": ranked_xrefs,
+            "relations": ranked_relations,
             "confidence": (
                 sum(confidences) / len(confidences) if confidences else None
             ),

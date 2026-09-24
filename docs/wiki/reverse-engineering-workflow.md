@@ -29,6 +29,41 @@ Decompilation includes bounded structural evidence when available. Treat that
 evidence as a guide to verify, not as a substitute for checking the relevant
 instructions and references.
 
+## What Jev adds during a reversing pass
+
+This is an illustrative workflow, not a report from a live binary or Jev call.
+With Jev explicitly enabled, a call to `ida_decompile(address="0x401000")`
+still obtains its decompilation from IDA. The host also builds one compact
+investigation packet from the focus function, available caller/callee
+signatures, API and risk labels, CFG counts, relationships, and safe binary
+metadata. Raw pseudocode, comments, literal dumps, and credentials stay local.
+
+For each candidate neighbor, the host asks Jev two typed questions: what broad
+behavior the compact evidence suggests, and how useful that function is to
+inspect next. Three questions cover the neighborhood as a whole: which
+candidate to inspect, what deterministic evidence to gather, and whether the
+current evidence supports a behavioral conclusion. `detail=deep` can include
+up to 30 neighbor functions in this batch (63 questions); the provider's own
+configured limits can lower that window.
+
+For example, imagine IDA's import and string lists suggest that a stripped
+utility handles network requests. A compact neighbor signature might preserve
+calls to `recv`, a parser-related API, and branch-count metadata without
+sending the function body. Jev might label it `network_protocol`, prioritize
+its caller, and suggest `inspect_callees`. Those labels are leads, not proof.
+The MCP client then decides whether to call `ida_callees(address="0x401000")`,
+checks the returned targets with `ida_decompile`, `ida_disassemble`, and
+`ida_xrefs_to`, and records only verified observations with
+`ida_write_finding`. A later `ida_next_target(strategy="unresolved", limit=10,
+detail="deep")` can advisory-rank the deterministic eligible candidates.
+
+Jev never runs the suggested IDA call, decides mutation policy, supplies
+`risk_ack`, or writes findings. The analyst verifies every useful hypothesis
+against IDA's deterministic output. The current published Jev 1.13 input price
+is `$0.042` per million tokens and output is free: 32K input tokens cost about
+`$0.001344` at that rate. The server's usage status reports the actual token
+and cost totals for each request. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+
 ## 3. Turn observations into explicit workspace state
 
 Write a finding when you have a claim worth carrying forward. Include:

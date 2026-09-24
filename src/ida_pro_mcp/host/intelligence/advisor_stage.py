@@ -1,11 +1,13 @@
 """Single host advisor stage for Jev/custom typed questions.
 
-Contract (innovator product note v2):
+Contract (investigation-centered advisor):
 - Primary order is always the deterministic pool order.
 - Jev lives in sibling ``advisory_order``; ``applied=True`` only on explicit
   opt-in (``accept_advisory=True`` / analyst ack).
 - Every advisory result carries an evidence card.
-- Pool size is capped by the shared ``detail`` dial: triage=4, normal=8, deep=16.
+- Per-candidate question batches use the shared ``detail`` dial: triage=16,
+  normal=32, deep=64. Multi-question workflows apply their own tighter limit
+  from the provider question budget.
 - Fail closed: provider error/timeout/disabled returns deterministic order with
   ``applied=False`` and ``fail_closed_order`` populated.
 """
@@ -25,9 +27,9 @@ from .providers import (
 )
 
 DETAIL_POOL_CAPS: dict[str, int] = {
-    "triage": 4,
-    "normal": 8,
-    "deep": 16,
+    "triage": 16,
+    "normal": 32,
+    "deep": 64,
 }
 DEFAULT_DETAIL = "normal"
 MAX_SIGNATURES_SEEN = 16
@@ -44,7 +46,7 @@ def pool_cap(detail: Any = None) -> int:
 
 
 def cap_pool(items: Sequence[Any], detail: Any = None) -> list[Any]:
-    """Return the deterministic pool truncated to the detail cap."""
+    """Return the deterministic pool truncated to the typed-question window."""
     return list(items)[: pool_cap(detail)]
 
 

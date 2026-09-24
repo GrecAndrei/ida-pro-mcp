@@ -47,12 +47,16 @@ bounded CFG/dataflow counts, and normalized branch cues when IDA provides
 them. Literal values, comments, raw conditions, and full decompilation stay
 local. One shared state then carries per-function behavior and priority
 questions plus neighborhood-level next-evidence questions. The
-`detail=triage|normal|deep` setting caps the pool at 4/8/16 functions; normal
-and deep responses surface the typed result, while deep also includes it in
-`context_pack`. The response names candidate IDs, includes a ranked advisory
-order, and can suggest
-one concrete provider-neutral `ida_*` follow-up for the MCP client to consider.
-It never executes that operation. Other behavior, gadget, reranking,
+`detail=triage|normal|deep` allows 16/32/64 candidates in single-question
+workflows. A neighborhood candidate needs two questions plus three shared
+questions, so those limits become 8/16/30 functions, capped again by the
+selected provider's question limit. Normal and deep responses surface the
+typed result, while deep also includes it in `context_pack`. The response
+names candidate IDs, includes a ranked advisory order, and can suggest one
+concrete provider-neutral `ida_*` follow-up for the MCP client to consider.
+It never executes that operation. The evidence card's 16 short signature
+previews are only a display limit; they do not reduce the analysis pool. Other
+behavior, gadget, reranking,
 architecture, and Blackboard paths also send
 bounded signatures or metadata after deterministic IDA work. Provider
 configuration and credential variables are removed from the IDA child
@@ -130,17 +134,27 @@ session or day. `ida_usage_report` lists bounded attempt metadata: provider,
 model, operation, token counts, latency, status, error code, and estimated cost
 when pricing is known. It never stores request state or answer content.
 
-In explicit Jev mode, defaults allow up to 65,536 estimated input tokens per
-request, 15,000,000 per session, and 140,000,000 per day, with the existing
-`$5` / `$20` cost ceilings and request-count limits. Jev 1.13 is currently
-listed at `$0.042` per million input tokens and free output; a 32,000-token call
-is about `$0.001344`. The host allows a 96 KiB compact state and 256 KiB
-serialized request by default, within TypeSafe's documented 64K total request
-budget and 32K state-plus-longest-question limit. Override these limits with
-the documented `IDA_MCP_JEV_*` settings if TypeSafe's terms change. Custom mode keeps its
-separate conservative request defaults. Warnings are emitted at 70% and 90%;
+In explicit Jev mode, defaults allow up to 65,536 estimated input tokens and
+8,192 output tokens per request, 15,000,000 tokens per session, and
+150,000,000 per day, with the existing `$5` / `$20` cost ceilings and request
+count limits. Output is currently free, but the host reserves output tokens for
+its request and total-token limits. Jev 1.13 is listed at `$0.042` per million
+input tokens; at that price, 32,000 input tokens cost about `$0.001344` and
+64,000 cost about `$0.002688`. These published figures were checked on
+2026-09-24 and may change. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+
+TypeSafe documents a 64K combined state-and-questions context and a 32K limit
+for state plus the longest individual question. The host allows up to a 120
+KiB compact state, checks the state-plus-longest-question window against 128
+KiB, and caps the serialized Jev request at 256 KiB by default. These are
+four-byte-per-token host estimates, not the provider tokenizer; the usage
+response is reconciled against the ledger. The provider can be configured with
+smaller limits, and the host never lets a Jev request exceed these defaults.
+The typed API permits up to 255 Choice options, while this server limits a
+request to 64 questions. Custom mode keeps its own configured limits. Warnings
+are emitted at 70% and 90%;
 `IDA_MCP_JEV_BUDGET_MODE=block` blocks over-budget requests, while `warn`
-records the warning and continues. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+records the warning and continues.
 
 ## Advisor stage contract (shipped)
 
@@ -149,13 +163,24 @@ in sibling `advisory_order`. Reordering the primary list requires explicit
 opt-in via `accept_advisory_requested` (boolean / truthy strings only through
 that helper — never raw `bool(args.get(...))`).
 
-### Pool caps by `detail`
+### Candidate windows by `detail`
 
-| `detail` | Cap |
-|----------|-----|
-| triage   | 4   |
-| normal   | 8   |
-| deep     | 16  |
+Single-question workflows ask once per candidate:
+
+| `detail` | Candidate cap |
+|----------|---------------|
+| triage   | 16            |
+| normal   | 32            |
+| deep     | 64            |
+
+Neighborhood assessment asks two questions per candidate and three shared
+questions:
+
+| `detail` | Candidate cap | Questions |
+|----------|---------------|-----------|
+| triage   | 8             | 19        |
+| normal   | 16            | 35        |
+| deep     | 30            | 63        |
 
 ### Evidence card (required on every advisory result)
 

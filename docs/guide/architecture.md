@@ -61,7 +61,8 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
   - `advisor_stage.py` / `advisor_gate.py` — shared typed-decision gate
     (deterministic primary order, sibling `advisory_order`, evidence card,
-    disagreement, explicit apply opt-in, pool caps triage/normal/deep = 4/8/16)
+    disagreement, explicit apply opt-in, single-question pool caps
+    triage/normal/deep = 16/32/64; multi-question paths honor provider limits)
   - `advisory.py` — provider-neutral decision workflows (`assess_function_neighborhood`,
     `ask_behavior`, `rank_targets`, Blackboard lane/xref/relation suggestions,
     architecture/GP/load-base hypotheses, relevance); decisions never authorize

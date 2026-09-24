@@ -152,13 +152,16 @@ licensed IDA runtime rather than substituting another backend.
 
 **Shipped vs Planned (intelligence):** Jev is called from multiple host sites
 (`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base) through the shared
-advisor gate. Bounded evidence cards, disagreement metadata, and the shared
-`detail=triage|normal|deep` pool caps are shipped. The decompile context path
+advisor gate. Single-question candidate windows follow
+`detail=triage|normal|deep` at 16/32/64; multi-question paths honor the
+provider limit. The decompile neighborhood uses up to 8/16/30 candidates with
+two questions each plus three shared questions. The decompile context path
 also sends a shared compact focus/caller/callee packet and returns a typed
 neighborhood assessment with an optional deterministic `ida_*` suggestion;
-the caller decides whether to run it. Architecture advisory is a hypothesis
-only and does not auto-fill processor, bitness, or endianness. Keep new
-advisories provider-neutral and optional. See `docs/wiki/core/intelligence.md`.
+the caller decides whether to run it. Jev's current model context and price
+limits are documented in `docs/wiki/core/intelligence.md`. Architecture
+advisory is a hypothesis only and does not auto-fill processor, bitness, or
+endianness. Keep new advisories provider-neutral and optional.
 
 ## Tests, coverage, and live IDA
 

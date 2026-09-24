@@ -1,3 +1,15 @@
+## 2026-09-24 — Use Jev's typed context for wider advisory investigations
+
+- Expand single-question candidate windows to 16/32/64 and neighborhood
+  assessment to 8/16/30 functions, bounded by each provider's question and
+  request limits. Pack the largest deterministic signature summaries that fit
+  the available context.
+- Support the documented 255-option Choice limit and reconcile Jev's larger
+  typed-question fan-out with input, output, session, and daily usage budgets.
+- Document the 64K combined / 32K state-plus-longest-question limits, current
+  Jev pricing checked on 2026-09-24, and an illustrative end-to-end reversing
+  workflow showing how Jev prioritizes deterministic IDA follow-up.
+
 ## 2026-09-24 — Center host advisories on a shared investigation packet
 
 - Batch behavior and follow-up judgments over a shared focus-function and
