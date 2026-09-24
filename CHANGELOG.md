@@ -26,6 +26,11 @@
   provider fail-closed paths, safe suggestion mapping, and response address
   routing.
 
+## 2026-09-24 — Stabilize the architecture advisory fixture
+
+- Replace random fixture bytes with a deterministic raw sample so the test
+  cannot accidentally resemble a Cortex-M vector table.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor

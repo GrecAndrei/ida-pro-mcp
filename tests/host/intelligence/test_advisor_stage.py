@@ -163,7 +163,7 @@ def test_arch_advisory_does_not_write_processor_bitness():
         }
 
     with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tf.write(os.urandom(256))
+        tf.write(bytes(256))
         path = tf.name
     try:
         with patch(
