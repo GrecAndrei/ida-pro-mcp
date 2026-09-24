@@ -14,6 +14,12 @@
   current published input price to usage accounting, and retain separate
   conservative defaults for custom providers and disabled mode.
 
+## 2026-09-24 — Scope commit guardrails to the reviewed branch
+
+- Validate commit subjects and changelog entries only for commits introduced
+  by a pull request, rather than rechecking older history before the policy
+  baseline. Manual runs compare against the default branch.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor
