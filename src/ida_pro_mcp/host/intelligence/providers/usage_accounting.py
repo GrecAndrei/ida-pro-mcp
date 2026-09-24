@@ -67,10 +67,29 @@ class BudgetConfig:
                 raise ProviderConfigError("warning thresholds must be between 0 and 1")
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> "BudgetConfig":
+    def from_env(
+        cls,
+        env: dict[str, str] | None = None,
+        *,
+        provider_mode: str = "generic",
+    ) -> "BudgetConfig":
         values = os.environ if env is None else env
 
-        def integer(names: tuple[str, ...], default: int, minimum: int = 0, maximum: int = 10_000_000) -> int:
+        # Jev charges for input tokens only; output is free. Reserve enough
+        # output tokens for a broad typed-question fan-out. Custom providers
+        # retain the generic defaults unless the operator raises them.
+        jev_mode = str(provider_mode or "").strip().lower() == "jev"
+        default_request_input_tokens = 65_536 if jev_mode else 8_192
+        default_request_output_tokens = 8_192 if jev_mode else 2_048
+        default_session_tokens = 15_000_000 if jev_mode else 100_000
+        default_daily_tokens = 150_000_000 if jev_mode else 500_000
+
+        def integer(
+            names: tuple[str, ...],
+            default: int,
+            minimum: int = 0,
+            maximum: int = 10_000_000,
+        ) -> int:
             for name in names:
                 raw = str(values.get(name, "")).strip()
                 if not raw:
@@ -139,12 +158,31 @@ class BudgetConfig:
         if budget_mode not in {"warn", "block"}:
             raise ProviderConfigError("budget mode must be warn or block")
         return cls(
-            request_input_tokens=integer(("IDA_MCP_JEV_REQUEST_INPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_INPUT_TOKENS"), 8_192, 1),
-            request_output_tokens=integer(("IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS"), 2_048, 1),
+            request_input_tokens=integer(
+                ("IDA_MCP_JEV_REQUEST_INPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_INPUT_TOKENS"),
+                default_request_input_tokens,
+                1,
+                65_536 if jev_mode else 10_000_000,
+            ),
+            request_output_tokens=integer(
+                ("IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS"),
+                default_request_output_tokens,
+                1,
+            ),
             request_count_session=integer(("IDA_MCP_JEV_SESSION_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_SESSION_REQUEST_LIMIT"), 200, 1),
             request_count_daily=integer(("IDA_MCP_JEV_DAILY_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_DAILY_REQUEST_LIMIT"), 2_000, 1),
-            token_budget_session=integer(("IDA_MCP_JEV_SESSION_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_SESSION_TOKEN_BUDGET"), 100_000, 1),
-            token_budget_daily=integer(("IDA_MCP_JEV_DAILY_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_DAILY_TOKEN_BUDGET"), 500_000, 1),
+            token_budget_session=integer(
+                ("IDA_MCP_JEV_SESSION_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_SESSION_TOKEN_BUDGET"),
+                default_session_tokens,
+                1,
+                1_000_000_000 if jev_mode else 10_000_000,
+            ),
+            token_budget_daily=integer(
+                ("IDA_MCP_JEV_DAILY_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_DAILY_TOKEN_BUDGET"),
+                default_daily_tokens,
+                1,
+                10_000_000_000 if jev_mode else 10_000_000,
+            ),
             cost_budget_session=number(("IDA_MCP_JEV_SESSION_BUDGET_USD", "IDA_MCP_INTELLIGENCE_SESSION_BUDGET_USD"), 5.0),
             cost_budget_daily=number(("IDA_MCP_JEV_DAILY_BUDGET_USD", "IDA_MCP_INTELLIGENCE_DAILY_BUDGET_USD"), 20.0),
             warn_thresholds=tuple(sorted(set(thresholds))),

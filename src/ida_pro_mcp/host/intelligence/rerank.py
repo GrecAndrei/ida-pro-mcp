@@ -26,7 +26,7 @@ from .providers import (
 )
 
 RERANK_MAX_CANDIDATES = 64
-RERANK_POOL_MAX = DETAIL_POOL_CAPS["normal"]  # shared normal dial (=8)
+RERANK_POOL_MAX = DETAIL_POOL_CAPS["normal"]  # shared normal dial (=32)
 RERANK_DOC_BUDGET_CHARS = 800
 RERANK_MAX_DOC_CHARS = 6000
 RERANK_PROFILE = "typed-question"

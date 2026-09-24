@@ -143,6 +143,48 @@ def test_organize_blackboard_respects_provider_question_limit_and_interleaves_ca
     ]
 
 
+def test_organize_blackboard_uses_provider_question_window_without_output_truncation():
+    provider = _Provider()
+    provider.config = SimpleNamespace(
+        model="fixture-model", max_questions=64, max_input_chars=262_144
+    )
+    findings = [
+        {
+            "entry_id": f"finding-{index}",
+            "signature": f"bounded signature {index}",
+            "current_lane": "lane_now",
+        }
+        for index in range(30)
+    ]
+    xrefs = [
+        {
+            "entry_id": f"finding-{index}",
+            "from_address": f"0x{0x1000 + index:x}",
+            "to_address": f"0x{0x2000 + index:x}",
+            "from_signature": f"caller signature {index}",
+        }
+        for index in range(30)
+    ]
+    relations = [
+        {
+            "entry_a": f"finding-{index}",
+            "entry_b": f"finding-{index + 1}",
+            "shared_terms": f"shared signature {index}",
+        }
+        for index in range(30)
+    ]
+
+    result = organize_blackboard(
+        {}, findings, xrefs, relations, provider=provider
+    )
+
+    assert result["ok"] is True
+    assert len(provider.questions) == 64
+    assert len(result["organization"]) == 22
+    assert len(result["xrefs"]) == 21
+    assert len(result["relations"]) == 21
+
+
 def test_organize_blackboard_provider_selection_failure_preserves_bounded_evidence(monkeypatch):
     def unavailable(**_kwargs):
         raise ProviderUnavailableError("provider is unavailable")

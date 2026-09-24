@@ -25,10 +25,15 @@ primary list keeps deterministic order unless the caller explicitly sets
 `accept_advisory=true`. This host-only option is available on
 `ida_semantic_search` and `ida_next_target`, and is never sent to IDA.
 
-The shared advisor stage uses `detail` to cap its candidate pool: triage keeps
-up to 4 candidates, normal up to 8, and deep up to 16. Evidence records bounded
-signatures, confidence, provider budget use, whether orders disagreed, and the
-deterministic fail-closed order.
+The shared advisor stage uses `detail` to cap single-question candidate pools:
+triage keeps up to 16 candidates, normal up to 32, and deep up to 64, subject
+to the provider's configured question and request limits. Each function in a
+neighborhood assessment uses two questions plus three shared neighborhood
+questions, so its corresponding maximum is 8/16/30 functions within Jev's
+64-question host limit. Evidence cards still show at most 16 short signature
+previews; that display cap does not limit analysis. Evidence also records
+confidence, provider budget use, whether orders disagreed, and the deterministic
+fail-closed order.
 
 `ida_reranker_status` remains a compatibility alias for the typed-question
 scoring capability. Vector-family clustering is intentionally not part of the

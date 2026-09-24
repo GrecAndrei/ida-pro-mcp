@@ -187,3 +187,68 @@ def test_workspace_and_context_injection_are_bounded_and_failure_visible():
     context_failed = {}
     host._assemble_and_inject_context("search", "find", context_failed, "0x401000", {"mode": "compact"})
     assert "RuntimeError" in context_failed["_context_error"]
+
+
+def test_ida_decompile_detail_and_neighborhood_advisory_reach_public_response():
+    host = _Host()
+    calls = []
+    pack = {
+        "behavior_classifications": [{"behavior": "network_socket"}],
+        "behavior_tags": ["network_socket"],
+        "investigation_advisory": {
+            "recommended_next": {"address": "0x401200", "name": "open_socket"},
+            "applied": False,
+        },
+    }
+
+    class Assembler:
+        def assemble(self, **kwargs):
+            calls.append(kwargs)
+            return pack
+
+    host.assembler = Assembler()
+    compact = {}
+    host._assemble_and_inject_context(
+        "ida_decompile",
+        "semantic_decompile",
+        compact,
+        "0x401000",
+        {"mode": "compact", "detail": "deep"},
+    )
+    assert calls[0]["tool"] == "ida_decompile"
+    assert calls[0]["detail"] == "deep"
+    assert compact["behavior_tags"] == ["network_socket"]
+    assert compact["investigation_advisory"]["applied"] is False
+    assert "context_pack" not in compact
+
+    full = {}
+    host._assemble_and_inject_context(
+        "ida_decompile",
+        "semantic_decompile",
+        full,
+        "0x401000",
+        {"mode": "full", "detail": "deep"},
+    )
+    assert calls[1]["tool"] == "ida_decompile"
+    assert calls[1]["detail"] == "deep"
+    assert full["context_pack"]["investigation_advisory"]["applied"] is False
+
+
+def test_response_uses_public_address_argument_for_context_focus():
+    host = _Host()
+    host.enable_response_enrichment = False
+    host._json_safe_value = lambda value: value
+    received = []
+    host._assemble_and_inject_context = (
+        lambda _tool, _action, _payload, address, **_kwargs: received.append(address)
+    )
+
+    result = host._prepare_response_payload(
+        {"ok": True, "results": []},
+        {"mode": "compact", "detail": "deep"},
+        tool_name="ida_decompile",
+        call_args={"address": "0x401000"},
+    )
+
+    assert result["ok"] is True
+    assert received == ["0x401000"]

@@ -1,3 +1,48 @@
+## 2026-09-24 — Use Jev's typed context for wider advisory investigations
+
+- Expand single-question candidate windows to 16/32/64 and neighborhood
+  assessment to 8/16/30 functions, bounded by each provider's question and
+  request limits. Pack the largest deterministic signature summaries that fit
+  the available context.
+- Support the documented 255-option Choice limit and reconcile Jev's larger
+  typed-question fan-out with input, output, session, and daily usage budgets.
+- Document the 64K combined / 32K state-plus-longest-question limits, current
+  Jev pricing checked on 2026-09-24, and an illustrative end-to-end reversing
+  workflow showing how Jev prioritizes deterministic IDA follow-up.
+
+## 2026-09-24 — Center host advisories on a shared investigation packet
+
+- Batch behavior and follow-up judgments over a shared focus-function and
+  caller/callee packet. Compact signatures preserve API symbols and coarse
+  control-flow cues while keeping literals, comments, arguments, and full
+  decompilation out of provider state.
+- Scale the shared packet with `detail=triage|normal|deep`; compact responses
+  now surface typed advisory metadata for the default public `ida_decompile`
+  operation, while deep responses include it in `context_pack`.
+- Return a separately ranked advisory order, expose disagreement between the
+  selected next function and its per-function priority scores, and suggest one
+  matching provider-neutral `ida_*` operation without invoking it.
+- Raise explicit Jev request budgets to use the supported context, apply the
+  current published input price to usage accounting, and retain separate
+  conservative defaults for custom providers and disabled mode.
+
+## 2026-09-24 — Scope commit guardrails to the reviewed branch
+
+- Validate commit subjects and changelog entries only for commits introduced
+  by a pull request, rather than rechecking older history before the policy
+  baseline. Manual runs compare against the default branch.
+
+## 2026-09-24 — Cover bounded advisory edge cases
+
+- Add regression coverage for compact feature projection, context fallback,
+  provider fail-closed paths, safe suggestion mapping, and response address
+  routing.
+
+## 2026-09-24 — Stabilize the architecture advisory fixture
+
+- Replace random fixture bytes with a deterministic raw sample so the test
+  cannot accidentally resemble a Cortex-M vector table.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor
