@@ -20,6 +20,12 @@
   by a pull request, rather than rechecking older history before the policy
   baseline. Manual runs compare against the default branch.
 
+## 2026-09-24 — Cover bounded advisory edge cases
+
+- Add regression coverage for compact feature projection, context fallback,
+  provider fail-closed paths, safe suggestion mapping, and response address
+  routing.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor

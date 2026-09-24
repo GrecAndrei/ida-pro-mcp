@@ -4,8 +4,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.intelligence.advisory import assess_function_neighborhood
-from ida_pro_mcp.host.intelligence.context import ContextAssembler
+from ida_pro_mcp.host.intelligence.advisory import (
+    _compact_candidate_features,
+    assess_function_neighborhood,
+)
+from ida_pro_mcp.host.intelligence.context import (
+    ContextAssembler,
+    _compact_function_signature,
+    _decompile_neighborhood_candidates,
+    _function_evidence_features,
+    _recommended_ida_call,
+)
 from ida_pro_mcp.host.intelligence.providers import (
     Answer,
     BudgetConfig,
@@ -74,8 +83,16 @@ def _decompile_payload() -> dict:
 
 
 class _RecordingProvider:
-    def __init__(self, *, omit_answers: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        omit_answers: bool = False,
+        omit_ids: set[str] | None = None,
+        overrides: dict[str, Answer] | None = None,
+    ) -> None:
         self.omit_answers = omit_answers
+        self.omit_ids = set(omit_ids or ())
+        self.overrides = dict(overrides or {})
         self.state = None
         self.questions = None
         self.calls = 0
@@ -111,6 +128,9 @@ class _RecordingProvider:
                     answers[question_id] = Answer(
                         question_id, "score", 1.8, confidence=0.8
                     )
+            answers.update(self.overrides)
+            for question_id in self.omit_ids:
+                answers.pop(question_id, None)
         return ProviderResponse("fixture", answers, Usage(12, 2, 14))
 
 
@@ -296,6 +316,23 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
     assert ledger.budget.request_input_tokens == 65_536
     assert ledger.budget.token_budget_daily == 140_000_000
 
+    generic = registry.default_usage_ledger(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "unsupported",
+            "IDA_MCP_CACHE_DIR": str(tmp_path),
+        }
+    )
+    assert generic.budget == BudgetConfig.from_env({}, provider_mode="generic")
+
+    disabled = registry.resolve_provider(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "disabled",
+            "IDA_MCP_CACHE_DIR": str(tmp_path),
+        },
+        with_ledger=True,
+    )
+    assert type(disabled).__name__ == "DisabledProvider"
+
 
 def test_jev_budget_defaults_can_be_overridden():
     budget = BudgetConfig.from_env(
@@ -309,3 +346,384 @@ def test_jev_budget_defaults_can_be_overridden():
     assert budget.request_input_tokens == 32_768
     assert budget.token_budget_session == 2_000_000
     assert budget.cost_budget_daily == 7.5
+
+
+def test_compact_feature_projection_keeps_safe_bounded_metadata():
+    features = _compact_candidate_features(
+        {
+            "api_calls": ["send", "send", "unsafe label", None, "recv"],
+            "crypto_hints": ("AES", "bad label!"),
+            "ida_behavior_tags": ["network_socket"],
+            "risk_patterns": ["stack_pivot"],
+            "complexity": {
+                "lines": 12,
+                "calls": 2,
+                "branches": True,
+                "loops": -1,
+                "xor_ops": 1_000_001,
+            },
+            "caller_symbols": [
+                None,
+                {"address": "0x401000", "name": "handle_request"},
+                {"address": "bad address", "name": "unsafe name!"},
+                {"name": "worker_loop"},
+            ],
+            "callee_symbols": "not-a-list",
+            "structure": {
+                "blocks": 4,
+                "edges": 5,
+                "entry_blocks": True,
+                "exit_blocks": -1,
+                "call_targets": ["open_socket", "bad target!"],
+                "control_kinds": ["if", "switch"],
+                "argument_names": ["input", "mode"],
+                "control_flow": [
+                    None,
+                    {"kind": "goto", "variables": ["ignored"]},
+                    {
+                        "kind": "if",
+                        "variables": ["mode", "unsafe variable!"],
+                        "operators": ["equal"],
+                        "has_constant": False,
+                    },
+                ],
+            },
+        }
+    )
+
+    assert features == {
+        "api_calls": ["send", "recv"],
+        "crypto_hints": ["AES"],
+        "ida_behavior_tags": ["network_socket"],
+        "risk_patterns": ["stack_pivot"],
+        "complexity": {"lines": 12, "calls": 2},
+        "caller_symbols": [
+            {"address": "0x401000", "name": "handle_request"},
+            {"name": "worker_loop"},
+        ],
+        "structure": {
+            "blocks": 4,
+            "edges": 5,
+            "call_targets": ["open_socket"],
+            "control_kinds": ["if", "switch"],
+            "argument_names": ["input", "mode"],
+                "control_flow": [
+                    {
+                        "kind": "if",
+                        "variables": ["mode"],
+                        "operators": ["equal"],
+                        "has_constant": False,
+                    }
+                ],
+        },
+    }
+
+    assert _compact_candidate_features({"complexity": {"calls": True}}) == {}
+
+
+def test_function_evidence_features_strip_private_text_and_reject_bad_labels():
+    features = _function_evidence_features(
+        {
+            "api_calls": ["ReadFile", "unsafe label!", 17],
+            "crypto_hints": ("AES", "AES"),
+            "behavior_tags": ["network_socket"],
+            "dangerous_patterns": [
+                {"pattern": "gets"},
+                "strcpy — local-only note",
+                None,
+                {"pattern": "unsafe label!"},
+            ],
+            "callers": [
+                None,
+                {"addr": "0x401000", "name": "handle_request — local"},
+                {"address": "bad address", "name": "unsafe name!"},
+            ],
+            "callees": [{"address": "401200"}],
+            "complexity": {
+                "lines": 9,
+                "calls": 2,
+                "branches": True,
+                "loops": -1,
+            },
+            "structure": {
+                "cfg": {
+                    "nodes": 4,
+                    "edges": 5,
+                    "entry_blocks": 1,
+                    "exit_blocks": True,
+                    "back_edges": -1,
+                    "cyclomatic_complexity": 2,
+                },
+                "call_targets": ["open_socket", "bad target!"],
+                "control_points": [
+                    None,
+                    {"kind": "unsafe kind!", "condition": "ignored()"},
+                    {
+                        "kind": "if",
+                        "condition": 'mode == 7 && input != "SECRET" /* PRIVATE */',
+                    },
+                ],
+                "dataflow": {"argument_variables": ["mode", "input", "bad arg!"]},
+            },
+        }
+    )
+
+    assert features["api_calls"] == ["ReadFile"]
+    assert features["crypto_hints"] == ["AES"]
+    assert features["ida_behavior_tags"] == ["network_socket"]
+    assert features["risk_patterns"] == ["gets", "strcpy"]
+    assert features["caller_symbols"] == [
+        {"address": "0x401000", "name": "handle_request"}
+    ]
+    assert features["callee_symbols"] == [{"address": "401200"}]
+    assert features["complexity"] == {"lines": 9, "calls": 2}
+    assert features["structure"] == {
+        "blocks": 4,
+        "edges": 5,
+        "entry_blocks": 1,
+        "cyclomatic_complexity": 2,
+        "call_targets": ["open_socket"],
+        "control_flow": [
+            {
+                "kind": "if",
+                "variables": ["input"],
+                "operators": ["equal", "and", "not_equal"],
+                "has_constant": True,
+            }
+        ],
+        "control_kinds": ["if"],
+        "argument_names": ["mode", "input"],
+    }
+    assert "SECRET" not in repr(features)
+    assert "PRIVATE" not in repr(features)
+
+
+def test_decompile_candidates_use_fallback_and_deduplicate_neighbors():
+    assert _compact_function_signature(" /* only a comment */ ", "", "empty") == ""
+    call_body = "api_0(); " + " ".join(f"api_{index}();" for index in range(52))
+    signature = _compact_function_signature(
+        call_body,
+        "int invoke(int mode)",
+        "invoke",
+    )
+    assert signature.count("api_") == 48
+    assert "api_51" not in signature
+    assert "prototype terms:" in signature
+
+    candidates = _decompile_neighborhood_candidates(
+        {
+            "results": [
+                {
+                    "addr": "0x401000",
+                    "name": "focus",
+                    "code": "",
+                    "callers_context": [
+                        None,
+                        {"addr": "0x401000", "name": "duplicate", "signature": "int dup()"},
+                        {"addr": "0x401001", "name": "empty", "signature": ""},
+                        {"addr": "0x401002", "name": "caller", "signature": "void caller()"},
+                    ],
+                    "callees_context": [
+                        {"addr": "0x401100", "name": "callee", "pseudocode_head": "int callee()"}
+                    ],
+                },
+                None,
+                {"addr": "0x401200", "name": "batch", "pseudocode": "int batch() { return helper(); }"},
+            ]
+        },
+        "int focus() { return open_socket(); }",
+        "0x401000",
+        "focus",
+    )
+
+    assert [candidate["relationship"] for candidate in candidates] == [
+        "focus",
+        "callee",
+        "caller",
+        "batch_member",
+    ]
+    assert candidates[0]["signature"] == _compact_function_signature(
+        "int focus() { return open_socket(); }", "", "focus"
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence", "tool", "arguments"),
+    (
+        ("inspect_callers", "ida_callers", {"address": "0x401000"}),
+        ("inspect_callees", "ida_callees", {"address": "0x401000"}),
+        ("inspect_xrefs", "ida_xrefs_to", {"address": "0x401000"}),
+        ("inspect_control_flow", "ida_decompile", {"address": "0x401000", "details": True}),
+        ("inspect_strings", "ida_list_strings", {"limit": 50}),
+    ),
+)
+def test_recommended_ida_call_maps_evidence_without_execution(evidence, tool, arguments):
+    assert _recommended_ida_call(evidence, " 0x401000 ") == {
+        "tool": tool,
+        "arguments": arguments,
+    }
+
+
+def test_recommended_ida_call_rejects_empty_target_and_unknown_evidence():
+    assert _recommended_ida_call("inspect_callers", " ") is None
+    assert _recommended_ida_call("run_mutation", "0x401000") is None
+
+
+def test_neighborhood_advisory_normalizes_invalid_choices_and_fails_closed_on_missing_answers():
+    functions = [
+        {"address": "0x401000", "name": "focus", "signature": "calls=1; call symbols: api"}
+    ]
+    provider = _RecordingProvider(
+        overrides={
+            "behavior_0": Answer("behavior_0", "choice", "unlisted_behavior"),
+            "recommended_next": Answer("recommended_next", "choice", "not_in_pool"),
+            "recommended_evidence": Answer("recommended_evidence", "choice", "run_shell"),
+        }
+    )
+    normalized = assess_function_neighborhood(
+        {"focus_address": "0x401000"}, functions, provider=provider
+    )
+    assert normalized["functions"][0]["behavior"] == "unknown"
+    assert normalized["recommended_next"] is None
+    assert normalized["recommended_evidence"] == "insufficient_context"
+
+    missing_behavior = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        functions,
+        provider=_RecordingProvider(omit_ids={"behavior_0"}),
+    )
+    assert missing_behavior["code"] == "PROVIDER_PROTOCOL_ERROR"
+    assert missing_behavior["functions"] == []
+
+    missing_priority = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        functions,
+        provider=_RecordingProvider(omit_ids={"priority_0"}),
+    )
+    assert missing_priority["code"] == "PROVIDER_PROTOCOL_ERROR"
+    assert missing_priority["message"] == "advisory order derivation failed"
+
+    missing_neighborhood = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        functions,
+        provider=_RecordingProvider(omit_ids={"evidence_sufficiency"}),
+    )
+    assert missing_neighborhood["code"] == "PROVIDER_PROTOCOL_ERROR"
+    assert missing_neighborhood["message"] == "advisory answer derivation failed"
+
+
+def test_neighborhood_advisory_empty_pool_and_oversized_context_fail_closed():
+    empty = assess_function_neighborhood(
+        {},
+        [None, {"address": "0x401000", "name": "no_signature", "signature": " "}],
+        provider=_RecordingProvider(),
+    )
+    assert empty["ok"] is True
+    assert empty["functions"] == []
+    assert empty["recommended_evidence"] == "insufficient_context"
+
+    provider = _RecordingProvider()
+    oversized_context = dict.fromkeys(
+        (
+            "focus_address",
+            "focus_name",
+            "focus_signature",
+            "query_signature",
+            "architecture",
+            "bitness",
+            "endian",
+            "file_format",
+            "caller_count",
+            "callee_count",
+            "candidate_source",
+        ),
+        "x" * 32_768,
+    )
+    oversized = assess_function_neighborhood(
+        oversized_context,
+        [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+        provider=provider,
+    )
+    assert oversized["code"] == "PROVIDER_PROTOCOL_ERROR"
+    assert oversized["message"] == "function neighborhood exceeds the compact context limit"
+    assert provider.calls == 0
+
+
+def test_decompile_context_empty_signature_omits_advisory_and_normalizes_detail(monkeypatch):
+    assembler = object.__new__(ContextAssembler)
+    assembler._run_housekeeping = lambda _session: None
+    assembler.record_call = lambda *_args: None
+    assembler._get_bb_entries = lambda *_args: []
+    assembler._perf_start = lambda: 0.0
+    assembler._perf_end = lambda *_args: None
+    assembler.check_stuck = lambda *_args: None
+    called = []
+
+    def should_not_assess(*args, **kwargs):
+        called.append((args, kwargs))
+        raise AssertionError("empty compact signature must not call the provider")
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.intelligence.advisory.assess_function_neighborhood",
+        should_not_assess,
+    )
+    pack = assembler.assemble(
+        tool="ida_decompile",
+        action="semantic_decompile",
+        payload={
+            "results": [
+                {
+                    "addr": "0x401000",
+                    "name": "comment_only",
+                    "pseudocode": "/* " + "local comment " * 12 + "*/",
+                }
+            ]
+        },
+        addr="0x401000",
+        session_id="synthetic-empty",
+        idb_path="",
+        mode="compact",
+        detail="unrecognized",
+    )
+    assert called == []
+    assert "investigation_advisory" not in pack
+
+
+def test_decompile_context_accepts_a_local_classifier_double_without_provider():
+    class ClassifierDouble:
+        def __init__(self):
+            self.calls = []
+
+        def classify(self, signature, **kwargs):
+            self.calls.append((signature, kwargs))
+            return [{"behavior": "network_socket", "confidence": 0.75}]
+
+    classifier = ClassifierDouble()
+    assembler = object.__new__(ContextAssembler)
+    assembler._classifier = classifier
+    assembler._run_housekeeping = lambda _session: None
+    assembler.record_call = lambda *_args: None
+    assembler._get_bb_entries = lambda *_args: []
+    assembler._perf_start = lambda: 0.0
+    assembler._perf_end = lambda *_args: None
+    assembler.check_stuck = lambda *_args: None
+
+    pack = assembler.assemble(
+        tool="ida_decompile",
+        action="semantic_decompile",
+        payload=_decompile_payload(),
+        addr="0x401000",
+        session_id="synthetic-double",
+        idb_path="",
+        mode="compact",
+        detail="normal",
+    )
+
+    assert len(classifier.calls) == 1
+    signature, options = classifier.calls[0]
+    assert "open_socket" in signature
+    assert options == {"threshold": 0.0, "top_k": 4, "block": False}
+    assert pack["behavior_classifications"] == [
+        {"behavior": "network_socket", "confidence": 0.75}
+    ]
+    assert pack["behavior_tags"] == ["network_socket"]
