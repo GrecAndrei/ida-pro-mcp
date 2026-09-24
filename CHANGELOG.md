@@ -1,3 +1,19 @@
+## 2026-09-24 — Center host advisories on a shared investigation packet
+
+- Batch behavior and follow-up judgments over a shared focus-function and
+  caller/callee packet. Compact signatures preserve API symbols and coarse
+  control-flow cues while keeping literals, comments, arguments, and full
+  decompilation out of provider state.
+- Scale the shared packet with `detail=triage|normal|deep`; compact responses
+  now surface typed advisory metadata for the default public `ida_decompile`
+  operation, while deep responses include it in `context_pack`.
+- Return a separately ranked advisory order, expose disagreement between the
+  selected next function and its per-function priority scores, and suggest one
+  matching provider-neutral `ida_*` operation without invoking it.
+- Raise explicit Jev request budgets to use the supported context, apply the
+  current published input price to usage accounting, and retain separate
+  conservative defaults for custom providers and disabled mode.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor

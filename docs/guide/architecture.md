@@ -17,8 +17,12 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 5. IDA executes deterministic SDK and lexical logic and returns structured
    results with bounded signatures when host-side classification or ranking is
    useful
-6. Host performs any remaining advisory classification/ranking, removes
-   bridge-only metadata, applies normal post-processing, and replies
+6. Host assembles a bounded investigation view from the focus function,
+   compact caller/callee signatures, safe API/risk labels, and CFG metadata.
+   It can ask one batch of typed questions about that shared state, then
+   returns ranked advisory results and a suggested deterministic `ida_*` call
+   for the MCP client to consider; it removes bridge metadata and applies
+   normal post-processing but does not execute the suggestion
 
 ## Module Boundaries
 
@@ -55,17 +59,20 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 - `src/ida_pro_mcp/host/intelligence/`
   - `providers/` — Jev/custom/disabled typed-question providers, HTTP policy, and usage ledger
-  - `advisor_stage.py` / `advisor_gate.py` — single advisor stage (deterministic
-    primary order, sibling `advisory_order`, evidence card, disagreement,
-    `accept_advisory_requested` opt-in, pool caps triage/normal/deep = 4/8/16)
-  - `advisory.py` — bounded `choice`/`noul`/`score` questions (`ask_behavior`,
-    `rank_targets`, Blackboard lane/xref/relation suggestions, arch/GP/load-base,
-    relevance); never an authorization, `risk_ack`, or blackboard-write path
+  - `advisor_stage.py` / `advisor_gate.py` — shared typed-decision gate
+    (deterministic primary order, sibling `advisory_order`, evidence card,
+    disagreement, explicit apply opt-in, pool caps triage/normal/deep = 4/8/16)
+  - `advisory.py` — provider-neutral decision workflows (`assess_function_neighborhood`,
+    `ask_behavior`, `rank_targets`, Blackboard lane/xref/relation suggestions,
+    architecture/GP/load-base hypotheses, relevance); decisions never authorize
+    writes or `risk_ack`
   - `rpc_advisory.py` — host-side pre/post-RPC advisory processing for IDA results
   - `lexical.py` / `embeddings.py` — deterministic signature index and compatibility storage
     (`<idb-path>.signatures.db`, with one-time migration from the legacy
     `<idb-path>.embeddings.db` sidecar)
-  - `ContextAssembler` / `UsageIntelligence` — bounded context and passive host telemetry
+  - `ContextAssembler` / `UsageIntelligence` — assembles one bounded focus plus
+    caller/callee investigation packet, returns a suggested next `ida_*` call,
+    and records passive host telemetry
 Blackboard organization runs in a host worker after a successful finding
 mutation. It receives bounded signatures and structured metadata, recommends
 lanes, and ranks only xrefs/relations already present in stored evidence or
@@ -94,9 +101,9 @@ through the shared advisor gate and stores its evidence card with the advisory.
    `has_more`/`done`, per-tool budgets via `detail=triage|normal|deep`)
 8. Host: auto-blackboard extraction from response payload (provider answers
    never write blackboard findings)
-9. Host: deterministic context injection and optional advisor-stage metadata
-   (primary order untouched; sibling `advisory_order` + evidence card;
-   `applied` only on explicit `accept_advisory=true`)
+9. Host: deterministic context injection and a provider-neutral investigation
+   decision batch when enabled. Primary order stays deterministic; sibling
+   `advisory_order` is applied only on explicit `accept_advisory=true`.
 10. Return MCP content
 
 Provider configuration and credential variables are removed from the IDA

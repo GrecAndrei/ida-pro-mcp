@@ -151,13 +151,14 @@ Provider tests use mocked transports; report any unavailable external Jev or
 licensed IDA runtime rather than substituting another backend.
 
 **Shipped vs Planned (intelligence):** Jev is called from multiple host sites
-(`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base), not a single
-advisor stage. `advisory_ranking` crumbs exist on some responses; a full
-evidence card, disagreement flag, triage/deep session profiles, and a unified
-advisor stage are **Planned** — do not document them as shipped. Architecture
-advisory may still fill processor/bitness into an inferred profile (footgun);
-**Planned** is no arch auto-fill until stage + evidence + disagreement land.
-See `docs/wiki/core/intelligence.md`.
+(`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base) through the shared
+advisor gate. Bounded evidence cards, disagreement metadata, and the shared
+`detail=triage|normal|deep` pool caps are shipped. The decompile context path
+also sends a shared compact focus/caller/callee packet and returns a typed
+neighborhood assessment with an optional deterministic `ida_*` suggestion;
+the caller decides whether to run it. Architecture advisory is a hypothesis
+only and does not auto-fill processor, bitness, or endianness. Keep new
+advisories provider-neutral and optional. See `docs/wiki/core/intelligence.md`.
 
 ## Tests, coverage, and live IDA
 

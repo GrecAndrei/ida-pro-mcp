@@ -23,6 +23,8 @@ MODES = frozenset({"jev", "custom", "disabled"})
 JEV_BASE_URL = "https://api.typesafe.ai"
 JEV_INVOKE_PATH = "/v1/systemone"
 JEV_DEFAULT_MODEL = "jev-latest"
+JEV_DEFAULT_INPUT_USD_PER_MTOK = 0.042
+JEV_DEFAULT_OUTPUT_USD_PER_MTOK = 0.0
 CONFIG_FILE_NAME = "intelligence.json"
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
@@ -160,7 +162,7 @@ class ProviderConfig:
     max_attempts: int = 3
     backoff_initial_seconds: float = 0.5
     backoff_max_seconds: float = 8.0
-    max_input_chars: int = 32_768
+    max_input_chars: int = 262_144
     max_questions: int = 64
     max_response_bytes: int = 1_048_576
     input_usd_per_mtok: float | None = None
@@ -828,6 +830,10 @@ def resolve_provider_config(
         model = _safe_identifier(values.get("IDA_MCP_JEV_MODEL") or provider.get("model"), name="IDA_MCP_JEV_MODEL", default=JEV_DEFAULT_MODEL)
         input_price = _price_value(values.get("IDA_MCP_JEV_INPUT_USD_PER_MTOK", provider.get("input_usd_per_mtok")), name="jev input price")
         output_price = _price_value(values.get("IDA_MCP_JEV_OUTPUT_USD_PER_MTOK", provider.get("output_usd_per_mtok")), name="jev output price")
+        if input_price is None:
+            input_price = JEV_DEFAULT_INPUT_USD_PER_MTOK
+        if output_price is None:
+            output_price = JEV_DEFAULT_OUTPUT_USD_PER_MTOK
         return ProviderConfig(
             mode="jev",
             provider_id="typesafe-jev",
@@ -850,7 +856,7 @@ def resolve_provider_config(
                 values.get("IDA_MCP_JEV_MAX_RESPONSE_BYTES", provider.get("max_response_bytes")), name="jev max response bytes", default=1_048_576, minimum=1024, maximum=16_777_216
             ),
             max_input_chars=_int_value(
-                values.get("IDA_MCP_JEV_MAX_INPUT_CHARS", provider.get("max_input_chars")), name="jev max input chars", default=32_768, minimum=1024, maximum=1_000_000
+                values.get("IDA_MCP_JEV_MAX_INPUT_CHARS", provider.get("max_input_chars")), name="jev max input chars", default=262_144, minimum=1024, maximum=1_000_000
             ),
             max_questions=_int_value(
                 values.get("IDA_MCP_JEV_MAX_QUESTIONS", provider.get("max_questions")), name="jev max questions", default=64, minimum=1, maximum=64

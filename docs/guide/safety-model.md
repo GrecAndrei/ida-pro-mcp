@@ -156,7 +156,7 @@ an HTTP response-splitting primitive.
 
 - The MCP host performs typed-question requests (`choice` / `noul` / `score`)
   over host-side HTTP before or after the IDA RPC as needed. IDA gathers
-  deterministic candidates and bounded signatures only.
+  deterministic candidates, bounded signatures, and metadata only.
 - IDA child processes do not inherit Jev/custom/Gemini credential variables,
   provider selection, provider configuration paths, or provider-specific
   settings.
@@ -169,6 +169,8 @@ an HTTP response-splitting primitive.
 - Natural-language queries are reduced to bounded identifier signatures
   before a provider request; raw operator prompts and decompilation text are
   not sent.
+- Decompile advisories may suggest a deterministic public `ida_*` follow-up.
+  The MCP client chooses whether to call it; provider code never dispatches it.
 - Architecture advisory suggests only (`inference_applied=false`). It never
   writes processor, bitness, or endianness into the inferred profile or IDB;
   IDA's processor metadata and explicit operator choices remain authoritative.

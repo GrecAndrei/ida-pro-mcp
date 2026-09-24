@@ -12,8 +12,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-MAX_STATE_CHARS = 32_768
-MAX_TEXT_CHARS = 8_192
+MAX_STATE_BYTES = 98_304
+# Kept as an alias for integrations that imported the old internal name.  The
+# limit has always been measured after UTF-8 JSON encoding, so bytes is the
+# accurate unit.
+MAX_STATE_CHARS = MAX_STATE_BYTES
+MAX_TEXT_CHARS = 32_768
+MAX_NESTED_TEXT_CHARS = 8_192
 MAX_QUESTION_CHARS = 2_048
 MAX_QUESTIONS = 64
 MAX_RESPONSE_BYTES = 1_048_576
@@ -173,7 +178,7 @@ def _compact_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
     if key.lower() in _SENSITIVE_CONTEXT_KEYS:
         return None
     if isinstance(value, str):
-        text = _safe_string(value, MAX_TEXT_CHARS if depth < 2 else 2_048)
+        text = _safe_string(value, MAX_TEXT_CHARS if depth < 2 else MAX_NESTED_TEXT_CHARS)
         if _SECRET_VALUE_RE.search(text):
             return None
         return text
@@ -232,7 +237,7 @@ class StateSnapshot:
         import json
 
         encoded = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) > MAX_STATE_CHARS:
+        if len(encoded.encode("utf-8")) > MAX_STATE_BYTES:
             raise ProviderProtocolError("provider state exceeds the compact context limit")
         safe_provenance: dict[str, str] = {}
         for key, value in (self.provenance or {}).items():

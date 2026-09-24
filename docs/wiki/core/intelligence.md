@@ -28,8 +28,10 @@ Hard boundary — document and enforce as current behavior:
 
 - Typed questions only: `choice`, `noul`, and `score`.
 - Host-side HTTP only (Jev fixed TypeSafe endpoint, or allowlisted custom).
-- Compact signatures / metadata / bytes-disassembly samples only — no raw
-  decompilation, prompts, completions, or credentials logged or persisted.
+- Shared compact investigation state can contain multiple function signatures,
+  caller/callee relationships, IDs, and safe architecture metadata. Full raw
+  decompilation, literal dumps, prompts, completions, and credentials are
+  excluded from provider state and never persisted by the provider layer.
 - Provider answers never authorize mutations, satisfy `risk_ack`, or write
   blackboard findings. Deterministic IDA policy remains authoritative.
 - Disabled, unavailable, malformed, timed-out, or budget-blocked providers
@@ -38,10 +40,23 @@ Hard boundary — document and enforce as current behavior:
 
 Provider transport runs in the MCP host. For query expansion the host asks its
 provider before the IDA RPC and sends only bounded expansion labels to the
-deterministic search. For behavior search, function classification, gadget
-classification, and reranking, IDA returns bounded candidate signatures and
-the host asks the provider after the RPC. Provider configuration and credential
-variables are removed from the IDA child environment.
+deterministic search. For function behavior, `ContextAssembler` derives compact
+signatures locally from the focus function and any caller/callee context
+returned by `decompile_chain`. The packet includes API/crypto/risk labels,
+bounded CFG/dataflow counts, and normalized branch cues when IDA provides
+them. Literal values, comments, raw conditions, and full decompilation stay
+local. One shared state then carries per-function behavior and priority
+questions plus neighborhood-level next-evidence questions. The
+`detail=triage|normal|deep` setting caps the pool at 4/8/16 functions; normal
+and deep responses surface the typed result, while deep also includes it in
+`context_pack`. The response names candidate IDs, includes a ranked advisory
+order, and can suggest
+one concrete provider-neutral `ida_*` follow-up for the MCP client to consider.
+It never executes that operation. Other behavior, gadget, reranking,
+architecture, and Blackboard paths also send
+bounded signatures or metadata after deterministic IDA work. Provider
+configuration and credential variables are removed from the IDA child
+environment.
 
 **Advisor stage (shipped, Jev v2 / `dd866be`):** host call sites
 (`ask_behavior`, `rank_targets`, typed-question rerank, arch / GP / load-base)
@@ -53,6 +68,15 @@ returns a sibling `advisory_order` with an evidence card. `accept_advisory=true`
 is the explicit opt-in that applies a valid reorder. The card records bounded
 signatures, budget use, confidence, disagreement, and deterministic fail-closed
 order.
+
+**Neighborhood assessment (shipped):** the decompile context path sends the
+focus function and compact signatures for observed callers/callees in one
+shared provider request. The configured provider returns per-function behavior and
+priority, a separately chosen next candidate, a deterministic evidence kind,
+and an evidence-sufficiency score. An internal disagreement field records when
+the candidate choice differs from the highest per-function priority. The host
+may include a matching `ida_*` call as a suggestion; it never runs that call or
+changes the IDB.
 
 Background Blackboard organization uses the same gate after finding changes.
 It recommends lanes for bounded findings and scores only observed xrefs and
@@ -106,11 +130,17 @@ session or day. `ida_usage_report` lists bounded attempt metadata: provider,
 model, operation, token counts, latency, status, error code, and estimated cost
 when pricing is known. It never stores request state or answer content.
 
-The default proposed budgets are 100,000 session tokens / `$5`, 500,000 daily
-tokens / `$20`, and bounded request/count limits. Warnings are emitted at 70%
-and 90%. `IDA_MCP_JEV_BUDGET_MODE=block` hard-blocks over-budget requests;
-`warn` records the warning and continues. Unknown pricing blocks by default;
-explicitly opt in only when the operator accepts unpriced usage.
+In explicit Jev mode, defaults allow up to 65,536 estimated input tokens per
+request, 15,000,000 per session, and 140,000,000 per day, with the existing
+`$5` / `$20` cost ceilings and request-count limits. Jev 1.13 is currently
+listed at `$0.042` per million input tokens and free output; a 32,000-token call
+is about `$0.001344`. The host allows a 96 KiB compact state and 256 KiB
+serialized request by default, within TypeSafe's documented 64K total request
+budget and 32K state-plus-longest-question limit. Override these limits with
+the documented `IDA_MCP_JEV_*` settings if TypeSafe's terms change. Custom mode keeps its
+separate conservative request defaults. Warnings are emitted at 70% and 90%;
+`IDA_MCP_JEV_BUDGET_MODE=block` blocks over-budget requests, while `warn`
+records the warning and continues. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
 
 ## Advisor stage contract (shipped)
 

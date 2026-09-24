@@ -36,7 +36,11 @@ def build_provider(
     raise ValueError("unsupported intelligence mode")
 
 
-def default_usage_ledger(*, env: Mapping[str, str] | None = None) -> UsageLedger:
+def default_usage_ledger(
+    *,
+    env: Mapping[str, str] | None = None,
+    provider_mode: str | None = None,
+) -> UsageLedger:
     # Resolve the environment at call time. Tests, per-install launchers, and
     # multiple host instances may select different cache roots after this
     # module has already been imported.
@@ -48,7 +52,12 @@ def default_usage_ledger(*, env: Mapping[str, str] | None = None) -> UsageLedger
         default_dir = CACHE_DIR
     source = os.environ if env is None else env
     cache_dir = source.get("IDA_MCP_CACHE_DIR") or source.get("IDA_MCP_DATA_DIR") or default_dir
-    budget = BudgetConfig.from_env(dict(env)) if env is not None else None
+    if provider_mode is None:
+        try:
+            provider_mode = resolve_provider_config(env=env).mode
+        except Exception:
+            provider_mode = "generic"
+    budget = BudgetConfig.from_env(dict(source), provider_mode=provider_mode)
     return UsageLedger(os.path.join(str(cache_dir), "provider_usage.sqlite3"), budget=budget)
 
 
@@ -63,7 +72,7 @@ def resolve_provider(
 ):
     config = resolve_provider_config(env=env, state=state, state_path=state_path)
     if with_ledger and ledger is None:
-        ledger = default_usage_ledger(env=env)
+        ledger = default_usage_ledger(env=env, provider_mode=config.mode)
     return build_provider(config, transport=transport, ledger=ledger)
 
 

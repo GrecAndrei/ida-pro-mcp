@@ -286,10 +286,6 @@ def fail_closed(
 def _provider(*, provider=None, ledger=None):
     if provider is not None:
         return provider
-    if ledger is None:
-        from .providers.registry import default_usage_ledger
-
-        ledger = default_usage_ledger()
     return resolve_provider(with_ledger=True, ledger=ledger)
 
 
