@@ -54,23 +54,23 @@ from ..schemas import (  # noqa: E402
     _resolve_tool_alias,
 )
 from ..stores.insight_index import InsightIndex  # noqa: E402
+from .args import ServerArgsMixin  # noqa: E402
 from .audit import AuditLogger  # noqa: E402
-from .rate_limit import RateLimiter  # noqa: E402
-from .server_args import ServerArgsMixin  # noqa: E402
-from .server_batch import BackgroundMixin  # noqa: E402
-from .server_blackboard import ServerBlackboardMixin  # noqa: E402
-from .server_client_state import (  # noqa: E402
+from .batch import BackgroundMixin  # noqa: E402
+from .blackboard import ServerBlackboardMixin  # noqa: E402
+from .client_state import (  # noqa: E402
     ServerClientStateMixin,
     _ClientRequestState,
 )
-from .server_dispatch import ServerDispatchMixin  # noqa: E402
-from .server_multi_session import ServerMultiSessionMixin  # noqa: E402
-from .server_response import ServerResponseMixin  # noqa: E402
-from .server_runtime import ServerRuntimeMixin  # noqa: E402
-from .server_semantic import ServerSemanticMixin  # noqa: E402
-from .server_session import ServerSessionMixin  # noqa: E402
-from .server_wiki import ServerWikiMixin  # noqa: E402
-from .server_workflow import ServerWorkflowMixin  # noqa: E402
+from .dispatch import ServerDispatchMixin  # noqa: E402
+from .multi_session import ServerMultiSessionMixin  # noqa: E402
+from .rate_limit import RateLimiter  # noqa: E402
+from .response import ServerResponseMixin  # noqa: E402
+from .runtime import ServerRuntimeMixin  # noqa: E402
+from .semantic import ServerSemanticMixin  # noqa: E402
+from .session_dispatch import ServerSessionMixin  # noqa: E402
+from .wiki import ServerWikiMixin  # noqa: E402
+from .workflow import ServerWorkflowMixin  # noqa: E402
 
 # =============================================================================
 # MCP SERVER
@@ -282,7 +282,7 @@ class IDAMCPServer(
             max_value=3600,
         )
         # Lifecycle knobs, exposed as instance attributes so per-session paths
-        # (server_session / server_runtime) read them via getattr with the
+        # (session_dispatch / runtime) read them via getattr with the
         # module constant as fallback. All parsed tolerantly in config.py so a
         # malformed env value degrades to the default instead of crashing.
         self.safe_mode_poll_seconds = SAFE_MODE_POLL_SECONDS
@@ -449,7 +449,7 @@ class IDAMCPServer(
     # The safe-mode state sets (_pending_analysis / _analysis_complete_sessions)
     # are in-memory and lazily initialized, so a host restart starts with an
     # empty gate. The gate is persisted per-session in metadata['analysis_gate']
-    # on every pending/complete transition by the server_session mixin
+    # on every pending/complete transition by the session_dispatch mixin
     # (_mark_analysis_pending/_mark_analysis_complete/_persist_analysis_gate —
     # this module does not shadow those). This module owns the pieces the
     # mixin does not: restoring the gate in __init__ so a half-analyzed IDB
@@ -495,7 +495,7 @@ class IDAMCPServer(
 
         Must run BEFORE _stop_analysis_completion_watchers so the in-memory
         pending/complete sets still reflect the final state. Delegates the
-        per-session write to the server_session mixin's _persist_analysis_gate
+        per-session write to the session_dispatch mixin's _persist_analysis_gate
         (the canonical metadata['analysis_gate'] writer).
         """
         sessions = getattr(self.session_mgr, "sessions", None)
@@ -533,7 +533,7 @@ class IDAMCPServer(
         h02 runtime teardown so a background thread cannot re-spawn an IDA
         process after _cleanup_all_runtimes has finished killing them. The
         collections are cleared defensively
-        (getattr + isinstance): safe-mode bookkeeping lives in server_session
+        (getattr + isinstance): safe-mode bookkeeping lives in session_dispatch
         and evolves independently, so a missing/renamed collection is a no-op.
         """
         with self._analysis_state_lock():

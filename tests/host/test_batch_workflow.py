@@ -25,12 +25,12 @@ import sys
 import threading
 from types import SimpleNamespace
 
-import ida_pro_mcp.host.server.server_batch as sb_module
+import ida_pro_mcp.host.server.batch as sb_module
 from ida_pro_mcp.host.batch_manager import BatchManager
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.batch import BackgroundMixin
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_batch import BackgroundMixin
-from ida_pro_mcp.host.server.server_workflow_batch import (
+from ida_pro_mcp.host.server.workflow_batch import (
     _NON_ARG_ANNOTATION_KEYS,
     ServerWorkflowBatchMixin,
 )
@@ -399,7 +399,7 @@ def test_semantic_index_lazy_state_uses_single_lock(tmp_path, monkeypatch):
 def test_bg_wait_max_env_is_safe_for_invalid_values():
     """A malformed timeout override must not stop the host from importing."""
     code = (
-        "from ida_pro_mcp.host.server.server_batch "
+        "from ida_pro_mcp.host.server.batch "
         "import _BG_WAIT_MAX_SECONDS; print(_BG_WAIT_MAX_SECONDS)"
     )
     for raw, expected in (("oops", 3600.0), ("inf", 3600.0), ("nan", 3600.0), ("-5", 1.0)):

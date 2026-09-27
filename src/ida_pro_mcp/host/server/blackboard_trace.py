@@ -1,6 +1,6 @@
 """Trace task management for the blackboard mixin.
 
-Extracted from server_blackboard.py to keep the main handler focused.
+Extracted from blackboard.py to keep the main handler focused.
 This mixin provides:
   - Entity extraction from text (addresses, symbols, addr→name pairs)
   - Trace task creation and enqueueing

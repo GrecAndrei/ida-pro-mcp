@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server import server_batch
-from ida_pro_mcp.host.server.server_batch import BackgroundMixin
+from ida_pro_mcp.host.server import batch
+from ida_pro_mcp.host.server.batch import BackgroundMixin
 
 
 def test_semantic_index_scope_validation_covers_all_request_shapes():
@@ -109,7 +109,7 @@ def test_background_policy_admission_and_task_lifecycle_modes(monkeypatch):
     assert host._bg_list({"session_id": "other"})["tasks"] == []
     assert host._bg_wait({})["error"] is True
     assert host._bg_wait({"task_id": "owned", "timeout": "bad"})["error"] is True
-    monkeypatch.setattr(server_batch, "_BG_WAIT_MAX_SECONDS", 3.0)
+    monkeypatch.setattr(batch, "_BG_WAIT_MAX_SECONDS", 3.0)
     assert host._bg_wait({"task_id": "owned", "timeout": 99})["state"] == "done"
     assert host._bg_wait({"task_id": "owned"})["state"] == "done"
     assert host._batch_mgr.wait_args == [("owned", 3.0), ("owned", 3.0)]

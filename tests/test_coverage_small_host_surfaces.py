@@ -17,9 +17,9 @@ from ida_pro_mcp.host.intelligence.usage import DriftDetector, UsageIntelligence
 from ida_pro_mcp.host.policy import PolicyDecision, PolicyMode, RiskTier, classify_tool_action, evaluate_policy
 from ida_pro_mcp.host.response_signals import build_session_resume
 from ida_pro_mcp.host.server.audit import AuditLogger
+from ida_pro_mcp.host.server.blackboard_trace import ServerBlackboardTraceMixin
 from ida_pro_mcp.host.server.postprocess import apply_post_processing
-from ida_pro_mcp.host.server.server_blackboard_trace import ServerBlackboardTraceMixin
-from ida_pro_mcp.host.server.server_response_compact import ServerResponseCompactMixin
+from ida_pro_mcp.host.server.response_compact import ServerResponseCompactMixin
 
 
 def test_small_helper_and_provider_fallbacks(monkeypatch):

@@ -1,6 +1,6 @@
 """Work order g02: pin the blackboard<->IDB round-trip fixes.
 
-This suite pins the g02 fix batch in ``server_blackboard_idb.py``:
+This suite pins the g02 fix batch in ``blackboard_idb.py``:
 
 * a failed/errored symbol lookup must never let publish SN_FORCE-rename an
   analyst-applied name -- the old ''-collapse treated "could not read" as
@@ -27,7 +27,7 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ida_pro_mcp.host.server.server_blackboard_idb import (  # noqa: E402
+from ida_pro_mcp.host.server.blackboard_idb import (  # noqa: E402
     IDA_BATCH_MAX_CALLS,
     ServerBlackboardIdbMixin,
 )
@@ -373,7 +373,7 @@ def test_current_symbols_batch_empty_and_error_fallbacks():
 
     b_host = _Host(_MissingNameBatch())
     res = b_host._current_symbols_batch(_MissingNameBatch(), ["0x401000", "0x402000"])
-    from ida_pro_mcp.host.server.server_blackboard_idb import _UNREADABLE
+    from ida_pro_mcp.host.server.blackboard_idb import _UNREADABLE
     assert res["0x401000"] is _UNREADABLE
 
     # Batch where rpc("batch") raises Exception -> falls back to sequential lookup

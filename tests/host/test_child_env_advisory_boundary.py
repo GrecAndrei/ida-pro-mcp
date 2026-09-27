@@ -1,6 +1,6 @@
 import json
 
-from ida_pro_mcp.host.server.server_runtime import ida_child_environment
+from ida_pro_mcp.host.server.runtime import ida_child_environment
 
 
 def test_ida_child_environment_drops_provider_credentials_and_config(monkeypatch):

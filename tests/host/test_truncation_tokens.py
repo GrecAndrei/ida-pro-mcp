@@ -175,7 +175,7 @@ class _FakeSession:
 
 
 class _DispatchHarness:
-    from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+    from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
     # Mixin dispatch method into harness
     _handle_truncation = ServerDispatchMixin._handle_truncation
 

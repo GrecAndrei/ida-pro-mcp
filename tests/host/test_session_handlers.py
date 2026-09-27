@@ -1,7 +1,7 @@
 """Regression tests for f02_session_handlers audit findings.
 
 Covers the security/isolation and bookkeeping fixes applied to
-``server_session.py``:
+``session_dispatch.py``:
 - session/get and session/list no longer expose a peer's session record.
 - Declarative dict actions (rename/duplicate/archive/unarchive/tag/untag/
   add_note/clear_notes) and snapshot/restore_snapshot reject a live foreign
@@ -414,7 +414,7 @@ def test_safe_mode_bookkeeping_lock_keeps_all_pending_sessions(tmp_path, monkeyp
 
 
 def test_session_diff_inflight_discarded_on_import_error(tmp_path, monkeypatch):
-    import ida_pro_mcp.host.server.server_session as ss
+    import ida_pro_mcp.host.server.session_dispatch as ss
 
     server = _make_server(tmp_path, monkeypatch)
     real_import = __import__

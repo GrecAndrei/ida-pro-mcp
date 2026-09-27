@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ida_pro_mcp.host.server import server_runtime as runtime_mod
+from ida_pro_mcp.host.server import runtime as runtime_mod
 from tests.host.test_runtime import _Host
 
 

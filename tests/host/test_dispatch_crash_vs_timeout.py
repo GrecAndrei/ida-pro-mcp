@@ -21,7 +21,7 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 from ida_pro_mcp.host.errors import MCPError  # noqa: E402
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin  # noqa: E402
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin  # noqa: E402
 from ida_pro_mcp.host.server.session import Session  # noqa: E402
 
 

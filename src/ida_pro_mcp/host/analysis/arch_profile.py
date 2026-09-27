@@ -463,7 +463,7 @@ def prepared_profile(inferred: dict[str, Any], options: dict[str, Any] | None = 
     This is the single entry point for turning a raw-blob inference (or an
     explicit selection) into the option dict that gets merged with
     open-binary options.  It is used by the prepared-profile helper on the
-    host side and is the hand-off point for the server_session.py revamp wave
+    host side and is the hand-off point for the session_dispatch.py revamp wave
     to auto-apply a high-confidence inference before opening an opaque blob.
     """
     opts, meta = normalize_arch_options(dict(options or {}))

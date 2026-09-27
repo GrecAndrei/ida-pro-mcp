@@ -23,9 +23,9 @@ import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import blackboard_orchestration, server_blackboard as server_blackboard_module
+from ida_pro_mcp.host.server import blackboard as server_blackboard_module, blackboard_orchestration
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.server.blackboard_orchestration import TaskPool
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
 

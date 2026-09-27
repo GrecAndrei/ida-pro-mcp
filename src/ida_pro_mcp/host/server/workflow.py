@@ -24,7 +24,7 @@ from ..schemas import (
     classify_tool_category,
     sanitize_schema_for_vertex,
 )
-from .server_workflow_batch import ServerWorkflowBatchMixin
+from .workflow_batch import ServerWorkflowBatchMixin
 
 # Retained as a compatibility marker for pre-provider test/caller code. The
 # workflow estimator is deterministic and never consults this flag.
@@ -324,7 +324,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             if bindings_err is not None:
                 return bindings_err
 
-            # Shared step executor (server_workflow_batch) resolves output→input
+            # Shared step executor (workflow_batch) resolves output→input
             # references ($param, step{i}_{key}, step{i}.result{path}) against
             # the accumulated results map and halts on the first error when
             # continue_on_error is false.

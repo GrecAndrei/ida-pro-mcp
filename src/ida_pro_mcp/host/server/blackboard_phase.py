@@ -1,6 +1,6 @@
 """Phase management and policy enforcement for the blackboard mixin.
 
-Extracted from server_blackboard.py to keep the main handler focused.
+Extracted from blackboard.py to keep the main handler focused.
 This mixin provides:
   - Phase lifecycle (scout → prove → commit → finalize)
   - Phase contracts and escape routes

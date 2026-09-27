@@ -317,8 +317,8 @@ class TestItemSearchText:
 class TestNextContinuation:
     def test_continuation_advances_offset(self):
         """Simulate the dispatch-level next_token flow."""
-        from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-        from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+        from ida_pro_mcp.host.server.args import ServerArgsMixin
+        from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
         class _Harness(ServerArgsMixin, ServerDispatchMixin):
             def __init__(self):
@@ -348,8 +348,8 @@ class TestNextContinuation:
         assert cont_result["continued_from"] == token
 
     def test_unknown_token_error(self):
-        from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-        from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+        from ida_pro_mcp.host.server.args import ServerArgsMixin
+        from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
         class _Harness(ServerArgsMixin, ServerDispatchMixin):
             def __init__(self):

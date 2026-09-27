@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
+from ida_pro_mcp.host.server.response import ServerResponseMixin
 
 
 class _Assembler:
@@ -173,7 +173,7 @@ def test_compact_pipeline_injects_related_hints_and_density_fallback(monkeypatch
     })
     host = _Host(assembler=assembler)
     monkeypatch.setattr(
-        "ida_pro_mcp.host.server.server_response.CONTEXT_DENSITY_COMPACT_THRESHOLD",
+        "ida_pro_mcp.host.server.response.CONTEXT_DENSITY_COMPACT_THRESHOLD",
         1,
     )
     result = host._prepare_response_payload(
@@ -193,7 +193,7 @@ def test_raw_compact_response_skips_density_middleware(monkeypatch):
     called = []
     host._context_density_optimizer.compact_response = lambda *a, **k: called.append(1)
     monkeypatch.setattr(
-        "ida_pro_mcp.host.server.server_response.CONTEXT_DENSITY_COMPACT_THRESHOLD",
+        "ida_pro_mcp.host.server.response.CONTEXT_DENSITY_COMPACT_THRESHOLD",
         1,
     )
     result = host._prepare_response_payload(

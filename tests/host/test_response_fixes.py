@@ -29,10 +29,10 @@ import threading
 from ida_pro_mcp.host.config import _parse_line_range
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.response_enrichment import digest_decompiled, patch_addresses
-from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_response_compact import (
+from ida_pro_mcp.host.server.response_compact import (
     ServerResponseCompactMixin,
 )
+from ida_pro_mcp.host.server.server import IDAMCPServer
 
 # ---------------------------------------------------------------------------
 # Helpers

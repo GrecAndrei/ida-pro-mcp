@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ida_pro_mcp.host.errors import is_error_result  # noqa: E402
-from ida_pro_mcp.host.server.server_blackboard_idb import ServerBlackboardIdbMixin  # noqa: E402
+from ida_pro_mcp.host.server.blackboard_idb import ServerBlackboardIdbMixin  # noqa: E402
 from ida_pro_mcp.host.stores.blackboard_store import (  # noqa: E402
     BlackboardStore,
     entry_id_in,

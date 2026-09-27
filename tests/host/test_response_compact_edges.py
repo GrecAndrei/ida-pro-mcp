@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ida_pro_mcp.host.config import _COMPACT_DROP
-from ida_pro_mcp.host.server.server_response_compact import ServerResponseCompactMixin
+from ida_pro_mcp.host.server.response_compact import ServerResponseCompactMixin
 
 
 class _CompactHost(ServerResponseCompactMixin):

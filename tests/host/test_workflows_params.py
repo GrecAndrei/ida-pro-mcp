@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from ida_pro_mcp.host.server.server_session import _substitute_params
+from ida_pro_mcp.host.server.session_dispatch import _substitute_params
 
 
 class TestSubstituteParams(unittest.TestCase):

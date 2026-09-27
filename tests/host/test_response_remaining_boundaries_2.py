@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 import ida_pro_mcp.host.response_enrichment as enrichment_module
-import ida_pro_mcp.host.server.server_response as response_module
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
+import ida_pro_mcp.host.server.response as response_module
+from ida_pro_mcp.host.server.response import ServerResponseMixin
 
 
 class _BadDict(dict):

@@ -5,9 +5,9 @@ from __future__ import annotations
 import importlib
 import threading
 
-from ida_pro_mcp.host.server.server_wiki import ServerWikiMixin
+from ida_pro_mcp.host.server.wiki import ServerWikiMixin
 
-wiki_server_mod = importlib.import_module("ida_pro_mcp.host.server.server_wiki")
+wiki_server_mod = importlib.import_module("ida_pro_mcp.host.server.wiki")
 
 
 class WikiHost(ServerWikiMixin):

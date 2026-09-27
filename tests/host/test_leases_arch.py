@@ -1,6 +1,6 @@
 """Regression tests for s07-h02: runtime-lease tree liveness and tree teardown.
 
-Covers the s3 lease fixes in server_runtime_leases.py:
+Covers the s3 lease fixes in runtime_leases.py:
 
 - Heartbeat keeps a session lease while an ida-named descendant (the real
   analysis process, spawned by the idat launcher) is still alive after the
@@ -29,8 +29,8 @@ import subprocess
 import sys
 import threading
 
-from ida_pro_mcp.host.server import server_runtime_leases as srl
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime_leases as srl
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 TMP_SID = "A1B2C3D4"
 
@@ -38,7 +38,7 @@ TMP_SID = "A1B2C3D4"
 def test_stale_lease_cleanup_budget_rejects_invalid_float_env_values():
     """A bad startup cleanup budget must never make lease recovery unbounded."""
     code = (
-        "from ida_pro_mcp.host.server.server_runtime_leases "
+        "from ida_pro_mcp.host.server.runtime_leases "
         "import _resolve_stale_cleanup_budget; print(_resolve_stale_cleanup_budget())"
     )
     for raw, expected in (("oops", 10.0), ("inf", 10.0), ("nan", 10.0), ("-5", 1.0)):

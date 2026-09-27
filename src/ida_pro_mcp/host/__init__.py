@@ -56,8 +56,8 @@ from .stores.truncation import continue_truncated, peek_truncated, search_trunca
 
 
 # Lazy import to break a module-load cycle:
-#   host.__init__ → server.server → server.server_blackboard → host.config
-# When server_blackboard does ``from ..config import _bounded_int`` it re-enters
+#   host.__init__ → server.server → server.blackboard → host.config
+# When blackboard does ``from ..config import _bounded_int`` it re-enters
 # host.__init__, which would otherwise re-trigger ``from .server.server import
 # IDAMCPServer`` before that submodule has finished loading.  Deferring the
 # import to attribute access time means the submodule is fully loaded by then.

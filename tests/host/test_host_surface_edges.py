@@ -10,8 +10,8 @@ import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-from ida_pro_mcp.host.server.server_wiki import ServerWikiMixin
+from ida_pro_mcp.host.server.args import ServerArgsMixin
+from ida_pro_mcp.host.server.wiki import ServerWikiMixin
 
 
 class _ArgsHost(ServerArgsMixin):
@@ -136,7 +136,7 @@ def test_next_cache_prunes_expired_malformed_and_non_mapping_rows(monkeypatch):
         "nan": {"created_at": float("nan")},
         "scalar": "invalid",
     }
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_args.time.time", lambda: 100.0)
+    monkeypatch.setattr("ida_pro_mcp.host.server.args.time.time", lambda: 100.0)
     host._prune_next_cache()
     assert set(host._next_cache) == {"fresh"}
 

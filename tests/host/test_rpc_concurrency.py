@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _RpcHarness(ServerRuntimeMixin):
@@ -259,8 +259,8 @@ def test_call_tool_maps_queue_timeout_to_ida_busy():
     not IDA_TIMEOUT (which means the socket recv deadline passed) and not
     IDA_CRASHED (the process is alive)."""
     from ida_pro_mcp.host.errors import MCPError
-    from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
-    from ida_pro_mcp.host.server.server_runtime import RpcQueueTimeout
+    from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
+    from ida_pro_mcp.host.server.runtime import RpcQueueTimeout
     from ida_pro_mcp.services import Session
 
     class _BusyDispatch(ServerDispatchMixin):

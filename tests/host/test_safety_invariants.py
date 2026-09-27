@@ -20,10 +20,10 @@ from unittest import mock
 import pytest
 
 from ida_pro_mcp.host.policy import PolicyMode, strictest
-from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
-from ida_pro_mcp.host.server.server_session import ServerSessionMixin
+from ida_pro_mcp.host.server import runtime as server_runtime_mod
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.session_dispatch import ServerSessionMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
 _FAKE_NOW = 1_000_000_000.0

@@ -71,7 +71,7 @@ def _decompile_error_entry(addr, dec_err):
     The ida-side ``_decompile_with_diagnostics`` returns error dicts built by
     ``make_error`` (which sets ``error: True`` but never ``category``). Every
     per-address failure must carry ``error: True`` so host plumbing
-    (server_dispatch / server_multi_session / postprocess) recognizes it as a
+    (dispatch / multi_session / postprocess) recognizes it as a
     failure rather than a success entry, plus a non-null ``category`` for
     consistency with sibling actions.
     """

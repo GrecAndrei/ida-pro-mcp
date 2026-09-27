@@ -1,15 +1,15 @@
 """Regression tests for f16_client_state audit findings.
 
 Covers (no live IDA):
-- server_semantic: ``_handle_gadgets_semantic_find`` refuses to read a foreign
+- semantic: ``_handle_gadgets_semantic_find`` refuses to read a foreign
   connection's session (ownership guard fires before the cached index is read
   or rebuilt); ``_semantic_index_rebuild`` returns the standard ``ok: True``
   envelope; the rebuild, cached-read, pagination and error paths are exercised.
-- server_client_state: ``_end_client_connection`` does not SIGKILL a sibling
+- client_state: ``_end_client_connection`` does not SIGKILL a sibling
   connection's adopted live runtime (stale ownership record); teardown of the
   shared realm's ``logged_in`` runs under ``realm['lock']``; SSO ticket scopes
   are shape-validated at login.
-- server_wiki: an unbalanced-quote action tail returns an INVALID_ARGS envelope
+- wiki: an unbalanced-quote action tail returns an INVALID_ARGS envelope
   instead of raising out of the transport.
 """
 
@@ -19,8 +19,8 @@ import os
 import threading
 
 from ida_pro_mcp.host.errors import MCPError, make_error
+from ida_pro_mcp.host.server.client_state import mint_agent_ticket
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket
 
 _FUTURE_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of test run time
 
@@ -58,7 +58,7 @@ def _make_server(tmp_path, monkeypatch) -> IDAMCPServer:
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
     # Force deterministic token matching in the gadget scorer (no embedder).
-    import ida_pro_mcp.host.server.server_semantic as server_semantic_mod
+    import ida_pro_mcp.host.server.semantic as server_semantic_mod
     monkeypatch.setattr(server_semantic_mod, "EMBEDDING_FIRST_MODE", False)
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
@@ -128,7 +128,7 @@ def test_client_connection_registry_keeps_all_concurrent_connections(tmp_path, m
 
 
 # ---------------------------------------------------------------------------
-# server_semantic: ownership guard + envelope + path coverage
+# semantic: ownership guard + envelope + path coverage
 # ---------------------------------------------------------------------------
 
 def test_semantic_index_rebuild_returns_ok_envelope(tmp_path, monkeypatch):
@@ -294,7 +294,7 @@ def test_semantic_find_adopts_unlocked_recorded_session_after_owner_disconnects(
 
 
 # ---------------------------------------------------------------------------
-# server_client_state: _end_client_connection ownership re-check
+# client_state: _end_client_connection ownership re-check
 # ---------------------------------------------------------------------------
 
 def test_end_connection_does_not_kill_sibling_owned_live_runtime(tmp_path, monkeypatch):
@@ -354,7 +354,7 @@ def test_end_connection_cleans_owned_session_with_no_sibling(tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# server_client_state: sticky ownership (D3-F10) adoption consent
+# client_state: sticky ownership (D3-F10) adoption consent
 # ---------------------------------------------------------------------------
 
 
@@ -429,7 +429,7 @@ def test_end_connection_drops_logged_in_agents_under_realm_lock(tmp_path, monkey
 
 
 # ---------------------------------------------------------------------------
-# server_client_state: SSO scope shape validation
+# client_state: SSO scope shape validation
 # ---------------------------------------------------------------------------
 
 def test_agent_login_rejects_malformed_scopes(tmp_path, monkeypatch):
@@ -464,7 +464,7 @@ def test_agent_login_accepts_valid_scopes(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_wiki: unbalanced-quote action tail
+# wiki: unbalanced-quote action tail
 # ---------------------------------------------------------------------------
 
 def test_wiki_unbalanced_quote_returns_invalid_args(tmp_path, monkeypatch):

@@ -820,7 +820,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             # for the whole host (called after every successful tool call).
             self._maybe_persist_access(session)
             # Dead-end detection is intentionally NOT run here: the result is
-            # always discarded by the caller (server_runtime._record_activity
+            # always discarded by the caller (runtime._record_activity
             # wraps log_activity in suppress() and drops the return value), so
             # computing it on every tool call is wasted O(window) work. The
             # STUCK_LOOP gate uses usage.DriftDetector instead. _detect_dead_end

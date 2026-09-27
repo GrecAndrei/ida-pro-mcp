@@ -9,7 +9,7 @@ import signal
 import threading
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server import server_runtime_leases as leases_mod
+from ida_pro_mcp.host.server import runtime_leases as leases_mod
 from tests.host.test_runtime_leases_full_modes import _Runtime
 
 

@@ -1,13 +1,13 @@
 """Regression tests for p03_runtime: _activity_log thread safety.
 
-Covers the fix in server_runtime.py where the activity log was appended and
+Covers the fix in runtime.py where the activity log was appended and
 sliced in place without a lock while other threads iterated it, which could
 raise ``RuntimeError: list changed size during iteration`` in daemon mode.
 """
 
 import threading
 
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _ActivityHost(ServerRuntimeMixin):

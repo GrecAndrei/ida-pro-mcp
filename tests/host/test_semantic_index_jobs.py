@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.batch_manager import BatchManager
-from ida_pro_mcp.host.server.server_batch import BackgroundMixin
+from ida_pro_mcp.host.server.batch import BackgroundMixin
 
 
 class _SessionManager:

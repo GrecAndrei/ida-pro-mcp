@@ -27,8 +27,8 @@ import time
 
 from ida_pro_mcp.host.errors import MCPError, is_error_result, make_error
 from ida_pro_mcp.host.policy import PolicyDecision
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server.args import ServerArgsMixin
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
 
 class _Session:

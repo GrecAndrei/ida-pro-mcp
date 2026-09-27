@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_multi_session import (
+from ida_pro_mcp.host.server.multi_session import (
     ServerMultiSessionMixin,
     SessionGroup,
 )
@@ -225,7 +225,7 @@ def test_session_group_from_dict_and_disk_loading_fail_closed(tmp_path, monkeypa
 
     server._session_groups["g1"] = SessionGroup("g1")
     monkeypatch.setattr(
-        "ida_pro_mcp.host.server.server_multi_session.json.dump",
+        "ida_pro_mcp.host.server.multi_session.json.dump",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only cache")),
     )
     server._persist_groups()

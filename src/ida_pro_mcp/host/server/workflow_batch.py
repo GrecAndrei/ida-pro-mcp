@@ -18,7 +18,7 @@ from .postprocess import (
     prepare_args_for_postprocess,
 )
 from .rate_limit import is_rate_limit_exempt
-from .server_response import truncate_response
+from .response import truncate_response
 
 # Keys that workflow composition/prioritization annotate onto planned calls
 # for the human reader (sources/source_count/index, priority_index/priority_mode)

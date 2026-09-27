@@ -1,3 +1,60 @@
+## 2026-09-27 — Drop the redundant `server_` prefix inside `host/server/`
+
+Internal reorganization only; no runtime, public contract, or persistence change.
+
+Nineteen modules inside `host/server/` carried a `server_` prefix, so the tree
+read `server/server_blackboard.py` and `server/server_runtime.py`. The directory
+already says "server", and the prefix actively obscured the families: four
+`server_blackboard*` files sat next to three `blackboard_*` files, and
+`server_session*` sat next to `session.py` and `session_skills*.py`, with no way
+to tell from a filename which files belonged together.
+
+The prefix is gone. The blackboard family is now `blackboard.py`,
+`blackboard_idb.py`, `blackboard_phase.py`, `blackboard_trace.py`,
+`blackboard_legacy.py`, `blackboard_orchestration.py`, and `blackboard_shapes.py`.
+`server_session.py` became `session_dispatch.py`, which both removes the stutter
+and distinguishes the session *tool dispatch* handlers from `session.py`, which
+holds the `Session`/`SessionManager` data classes. Those are different concerns
+and the rename makes that legible instead of accidental. The remaining modules
+kept a descriptive prefix where the base name would have been ambiguous:
+`server_multi_session.py` is `multi_session.py` rather than `session.py`.
+
+A same-name collision in one test file was resolved rather than papered over:
+`test_runtime_process_tree.py` imported the module as `runtime` while its tests
+also used `runtime` as a local test double, so a module attribute silently
+resolved to the double. The module is now imported as `runtime_mod`, and the
+file is verified line-for-line against its pre-rename form to confirm the two
+meanings stay separated.
+
+Two configuration bugs surfaced and are fixed:
+
+- `pyproject.toml` carried a `per-file-ignores` entry keyed to
+  `server_runtime.py`. Renaming the file silently dropped the ignore, so four
+  pre-existing `SIM115` findings failed the lint and read as a real regression.
+  The key is updated, and `test_server_layout_invariants.py` now fails if any
+  `per-file-ignores` path does not exist.
+- That same test found three further `per-file-ignores` entries pointing at
+  `host/stores/vuln_db.py`, `ida_mcp/tools/debug.py`, and
+  `ida_mcp/tools/patterns.py`, all deleted in earlier work. They were no-ops
+  and have been removed.
+
+`check_changed_line_coverage.py` gained `--find-renames` and now diffs against
+the working tree instead of `HEAD` only. Without rename detection, reorganizing a
+package reports every line of every moved file as new, so the gate failed at
+94.6% on pre-existing uncovered code this change never touched — training
+contributors to ignore a gate that exists to catch exactly that. Verified in
+both directions: a 19-file move now scores 99.7%, while deliberately adding an
+uncovered function to a tracked file still drops the score, so the gate still
+bites.
+
+The architecture guide's `host/server/` map is completed with the modules it did
+not itemise, and `test_server_layout_invariants.py` asserts that map names only
+files that exist and covers every module in the directory, in both directions.
+
+Full offline suite 5,552 passed, 6 skipped, 8 subtests, and clean under
+`-W error::DeprecationWarning`. ruff, schema integrity, workflow pins,
+git diff --check, and the changed-line coverage gate (99.7%) pass.
+
 ## 2026-09-27 — Rename the test suite to describe what each file tests
 
 Test organization only; no runtime, public contract, or persistence change.

@@ -1,4 +1,4 @@
-"""Regression tests for f04_runtime fixes in server_runtime.py.
+"""Regression tests for f04_runtime fixes in runtime.py.
 
 Covers:
 - apply-raises-during-start cleanup (no orphaned runtime / lease gap / fd leak)
@@ -20,8 +20,8 @@ from types import SimpleNamespace
 import pytest
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
-from ida_pro_mcp.host.server.server_runtime import (
+from ida_pro_mcp.host.server import runtime as server_runtime_mod
+from ida_pro_mcp.host.server.runtime import (
     RpcPayloadTooLarge,
     RpcQueueTimeout,
     ServerRuntimeMixin,

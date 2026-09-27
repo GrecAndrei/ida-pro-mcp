@@ -1,6 +1,6 @@
 """Regression tests for p03_runtime: stale runtime-lease cleanup safety.
 
-Covers the runtime-lease ownership/cleanup fixes in server_runtime_leases.py:
+Covers the runtime-lease ownership/cleanup fixes in runtime_leases.py:
 non-Linux PID identity verification, dead/recycled PID handling, TOCTOU-safe
 removal, and the bounded startup cleanup budget.
 """
@@ -11,8 +11,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server import server_runtime_leases
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime_leases
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 TMP_SID = "A1B2C3D4"
 
@@ -47,12 +47,12 @@ def _write_lease(tmp_path, sid=TMP_SID, *, pid=54321, updated=0.0):
 def test_is_expected_ida_process_non_linux_refuses_unverified_pid(tmp_path, monkeypatch):
     """On non-Linux the identity guard must not be skipped: unverified or
     non-IDA pids are refused so a recycled PID is never signalled."""
-    monkeypatch.setattr(server_runtime_leases.sys, "platform", "darwin")
+    monkeypatch.setattr(runtime_leases.sys, "platform", "darwin")
     runtime = _LeaseRuntime(tmp_path)
 
     # ps reports an unrelated process -> refuse.
     monkeypatch.setattr(
-        server_runtime_leases.subprocess,
+        runtime_leases.subprocess,
         "run",
         lambda *a, **k: SimpleNamespace(stdout="bash\n"),
     )
@@ -60,7 +60,7 @@ def test_is_expected_ida_process_non_linux_refuses_unverified_pid(tmp_path, monk
 
     # ps reports an IDA-named process -> safe to signal.
     monkeypatch.setattr(
-        server_runtime_leases.subprocess,
+        runtime_leases.subprocess,
         "run",
         lambda *a, **k: SimpleNamespace(stdout="idat64\n"),
     )
@@ -68,7 +68,7 @@ def test_is_expected_ida_process_non_linux_refuses_unverified_pid(tmp_path, monk
 
     # process lister fails -> refuse (never kill what we cannot verify).
     monkeypatch.setattr(
-        server_runtime_leases.subprocess,
+        runtime_leases.subprocess,
         "run",
         lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
     )
@@ -76,19 +76,19 @@ def test_is_expected_ida_process_non_linux_refuses_unverified_pid(tmp_path, monk
 
 
 def test_is_expected_ida_process_win32_matches_image_name(tmp_path, monkeypatch):
-    monkeypatch.setattr(server_runtime_leases.sys, "platform", "win32")
+    monkeypatch.setattr(runtime_leases.sys, "platform", "win32")
     runtime = _LeaseRuntime(tmp_path)
     runtime._ida_binary_names = lambda: ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]
 
     monkeypatch.setattr(
-        server_runtime_leases.subprocess,
+        runtime_leases.subprocess,
         "run",
         lambda *a, **k: SimpleNamespace(stdout='"ida64.exe","54321","Console","1","12,345 K"\n'),
     )
     assert runtime._is_expected_ida_process(54321, {"idat_exe": ""}) is True
 
     monkeypatch.setattr(
-        server_runtime_leases.subprocess,
+        runtime_leases.subprocess,
         "run",
         lambda *a, **k: SimpleNamespace(stdout='"notepad.exe","54321","Console","1","12,345 K"\n'),
     )
@@ -104,7 +104,7 @@ def test_cleanup_removes_stale_lease_when_recorded_pid_is_dead(tmp_path, monkeyp
     def _kill(pid, sig):
         raise ProcessLookupError()
 
-    monkeypatch.setattr(server_runtime_leases.os, "kill", _kill)
+    monkeypatch.setattr(runtime_leases.os, "kill", _kill)
     runtime._cleanup_stale_runtime_leases()
 
     assert not lease_path.exists()
@@ -117,7 +117,7 @@ def test_cleanup_removes_json_scalar_without_reading_a_pid(tmp_path, monkeypatch
     lease_path.write_text("[\"not-a-lease\"]", encoding="utf-8")
     probed = []
     monkeypatch.setattr(
-        server_runtime_leases.os,
+        runtime_leases.os,
         "kill",
         lambda pid, sig: probed.append((pid, sig)),
     )
@@ -136,7 +136,7 @@ def test_cleanup_treats_nonfinite_timestamp_as_stale(tmp_path, monkeypatch):
     def _kill(pid, sig):
         raise ProcessLookupError()
 
-    monkeypatch.setattr(server_runtime_leases.os, "kill", _kill)
+    monkeypatch.setattr(runtime_leases.os, "kill", _kill)
     runtime._cleanup_stale_runtime_leases()
 
     assert not lease_path.exists()
@@ -148,7 +148,7 @@ def test_cleanup_rejects_nonintegral_pid_without_truncating_it(tmp_path, monkeyp
     lease_path = _write_lease(tmp_path, pid=54321.9, updated=0.0)
     probed = []
     monkeypatch.setattr(
-        server_runtime_leases.os,
+        runtime_leases.os,
         "kill",
         lambda pid, sig: probed.append((pid, sig)),
     )
@@ -162,7 +162,7 @@ def test_cleanup_rejects_nonintegral_pid_without_truncating_it(tmp_path, monkeyp
 def test_expected_process_rejects_recycled_pid_start_token(tmp_path, monkeypatch):
     """An IDA-looking recycled PID is unsafe when its process instance changed."""
     runtime = _LeaseRuntime(tmp_path)
-    monkeypatch.setattr(server_runtime_leases, "_process_start_token", lambda pid: "new")
+    monkeypatch.setattr(runtime_leases, "_process_start_token", lambda pid: "new")
 
     assert runtime._is_expected_ida_process(
         54321,
@@ -173,8 +173,8 @@ def test_expected_process_rejects_recycled_pid_start_token(tmp_path, monkeypatch
 def test_foreign_owner_pid_reuse_does_not_keep_lease_forever(tmp_path, monkeypatch):
     """A reused owner PID is not treated as a live foreign host."""
     runtime = _LeaseRuntime(tmp_path)
-    monkeypatch.setattr(server_runtime_leases.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(server_runtime_leases, "_process_start_token", lambda pid: "new")
+    monkeypatch.setattr(runtime_leases.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtime_leases, "_process_start_token", lambda pid: "new")
 
     assert runtime._lease_has_live_foreign_owner(
         {"owner_pid": 424242, "owner_start_token": "old"}
@@ -190,7 +190,7 @@ def test_cleanup_drops_lease_but_never_signals_recycled_live_pid(tmp_path, monke
     killed = []
     monkeypatch.setattr(runtime, "_is_expected_ida_process", lambda pid, lease: False)
     monkeypatch.setattr(runtime, "_kill_stale_pid", lambda pid: killed.append(pid) or True)
-    monkeypatch.setattr(server_runtime_leases.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtime_leases.os, "kill", lambda pid, sig: None)
     runtime._cleanup_stale_runtime_leases()
 
     assert killed == []
@@ -224,8 +224,8 @@ def test_cleanup_defers_kills_when_startup_budget_exhausted(tmp_path, monkeypatc
     killed = []
     monkeypatch.setattr(runtime, "_is_expected_ida_process", lambda pid, lease: True)
     monkeypatch.setattr(runtime, "_kill_stale_pid", lambda pid: killed.append(pid) or True)
-    monkeypatch.setattr(server_runtime_leases.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(server_runtime_leases, "STALE_CLEANUP_BUDGET_SECONDS", -1.0)
+    monkeypatch.setattr(runtime_leases.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtime_leases, "STALE_CLEANUP_BUDGET_SECONDS", -1.0)
     runtime._cleanup_stale_runtime_leases()
 
     assert killed == []
@@ -252,7 +252,7 @@ def test_live_foreign_owner_lease_is_never_touched(tmp_path, monkeypatch):
     runtime._kill_stale_pid = lambda pid: True
 
     with monkeypatch.context() as m:
-        m.setattr(server_runtime_leases.os, "kill", lambda pid, sig: None)
+        m.setattr(runtime_leases.os, "kill", lambda pid, sig: None)
         runtime._cleanup_stale_runtime_leases()
 
     assert lease_path.exists()

@@ -10,7 +10,7 @@ from ida_pro_mcp.host.agent_operations import (
     translate_public_batch_arguments,
 )
 from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS
-from ida_pro_mcp.host.server import server_response as response_module
+from ida_pro_mcp.host.server import response as response_module
 from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.server import IDAMCPServer
 

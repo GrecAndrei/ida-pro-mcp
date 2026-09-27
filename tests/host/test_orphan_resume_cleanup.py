@@ -16,8 +16,8 @@ from io import BytesIO
 
 import pytest
 
-from ida_pro_mcp.host.server import server_runtime
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server import runtime
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _OrphanKillHarness(ServerRuntimeMixin):
@@ -82,7 +82,7 @@ def test_proc_fallback_kills_only_ida_process_holding_target(monkeypatch, tmp_pa
         return real_listdir(path)
 
     killed_groups = []
-    monkeypatch.setattr(server_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
     monkeypatch.setitem(sys.modules, "psutil", None)  # force `import psutil` to fail
     monkeypatch.setattr(os, "listdir", fake_listdir)
     monkeypatch.setattr(builtins, "open", fake_open)
@@ -93,7 +93,7 @@ def test_proc_fallback_kills_only_ida_process_holding_target(monkeypatch, tmp_pa
     killed = harness._terminate_ida_processes_for_path(target)
 
     assert killed == [1000]
-    assert killed_groups == [(1000, server_runtime.signal.SIGTERM)]
+    assert killed_groups == [(1000, runtime.signal.SIGTERM)]
 
 
 def test_psutil_branch_used_when_available(monkeypatch, tmp_path):
@@ -107,14 +107,14 @@ def test_psutil_branch_used_when_available(monkeypatch, tmp_path):
     harness = _OrphanKillHarness()
     killed_groups = []
     monkeypatch.setitem(sys.modules, "psutil", _psutil_module(fake_procs))
-    monkeypatch.setattr(server_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
     monkeypatch.setattr(os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed_groups.append((pgid, sig)))
 
     killed = harness._terminate_ida_processes_for_path(target)
 
     assert killed == [4242]
-    assert killed_groups == [(4242, server_runtime.signal.SIGTERM)]
+    assert killed_groups == [(4242, runtime.signal.SIGTERM)]
 
 
 def test_empty_target_is_noop():

@@ -85,5 +85,5 @@ call `ida_agent_login`. Identity, active session, ownership, and continuation
 tokens are then scoped per agent.
 
 References: [session operation reference](`ida_help`),
-[session implementation](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/server/server_session.py),
+[session implementation](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/server/session_dispatch.py),
 [server configuration](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/src/ida_pro_mcp/host/config.py).

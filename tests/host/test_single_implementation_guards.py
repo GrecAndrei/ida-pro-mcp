@@ -8,10 +8,10 @@ These tests assert identity so a future copy cannot be reintroduced silently.
 
 from __future__ import annotations
 
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.server.blackboard_legacy import path_has_symlink
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
-from ida_pro_mcp.host.server.server_session import _sess_coerce_tag, _sess_coerce_untag
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server.session_dispatch import _sess_coerce_tag, _sess_coerce_untag
 
 
 def test_symlink_guard_has_a_single_implementation():

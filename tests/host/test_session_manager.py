@@ -1,6 +1,6 @@
 """Regression tests for the f01_session_manager fixer wave.
 
-Covers findings in host/server/session.py and host/server/server_multi_session.py:
+Covers findings in host/server/session.py and host/server/multi_session.py:
 - archive_session preserves existing tags instead of replacing the whole list.
 - merge_sessions tolerates skills.json files that lack activity_log/hypotheses.
 - get_high_confidence_hypotheses guards a non-numeric / out-of-range threshold.
@@ -16,7 +16,7 @@ import json
 import os
 import threading
 
-from ida_pro_mcp.host.server.server_multi_session import (
+from ida_pro_mcp.host.server.multi_session import (
     ServerMultiSessionMixin,
     SessionGroup,
 )
@@ -254,7 +254,7 @@ def test_bookmark_export_tolerates_rows_missing_keys(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# server_multi_session.py: _ms_group_link re-resolves under the lock
+# multi_session.py: _ms_group_link re-resolves under the lock
 # (race/low)
 # ---------------------------------------------------------------------------
 

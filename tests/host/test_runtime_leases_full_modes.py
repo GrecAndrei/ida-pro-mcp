@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server import server_runtime_leases as leases_mod
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime_leases as leases_mod
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 SID = "A1B2C3D4"
 

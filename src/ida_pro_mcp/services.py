@@ -60,8 +60,8 @@ from ida_pro_mcp.host.schemas import (
     TOOLS,
 )
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_session import ServerSessionMixin
 from ida_pro_mcp.host.server.session import Session, SessionManager
+from ida_pro_mcp.host.server.session_dispatch import ServerSessionMixin
 from ida_pro_mcp.host.stores.blackboard_store import (
     BlackboardStore,
     _resolve_db_path,

@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_blackboard as module
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server import blackboard as module
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 
 
 class _Store:

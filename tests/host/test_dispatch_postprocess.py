@@ -26,9 +26,9 @@ assert str(SRC) in sys.path or sys.path.insert(0, str(SRC)) is None
 importlib.import_module("ida_pro_mcp.host")
 
 from ida_pro_mcp.host.errors import MCPError, is_error_result, make_error  # noqa: E402
+from ida_pro_mcp.host.server.args import ServerArgsMixin  # noqa: E402
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin  # noqa: E402
 from ida_pro_mcp.host.server.postprocess import PP_KEYS, extract_post_process_params  # noqa: E402
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin  # noqa: E402
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin  # noqa: E402
 
 
 class _Session:

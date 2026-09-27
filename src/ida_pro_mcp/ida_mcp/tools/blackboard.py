@@ -2,7 +2,7 @@
 Blackboard: thin IDA-side bridge to the analysis-memory subsystem.
 
 The host server is the single authority for blackboard actions: a dict-driven
-action dispatcher in ``host/server/server_blackboard.py`` routes every
+action dispatcher in ``host/server/blackboard.py`` routes every
 ``blackboard`` MCP call over the rewritten store, and owns the crawler, the
 phase machine, the policy gate, the trace module, and the workspace export/
 import round-trip.

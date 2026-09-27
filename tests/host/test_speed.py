@@ -10,9 +10,9 @@ Coverage (each maps to a q06 directive):
           buckets while writes/exec stay hard-limited.
 - D3     postprocess.py: prefers the tool's pre-slice ``total`` for ``_total``
           so a server-side sliced page keeps correct pagination bookkeeping.
-- D1     server_dispatch.py: policy config is parsed once per (mtime_ns, size)
+- D1     dispatch.py: policy config is parsed once per (mtime_ns, size)
           change, not on every call.
-- D5     server_workflow_batch.py: a pure-read batch on one live session is
+- D5     workflow_batch.py: a pure-read batch on one live session is
           served by ONE list-shaped RPC with per-item session tokens; writes,
           mixed sessions, host-only tools, and no-session cases fall back to
           the per-call loop.
@@ -163,7 +163,7 @@ def test_postprocess_prefers_tool_total_for_server_side_pages():
 
 
 def test_policy_config_cached_by_mtime_size(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.server import server_dispatch
+    from ida_pro_mcp.host.server import dispatch
 
     # This test exercises the config-FILE read path specifically; the CI
     # workflow sets IDA_MCP_POLICY_MODE=permissive for the whole run, which
@@ -172,7 +172,7 @@ def test_policy_config_cached_by_mtime_size(tmp_path, monkeypatch):
     # regardless of ambient env.
     monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
 
-    server_dispatch._POLICY_CONFIG_CACHE.clear()
+    dispatch._POLICY_CONFIG_CACHE.clear()
     monkeypatch.setenv("HOME", str(tmp_path))
     policy = tmp_path / ".config" / "ida-pro-mcp" / "policy.json"
     policy.parent.mkdir(parents=True)
@@ -204,7 +204,7 @@ def test_policy_config_cached_by_mtime_size(tmp_path, monkeypatch):
         assert server._policy_baseline_mode() == "assist"
         assert opens["n"] == 2
     finally:
-        server_dispatch._POLICY_CONFIG_CACHE.clear()
+        dispatch._POLICY_CONFIG_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------

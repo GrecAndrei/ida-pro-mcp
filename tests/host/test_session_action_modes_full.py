@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_session import (
+from ida_pro_mcp.host.server.session_dispatch import (
     ServerSessionMixin,
     _sess_coerce_none,
     _sess_coerce_note,

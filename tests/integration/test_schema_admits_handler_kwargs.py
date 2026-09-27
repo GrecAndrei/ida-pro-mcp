@@ -1,6 +1,6 @@
 """Regression: kwargs the in-IDA handlers read must be admitted by the schema.
 
-The host dispatch arg-filter (server_dispatch.py:106-111) drops any kwarg not
+The host dispatch arg-filter (dispatch.py:106-111) drops any kwarg not
 in ``TOOL_ARG_SCHEMAS[tool]``. Earlier, many advertised actions read kwargs the
 schema never admitted, so the knobs were silently stripped — features were
 unreachable through MCP with no error (find_similar tuning, memory compare's

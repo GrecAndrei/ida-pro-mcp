@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server import server_args as args_module
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
+from ida_pro_mcp.host.server import args as args_module
+from ida_pro_mcp.host.server.args import ServerArgsMixin
 
 
 class _Harness(ServerArgsMixin):

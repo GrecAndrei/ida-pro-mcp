@@ -1,6 +1,6 @@
 """Regression tests for g01_session_bootstrap audit findings.
 
-Covers the fixes applied to ``server_session_bootstrap.py`` (the hidden
+Covers the fixes applied to ``session_bootstrap.py`` (the hidden
 orchestrator-only ``bootstrap_*`` dispatch):
 - Mutating bootstrap branches (ingest_outcome, prune_data, run_tournament,
   simulate_batch, ...) resolve the target through ``_require_session_sid`` and
@@ -21,7 +21,7 @@ orchestrator-only ``bootstrap_*`` dispatch):
 
 NOTE: the tests call ``server._handle_session_bootstrap(action, args)``
 directly (the new two-argument signature). The raw-dispatch caller in
-server_session.py is updated by Integrate; exercising the mixin method directly
+session_dispatch.py is updated by Integrate; exercising the mixin method directly
 keeps this suite independent of that cross-file change.
 """
 
@@ -31,7 +31,7 @@ import inspect
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_session_bootstrap import (
+from ida_pro_mcp.host.server.session_bootstrap import (
     ServerSessionBootstrapMixin,
 )
 
@@ -315,7 +315,7 @@ def test_session_id_required_when_no_target(tmp_path, monkeypatch):
 
 
 def test_sid_arg_parameter_and_callable_import_removed():
-    import ida_pro_mcp.host.server.server_session_bootstrap as mod
+    import ida_pro_mcp.host.server.session_bootstrap as mod
 
     sig = inspect.signature(ServerSessionBootstrapMixin._handle_session_bootstrap)
     assert "sid_arg" not in sig.parameters
@@ -325,7 +325,7 @@ def test_sid_arg_parameter_and_callable_import_removed():
 
 
 def test_module_docstring_documents_hidden_orchestrator_contract():
-    import ida_pro_mcp.host.server.server_session_bootstrap as mod
+    import ida_pro_mcp.host.server.session_bootstrap as mod
 
     doc = (mod.__doc__ or "").lower()
     assert "orchestrator" in doc

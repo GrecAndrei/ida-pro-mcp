@@ -170,7 +170,7 @@ class TestDispatchUsesHelper:
             / "ida_pro_mcp"
             / "host"
             / "server"
-            / "server_dispatch.py"
+            / "dispatch.py"
         ).read_text(encoding="utf-8")
         assert "from .rpc_args import prepare_rpc_args" in src
         assert "prepare_rpc_args(tool_name, kwargs, TOOL_ARG_SCHEMAS)" in src

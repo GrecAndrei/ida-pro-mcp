@@ -7,8 +7,8 @@ import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError, make_error
-from ida_pro_mcp.host.server import server_dispatch as dispatch_mod
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server import dispatch as dispatch_mod
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
 
 class _Process:

@@ -7,9 +7,9 @@ import importlib
 import threading
 from pathlib import Path
 
-from ida_pro_mcp.host.server.server_wiki import ServerWikiMixin
+from ida_pro_mcp.host.server.wiki import ServerWikiMixin
 
-wiki_module = importlib.import_module("ida_pro_mcp.host.server.server_wiki")
+wiki_module = importlib.import_module("ida_pro_mcp.host.server.wiki")
 
 
 class _WikiHost(ServerWikiMixin):

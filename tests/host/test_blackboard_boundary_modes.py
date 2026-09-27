@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server import server_blackboard as blackboard_mod
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server import blackboard as blackboard_mod
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 from tests.host.test_blackboard_modes_matrix import _server
 
 

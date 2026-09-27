@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _RuntimeHarness(ServerRuntimeMixin):

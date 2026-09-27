@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import importlib
 
-from ida_pro_mcp.host.server.server_workflow import ServerWorkflowMixin
+from ida_pro_mcp.host.server.workflow import ServerWorkflowMixin
 
-workflow_mod = importlib.import_module("ida_pro_mcp.host.server.server_workflow")
+workflow_mod = importlib.import_module("ida_pro_mcp.host.server.workflow")
 
 
 class WorkflowHost(ServerWorkflowMixin):

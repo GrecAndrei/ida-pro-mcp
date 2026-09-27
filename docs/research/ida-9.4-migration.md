@@ -92,7 +92,7 @@ Call sites in `ida_mcp/` hitting deprecated APIs (~300 total):
   auto-activation at install, bundled with IDA Home, database flush on
   exit, `gen_disasm_text` revived. This is the missing piece that made
   idalib unsuitable as our runtime. Long-term alternative to the
-  spawn-`idat`-per-session model (`server_runtime.py`, `sync.py`'s
+  spawn-`idat`-per-session model (`runtime.py`, `sync.py`'s
   execute_sync marshaling). Needs a design doc before any porting.
 - **IDA Domain API v0.5.0**: microcode + pseudocode access, object
   store/retrieve. An alternative stable surface to track.

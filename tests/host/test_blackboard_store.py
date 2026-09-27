@@ -673,9 +673,9 @@ def test_fake_ida_rpc_fn_drives_frontier_without_live_ida(tmp_path):
 
 
 def test_external_consumers_see_the_store_as_before():
-    # server_blackboard imports STRATEGIES as BB_STRATEGIES and is_auto_name.
-    from ida_pro_mcp.host.server.server_blackboard import BB_STRATEGIES  # noqa: F401
-    from ida_pro_mcp.host.server.server_blackboard_idb import (  # noqa: F401
+    # blackboard imports STRATEGIES as BB_STRATEGIES and is_auto_name.
+    from ida_pro_mcp.host.server.blackboard import BB_STRATEGIES  # noqa: F401
+    from ida_pro_mcp.host.server.blackboard_idb import (  # noqa: F401
         entry_id_in as _idb_entry_id_in,
         is_auto_name as _idb_is_auto_name,
         normalize_addr as _idb_normalize_addr,

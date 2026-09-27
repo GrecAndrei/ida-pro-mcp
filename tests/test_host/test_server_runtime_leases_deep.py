@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ida_pro_mcp.host.server.server_runtime_leases import (
+from ida_pro_mcp.host.server.runtime_leases import (
     ServerRuntimeLeasesMixin,
     _lease_pid,
     _lease_timestamp,

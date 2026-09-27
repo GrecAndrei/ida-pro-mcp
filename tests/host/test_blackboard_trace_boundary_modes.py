@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ida_pro_mcp.host.server.server_blackboard_trace import ServerBlackboardTraceMixin
+from ida_pro_mcp.host.server.blackboard_trace import ServerBlackboardTraceMixin
 
 
 class _Store:

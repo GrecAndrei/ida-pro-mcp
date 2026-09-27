@@ -12,8 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_runtime as runtime_mod
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server import runtime as runtime_mod
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _Host(ServerRuntimeMixin):

@@ -28,21 +28,34 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 - `src/ida_pro_mcp/host/server/`
   - `server.py` — core server object, MCP protocol handling, `tools/list` and `tools/call`
-  - `server_dispatch.py` — tool dispatch, routing, phase-gate preflight, policy audit
-  - `server_session.py` — session CRUD and lifecycle (including `ida_session_state`)
-  - `server_session_bootstrap.py` — bootstrap evidence control loop (calibration, tournament, drift)
-  - `server_runtime.py` — runtime (idat process) lifecycle and process management
-  - `server_runtime_leases.py` — runtime lease file tracking
-  - `server_response.py` / `server_response_compact.py` — response processing, compaction
-  - `server_batch.py` — batch macro execution
-  - `server_blackboard.py` — blackboard tool integration and background
+  - `dispatch.py` — tool dispatch, routing, phase-gate preflight, policy audit
+  - `session_dispatch.py` — session CRUD and lifecycle (including `ida_session_state`)
+  - `session_bootstrap.py` — bootstrap evidence control loop (calibration, tournament, drift)
+  - `runtime.py` — runtime (idat process) lifecycle and process management
+  - `runtime_leases.py` — runtime lease file tracking
+  - `response.py` / `response_compact.py` — response processing, compaction
+  - `batch.py` — batch macro execution
+  - `blackboard.py` — blackboard tool integration and background
     advisory scheduling for durable finding mutations
-  - `server_semantic.py` — deterministic gadget indexing and lexical retrieval integration
-  - `server_client_state.py` — per-connection state and the session ownership guard
-  - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
-  - `server_wiki.py` — wiki tool integration
+  - `semantic.py` — deterministic gadget indexing and lexical retrieval integration
+  - `client_state.py` — per-connection state and the session ownership guard
+  - `workflow.py` / `workflow_batch.py` — workflow orchestration
+  - `wiki.py` — wiki tool integration
   - `tool_registry.py` — canonical action lists and argument schemas
-  - `session_skills.py` / `session_skills_bootstrap.py` — session-level skills and bootstrap mixin
+  - `session_skills.py` / `session_skills_bootstrap.py` / `session_skills_bootstrap_monitoring.py` — session-level skills and bootstrap mixin
+  - `session.py` — `Session`, `SessionManager`, and `BookmarkManager` data classes
+  - `args.py` — argument coercion and validation helpers for tool dispatch
+  - `rpc_args.py` — RPC request-argument preparation
+  - `postprocess.py` — post-dispatch response post-processing
+  - `rate_limit.py` — request rate limiting and exemptions
+  - `audit.py` — audit event recording
+  - `multi_session.py` — cross-session state and aggregation
+  - `blackboard_legacy.py` — legacy blackboard mode and workspace-layout adoption
+  - `blackboard_orchestration.py` — blackboard lane, xref, and relation suggestions
+  - `blackboard_shapes.py` — canonical blackboard response shapes
+  - `blackboard_idb.py` / `blackboard_phase.py` / `blackboard_trace.py` — blackboard
+    IDB binding, phase gating, and trace capture
+  - `__main__.py` — module entry point
 
 - `src/ida_pro_mcp/host/analysis/`
   - `context_density.py` — ContextDensityOptimizer
@@ -120,8 +133,8 @@ they do not instantiate the host provider registry or send Jev/custom requests.
 ## Complexity Hotspots
 
 - `src/ida_pro_mcp/ida_mcp/tools/code_helpers.py` — shared code-analysis helpers
-- `src/ida_pro_mcp/host/server/server_workflow.py` — workflow orchestration
-- `src/ida_pro_mcp/host/server/server_runtime.py` — idat process lifecycle
+- `src/ida_pro_mcp/host/server/workflow.py` — workflow orchestration
+- `src/ida_pro_mcp/host/server/runtime.py` — idat process lifecycle
 - `src/ida_pro_mcp/ida_mcp/tools/code.py` — decompile, smart_decompile, ctree integration
 
 ## Product surface policy

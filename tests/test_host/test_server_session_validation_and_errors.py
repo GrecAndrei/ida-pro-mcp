@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ida_pro_mcp.host.server.server_session import (
+from ida_pro_mcp.host.server.session_dispatch import (
     ServerSessionMixin,
     _sess_coerce_none,
     _sess_coerce_note,
@@ -215,7 +215,7 @@ def test_session_action_create_branches(tmp_path) -> None:
     server._is_large_binary = MagicMock(return_value=True)
     server._session_action_create_background = MagicMock(return_value={"background": True})
 
-    with patch("ida_pro_mcp.host.server.server_session.background_open_enabled", return_value=True):
+    with patch("ida_pro_mcp.host.server.session_dispatch.background_open_enabled", return_value=True):
         res = server._session_action_create({"binary_path": "/path/to/bin"})
         assert res == {"background": True}
 
@@ -236,7 +236,7 @@ def test_session_action_create_branches(tmp_path) -> None:
     server._analysis_is_complete = MagicMock(return_value=True)
     server._safe_mode_active = MagicMock(return_value=False)
 
-    with patch("ida_pro_mcp.host.server.server_session.background_open_enabled", return_value=False):
+    with patch("ida_pro_mcp.host.server.session_dispatch.background_open_enabled", return_value=False):
         res = server._session_action_create({"binary_path": "/path/to/bin", "processor": "arm"})
         assert "Created a fresh session because architecture/loader options were provided" in res.get("note", "")
 

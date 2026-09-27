@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_runtime import (
+from ida_pro_mcp.host.server.runtime import (
     ServerRuntimeMixin,
     _lease_pid,
     _process_start_token,
@@ -129,7 +129,7 @@ def test_runtime_lease_claim_file_not_found_and_reclaim(tmp_path) -> None:
         assert res == str(owner_file)
 
     # Line 310: both attempts fail to claim lease
-    with patch("os.link", side_effect=FileExistsError), patch("ida_pro_mcp.host.server.server_runtime._lease_pid", return_value=0):
+    with patch("os.link", side_effect=FileExistsError), patch("ida_pro_mcp.host.server.runtime._lease_pid", return_value=0):
         assert server._claim_runtime_ownership("A1B2C3D4") is None
 
     # Line 321: _release_runtime_ownership when owner data is not a dict
@@ -544,8 +544,8 @@ def test_start_server_inner_apply_options_exception_and_error(tmp_path) -> None:
     with (
         patch("subprocess.Popen", side_effect=mock_popen),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._resolve_startup_timeout", return_value=0.01),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._resolve_startup_timeout", return_value=0.01),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
         patch("time.time", side_effect=[0, 0, 0, 0, 100, 100, 100, 100]),
     ):
         res = server._start_server_inner(session)
@@ -560,7 +560,7 @@ def test_start_server_inner_apply_options_exception_and_error(tmp_path) -> None:
     with (
         patch("subprocess.Popen", side_effect=mock_popen),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
     ):
         res = server._start_server_inner(session)
         assert res.get("error") is True
@@ -575,7 +575,7 @@ def test_start_server_inner_apply_options_exception_and_error(tmp_path) -> None:
     with (
         patch("subprocess.Popen", return_value=mock_dead_proc),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
     ):
         res_rec = server._start_server_inner(session)
         assert res_rec.get("recovered") is True
@@ -587,7 +587,7 @@ def test_start_server_inner_apply_options_exception_and_error(tmp_path) -> None:
     with (
         patch("subprocess.Popen", return_value=mock_dead_proc),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
     ):
         res_crash = server._start_server_inner(session)
         assert "library_init" in res_crash.get("details", {})
@@ -645,7 +645,7 @@ def test_launch_and_wait_idalib_missing_and_branches(tmp_path) -> None:
         patch("subprocess.Popen", side_effect=mock_popen),
         patch("os.path.isfile", side_effect=mock_isfile),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
     ):
         res_abort = server._launch_and_wait(session, 1234)
         assert res_abort.get("code") == MCPError.IDA_BUSY
@@ -657,9 +657,9 @@ def test_launch_and_wait_idalib_missing_and_branches(tmp_path) -> None:
     with (
         patch("subprocess.Popen", return_value=mock_proc),
         patch("time.sleep", return_value=None),
-        patch("ida_pro_mcp.host.server.server_runtime._resolve_startup_timeout", return_value=0.01),
+        patch("ida_pro_mcp.host.server.runtime._resolve_startup_timeout", return_value=0.01),
         patch("time.time", side_effect=[0, 100, 100, 100]),
-        patch("ida_pro_mcp.host.server.server_runtime._kill_process_tree"),
+        patch("ida_pro_mcp.host.server.runtime._kill_process_tree"),
     ):
         res_to = server._launch_and_wait(session, 1234)
         assert res_to.get("code") == MCPError.IDA_TIMEOUT

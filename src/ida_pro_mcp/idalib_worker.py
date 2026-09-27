@@ -1,6 +1,6 @@
 """idalib runtime worker — runs the MCP IDA bridge inside IDA's idalib.
 
-Spawned by the host (``host/server/server_runtime.py``) instead of
+Spawned by the host (``host/server/runtime.py``) instead of
 ``idat -A -Sserver_script.py`` when ``IDA_MCP_RUNTIME=idalib``.  This
 process initializes the IDA library, opens the target database, then runs
 ``server_script.py``'s ``__main__`` so the existing RPC listener, startup

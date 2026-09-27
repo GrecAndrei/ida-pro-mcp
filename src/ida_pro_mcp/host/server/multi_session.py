@@ -21,7 +21,7 @@ from typing import Any
 
 from ..config import log_rpc
 from ..errors import MCPError, make_error
-from .server_runtime_leases import _runtime_lease_io_lock
+from .runtime_leases import _runtime_lease_io_lock
 
 
 class SessionGroup:

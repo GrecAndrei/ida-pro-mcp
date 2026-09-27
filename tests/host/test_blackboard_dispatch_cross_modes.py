@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_blackboard as module
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin, _coerce_str_list
+from ida_pro_mcp.host.server import blackboard as module
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin, _coerce_str_list
 from tests.host.test_blackboard_modes_matrix import _server
 
 

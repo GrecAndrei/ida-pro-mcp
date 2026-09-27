@@ -21,8 +21,8 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin  # noqa: E402
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin  # noqa: E402
+from ida_pro_mcp.host.server.response import ServerResponseMixin  # noqa: E402
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin  # noqa: E402
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore  # noqa: E402
 
 

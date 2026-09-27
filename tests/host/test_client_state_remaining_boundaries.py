@@ -6,8 +6,8 @@ import json
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_client_state as state_mod
-from ida_pro_mcp.host.server.server_client_state import ServerClientStateMixin
+from ida_pro_mcp.host.server import client_state as state_mod
+from ida_pro_mcp.host.server.client_state import ServerClientStateMixin
 
 
 class _Host(ServerClientStateMixin):

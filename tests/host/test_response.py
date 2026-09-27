@@ -37,8 +37,8 @@ import pytest
 from ida_pro_mcp.host.errors import MCPError, is_error_result, make_error
 from ida_pro_mcp.host.response_signals import build_session_resume
 from ida_pro_mcp.host.server.postprocess import apply_post_processing
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.response import ServerResponseMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 from ida_pro_mcp.host.server.session import Session
 from ida_pro_mcp.host.stores.truncation import peek_truncated, truncate_response
 
@@ -245,7 +245,7 @@ class TestTruncationConsumedOnce:
         again. The surviving _continue token must still reference the FULL raw
         result (3000 chars), proving a single truncation."""
         raw = {"ok": True, "pseudocode": "x" * 3000}
-        # call_tool (server_dispatch.py) truncates the raw RPC result at
+        # call_tool (dispatch.py) truncates the raw RPC result at
         # default_truncate_tokens=2000 and leaves _pending_truncation set.
         host._pending_truncation = {"max_tokens": None}
         truncated = truncate_response(raw, max_tokens=2000)

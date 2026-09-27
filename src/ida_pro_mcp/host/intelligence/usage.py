@@ -321,7 +321,7 @@ class UsageIntelligence:
     def is_running(self) -> bool:
         """True while the background drift loop thread is alive.
 
-        server_dispatch gates the STUCK_LOOP blocker on this so a stopped /
+        dispatch gates the STUCK_LOOP blocker on this so a stopped /
         never-started observer never raises AttributeError mid-dispatch.
         """
         return bool(self._thread is not None and self._thread.is_alive())

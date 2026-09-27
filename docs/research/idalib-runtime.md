@@ -18,7 +18,7 @@ the idat legs), and the runtime matrix runs all four legs
   loop run unmodified.  On the host's shutdown RPC the `__main__` block
   returns and the worker performs `close_database(save=True)` (flush on
   exit).
-- Host seam (`host/server/server_runtime.py`): `IDA_MCP_RUNTIME=idalib`
+- Host seam (`host/server/runtime.py`): `IDA_MCP_RUNTIME=idalib`
   swaps the idat spawn for `python -m ida_pro_mcp.idalib_worker` with the
   same `IDA_MCP_*` env, port handoff, ping protocol, leases and teardown —
   the host treats the worker exactly like an idat runtime.  Preload load
@@ -43,7 +43,7 @@ the idat legs), and the runtime matrix runs all four legs
 ## The question
 
 Today the server spawns one `idat` process per session
-(`host/server/server_runtime.py`, `sync.py` executes scripts via
+(`host/server/runtime.py`, `sync.py` executes scripts via
 `IDAPython_ExecScript` over an RPC socket). IDA 9.4's idalib grew
 `execute_sync()` + async event processing, auto-activation at install,
 bundling with IDA Home, database flush on exit, and revived
@@ -88,7 +88,7 @@ Phase 1 — runtime abstraction, not a rewrite:
 
 1. Introduce `RuntimeBackend` with two implementations:
    `SpawnIdatBackend` (today's model, stays default) and
-   `IdalibBackend` (new). `server_runtime.py` already centralizes
+   `IdalibBackend` (new). `runtime.py` already centralizes
    spawn/exec/reap; the abstraction is a thin seam over
    `start_session` / `exec_script` / `read_mem` / `kill`.
 2. `IdalibBackend` runs a dedicated worker process per IDA version

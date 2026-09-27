@@ -29,7 +29,7 @@ from ..config import (
 )
 from ..errors import is_error_result
 from ..stores.truncation import truncate_response
-from .server_response_compact import ServerResponseCompactMixin
+from .response_compact import ServerResponseCompactMixin
 
 
 class ServerResponseMixin(ServerResponseCompactMixin):
@@ -849,7 +849,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         Dispatch resolves ``idb=`` / ``session_id`` references to a concrete
         session without mutating ``self.current_session``
-        (``server_dispatch.call_tool`` -> ``_resolve_session_from_idb_ref``).
+        (``dispatch.call_tool`` -> ``_resolve_session_from_idb_ref``).
         Response enrichment must follow the same resolution so an
         ``idb=``-targeted call on a shared connection enriches, recalls, and
         truncates against the session that actually ran — not the shared
@@ -875,7 +875,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _blackboard_store_for(self, session) -> Any | None:
         """A BlackboardStore scoped to *session*, not just current_session.
 
-        ``_get_blackboard_store`` (server_blackboard.py) keys off the shared
+        ``_get_blackboard_store`` (blackboard.py) keys off the shared
         active session; when a call targeted a different session via ``idb=``
         the enrichment must read/write that session's workspace, or findings
         leak across binaries (B's code digests land in A's store and A's

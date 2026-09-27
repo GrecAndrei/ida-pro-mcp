@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 
 class _Session:

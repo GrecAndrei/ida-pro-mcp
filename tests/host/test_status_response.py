@@ -24,11 +24,11 @@ import threading
 
 import pytest
 
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
-from ida_pro_mcp.host.server.server_response_compact import (
+from ida_pro_mcp.host.server.response import ServerResponseMixin
+from ida_pro_mcp.host.server.response_compact import (
     ServerResponseCompactMixin,
 )
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 from ida_pro_mcp.host.server.session import Session
 
 _COMPACT_OPTS = {

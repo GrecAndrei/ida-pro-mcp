@@ -1209,7 +1209,7 @@ def gadgets(
             return _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard)
 
         if action == "semantic_find":
-            # Host-intercepted action (server_dispatch routes it to the host's
+            # Host-intercepted action (dispatch routes it to the host's
             # per-session semantic index before this RPC is reached). The value is
             # admitted by the action Literal for registry contract consistency, but
             # the IDA runtime has no standalone implementation.

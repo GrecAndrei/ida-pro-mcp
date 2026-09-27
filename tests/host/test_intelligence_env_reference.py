@@ -27,7 +27,7 @@ WIKI_CLIENT_CONFIG = REPO_ROOT / "docs" / "wiki" / "client-configuration.md"
 # Variables read outside the providers package (budgets, switch, config path).
 _SEARCH_ROOTS = (
     SRC_ROOT / "host" / "intelligence",
-    SRC_ROOT / "host" / "server" / "server_runtime.py",
+    SRC_ROOT / "host" / "server" / "runtime.py",
     SRC_ROOT / "installer",
 )
 

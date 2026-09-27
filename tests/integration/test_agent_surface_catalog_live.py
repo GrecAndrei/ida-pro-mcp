@@ -41,7 +41,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
-from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket  # noqa: E402
+from ida_pro_mcp.host.server.client_state import mint_agent_ticket  # noqa: E402
 from tests.integration.test_agent_surface_live import (  # noqa: E402
     DEFAULT_LIVE_PYTEST_TIMEOUT,
     LiveMCPClient,

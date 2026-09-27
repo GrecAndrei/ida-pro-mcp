@@ -12,8 +12,8 @@ import types
 
 import pytest
 
-from ida_pro_mcp.host.server import server_runtime_leases as leases
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime_leases as leases
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 
 class _Runtime(ServerRuntimeLeasesMixin):

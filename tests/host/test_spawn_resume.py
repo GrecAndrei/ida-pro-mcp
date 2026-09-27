@@ -1,6 +1,6 @@
 """h02 runtime-spawn / resume regression tests.
 
-Pins the s06-h02 work-order behavior in server_runtime.py / server_session.py:
+Pins the s06-h02 work-order behavior in runtime.py / session_dispatch.py:
 
 - close-in-progress flag (``_session_teardown``) cleared unconditionally
 - ``_retire_dead_runtime`` closes log fds + drops stale port/token WITHOUT
@@ -31,9 +31,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
-from ida_pro_mcp.host.server.server_session import ServerSessionMixin
+from ida_pro_mcp.host.server import runtime as server_runtime_mod
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server.session_dispatch import ServerSessionMixin
 
 SID = "AB12CDEF"
 FAKE_PID = 2147483647  # above pid_max: os.kill/killpg are harmless no-ops

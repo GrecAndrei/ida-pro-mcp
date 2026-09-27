@@ -1,6 +1,6 @@
 """Regression tests for runtime lease heartbeat.
 
-Covers the runtime-lease fixes in server_runtime_leases.py:
+Covers the runtime-lease fixes in runtime_leases.py:
 - heartbeat liveness rewrite / dead-process lease removal
 - exception guard keeping the daemon heartbeat thread alive
 - pid-guarded heartbeat lease removal (no TOCTOU clobber of a fresh lease)
@@ -16,8 +16,8 @@ import signal
 import threading
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server import server_runtime_leases as srl
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime_leases as srl
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 TMP_SID = "A1B2C3D4"
 

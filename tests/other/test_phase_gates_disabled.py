@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
+from ida_pro_mcp.host.server.response import ServerResponseMixin
 
 
 class _Server(ServerResponseMixin):

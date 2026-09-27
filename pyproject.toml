@@ -192,23 +192,20 @@ max-locals = 25
 # Long-lived file handles (subprocess pipe logs, audit trails) skip the
 # context-manager rule.
 "src/ida_pro_mcp/host/config.py" = ["SIM115"]
-# core.py and vuln_db.py contain long anchor-pattern / pattern-database
-# string literals that are tabular data, not source code.
+# core.py contains long anchor-pattern / pattern-database string
+# literals that are tabular data, not source code.
 "src/ida_pro_mcp/host/intelligence/core.py" = ["E501"]
-"src/ida_pro_mcp/host/stores/vuln_db.py" = ["E501"]
 # tool_registry.py, server_blackboard.py: tabular action/data arrays.
 "src/ida_pro_mcp/host/server/tool_registry.py" = ["E501"]
-"src/ida_pro_mcp/host/server/server_blackboard.py" = ["E501"]
+"src/ida_pro_mcp/host/server/blackboard.py" = ["E501"]
 # server.py IDAMCPServer definition now wrapped over 13 lines but the
 # tool_registry.py long literals get a per-file exception instead.
 "src/ida_pro_mcp/host/server/server.py" = ["E501"]
-"src/ida_pro_mcp/host/server/server_response.py" = ["E501"]
+"src/ida_pro_mcp/host/server/response.py" = ["E501"]
 "src/ida_pro_mcp/host/stores/truncation.py" = ["E501"]
 "src/ida_pro_mcp/ida_mcp/mcp_http.py" = ["E501"]
 "src/ida_pro_mcp/host/server/audit.py" = ["SIM115"]
-"src/ida_pro_mcp/host/server/server_runtime.py" = ["SIM115"]
-"src/ida_pro_mcp/ida_mcp/tools/debug.py" = ["SIM115"]
-"src/ida_pro_mcp/ida_mcp/tools/patterns.py" = ["SIM115"]
+"src/ida_pro_mcp/host/server/runtime.py" = ["SIM115"]
 "src/ida_pro_mcp/installer/runtime.py" = ["SIM115"]
 ".opencode/**" = ["E501", "F401", "E741", "SIM103", "B904", "E402"]
 "install.py" = ["E402", "E701"]

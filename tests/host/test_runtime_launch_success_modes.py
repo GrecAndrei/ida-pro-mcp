@@ -53,7 +53,7 @@ def test_start_server_inner_registers_fresh_runtime(monkeypatch, tmp_path):
         return _Process(captured["env"]["IDA_MCP_PORT_FILE"])
 
     monkeypatch.setattr(host, "_build_ida_command", build_command)
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_runtime.subprocess.Popen", start_process)
+    monkeypatch.setattr("ida_pro_mcp.host.server.runtime.subprocess.Popen", start_process)
     monkeypatch.setattr(host, "_send_rpc_raw", lambda request, port, **_kwargs: {"pong": True, "port": port})
 
     result = host._start_server_inner(session)
@@ -83,7 +83,7 @@ def test_launch_and_wait_registers_existing_and_sanitized_runtime(monkeypatch, t
         return _Process(captured["env"]["IDA_MCP_PORT_FILE"])
 
     monkeypatch.setattr(host, "_build_ida_command", build_command)
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_runtime.subprocess.Popen", start_process)
+    monkeypatch.setattr("ida_pro_mcp.host.server.runtime.subprocess.Popen", start_process)
     monkeypatch.setattr(host, "_send_rpc_raw", lambda request, port, **_kwargs: {"pong": True, "port": 45679})
     result = host._launch_and_wait(session, 0, sanitize_env=True)
 
@@ -193,7 +193,7 @@ def test_recovery_relaunches_packed_session_and_removes_stale_sidecars(tmp_path,
         "_terminate_ida_processes_for_path",
         lambda path: killed.append(path) or [123],
     )
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_runtime.time.sleep", lambda *_args: None)
+    monkeypatch.setattr("ida_pro_mcp.host.server.runtime.time.sleep", lambda *_args: None)
     persisted = []
     monkeypatch.setattr(
         host,
@@ -240,7 +240,7 @@ def test_recovery_sanitized_retry_failure_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr(host, "_nuclear_reset", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(host, "_terminate_ida_processes_for_path", lambda _path: [])
     monkeypatch.setattr(host, "_persist_session_fields", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_runtime.time.sleep", lambda *_args: None)
+    monkeypatch.setattr("ida_pro_mcp.host.server.runtime.time.sleep", lambda *_args: None)
     attempts = []
 
     def failed_launch(_session, _port, sanitize_env=False):

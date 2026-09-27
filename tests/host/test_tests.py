@@ -32,8 +32,8 @@ from types import SimpleNamespace
 import pytest
 
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.dispatch import _long_running_sock_timeout
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_dispatch import _long_running_sock_timeout
 
 
 class _FakeIdaProcess:
@@ -112,7 +112,7 @@ def _open_session(server: IDAMCPServer, binary_path: str, request_id: int = 1) -
 
 
 def test_owned_close_tears_down_runtime_lease_and_session(tmp_path, monkeypatch):
-    import ida_pro_mcp.host.server.server_runtime as server_runtime
+    import ida_pro_mcp.host.server.runtime as runtime
 
     server = _make_server(tmp_path, monkeypatch)
     binary = tmp_path / "target.bin"
@@ -122,7 +122,7 @@ def test_owned_close_tears_down_runtime_lease_and_session(tmp_path, monkeypatch)
     # The real _kill_process_tree accepts grace_seconds (SIGKILL grace budget);
     # the mock must tolerate the kwarg even though list.append does not.
     monkeypatch.setattr(
-        server_runtime, "_kill_process_tree", lambda proc, **kw: killed.append(proc)
+        runtime, "_kill_process_tree", lambda proc, **kw: killed.append(proc)
     )
 
     token = server._begin_client_connection()

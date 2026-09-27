@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ida_pro_mcp.host.errors import MCPError, make_error
-from ida_pro_mcp.host.server import server_dispatch as dispatch_mod
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server import dispatch as dispatch_mod
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 from tests.host.test_dispatch_pipeline_modes import _DispatchHost
 from tests.host.test_dispatch_policy_gates import _Harness
 

@@ -13,7 +13,7 @@ Original 515-line implementation injected `_nudge` into every tool response with
 All removed. Kept:
   - Silent action reroutes (the (search, bytes) -> (search, string) map and the
     memory.read+disasm rule) — real safety against common LLM typos.
-  - record_tool_call (used by server_runtime to feed UsageIntelligence).
+  - record_tool_call (used by runtime to feed UsageIntelligence).
   - Stuck detection — only the LOOP signal triggers a hard block; other signals
     are ignored. Redirect is a soft `suggestion`, not a `force_suggestion`.
 """
@@ -78,7 +78,7 @@ def record_tool_call(idb: str, tool: str, action: str,
                      query: str | None = None) -> None:
     """Record a tool call. Kept as a no-op for API stability.
 
-    server_runtime calls this only when no UsageIntelligence observer is
+    runtime calls this only when no UsageIntelligence observer is
     available; when present, UsageIntelligence.observe() is used instead and
     this fallback records nothing. The previous in-module `_recent_tools`
     ring buffer was never read by any consumer, so it was removed.

@@ -2,8 +2,8 @@ import json
 import threading
 from unittest import mock
 
-from ida_pro_mcp.host.server import server_runtime
-from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
+from ida_pro_mcp.host.server import runtime as runtime_mod
+from ida_pro_mcp.host.server.runtime_leases import ServerRuntimeLeasesMixin
 
 
 def test_kill_process_tree_terminates_group_after_direct_launcher_exits(monkeypatch):
@@ -28,25 +28,25 @@ def test_kill_process_tree_terminates_group_after_direct_launcher_exits(monkeypa
             assert timeout > 0
             return 0
 
-    monkeypatch.setattr(server_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(runtime_mod.sys, "platform", "linux")
     calls = []
 
     def _killpg(pgid, sig):
         calls.append(sig)
-        if sig == server_runtime.signal.SIGTERM:
+        if sig == runtime_mod.signal.SIGTERM:
             return None
         # Liveness probe on the (draining) group: already gone, so the
         # launcher's descendants exited and no SIGKILL escalation is needed.
         raise ProcessLookupError()
 
-    monkeypatch.setattr(server_runtime.os, "killpg", _killpg)
-    server_runtime._kill_process_tree(ExitedLauncher())
+    monkeypatch.setattr(runtime_mod.os, "killpg", _killpg)
+    runtime_mod._kill_process_tree(ExitedLauncher())
 
     assert calls == [
-        server_runtime.signal.SIGTERM,
+        runtime_mod.signal.SIGTERM,
         0,  # process-group liveness probe
     ]
-    assert server_runtime.signal.SIGKILL not in calls
+    assert runtime_mod.signal.SIGKILL not in calls
 
 
 def test_kill_process_tree_escalates_to_sigkill_when_group_never_drains(monkeypatch):
@@ -64,20 +64,20 @@ def test_kill_process_tree_escalates_to_sigkill_when_group_never_drains(monkeypa
             assert timeout > 0
             return 0
 
-    monkeypatch.setattr(server_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(runtime_mod.sys, "platform", "linux")
     calls = []
     # The process group never drains (the liveness probe keeps succeeding), so
     # after the grace budget the function must escalate to SIGKILL.
     monkeypatch.setattr(
-        server_runtime.os,
+        runtime_mod.os,
         "killpg",
         lambda pgid, sig: calls.append(sig) or None,
     )
-    server_runtime._kill_process_tree(StubbornLauncher(), grace_seconds=0.2)
+    runtime_mod._kill_process_tree(StubbornLauncher(), grace_seconds=0.2)
 
-    assert calls[0] == server_runtime.signal.SIGTERM
+    assert calls[0] == runtime_mod.signal.SIGTERM
     assert 0 in calls  # liveness probes ran while waiting for the drain
-    assert calls[-1] == server_runtime.signal.SIGKILL
+    assert calls[-1] == runtime_mod.signal.SIGKILL
 
 
 def test_termination_signal_runs_cleanup_before_forced_exit():
@@ -125,7 +125,7 @@ def test_stale_lease_never_terminates_an_ida_runtime_owned_by_live_host(tmp_path
     runtime._kill_stale_pid = mock.Mock(return_value=True)
 
     # A successful signal-0 probe represents a different live MCP host.
-    with mock.patch.object(server_runtime.os, "kill", return_value=None):
+    with mock.patch.object(runtime_mod.os, "kill", return_value=None):
         runtime._cleanup_stale_runtime_leases()
 
     runtime._is_expected_ida_process.assert_not_called()

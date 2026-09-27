@@ -22,7 +22,7 @@ Covers the q07 reliability contract end to end:
 - ``zeromcp/mcp.py``: a non-serializable tool result becomes an isError
   envelope instead of taking the server down.
 
-- ``host/server/server_semantic.py``: a rebuild persists cached row vectors
+- ``host/server/semantic.py``: a rebuild persists cached row vectors
   into the vector BLOB column (never recomputing them), and a malformed
   gadget payload surfaces as a per-action error instead of silent zero rows.
 
@@ -351,11 +351,11 @@ def test_zeromcp_non_serializable_tool_result_is_iserror():
 
 
 # ===========================================================================
-# host/server_semantic: vector persistence + per-action errors
+# host/semantic: vector persistence + per-action errors
 # ===========================================================================
 
 def _import_semantic():
-    from ida_pro_mcp.host.server.server_semantic import (
+    from ida_pro_mcp.host.server.semantic import (
         _GADGET_VEC_CACHE,
         ServerSemanticMixin,
         _pack_vector,

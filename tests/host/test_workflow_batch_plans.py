@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import ida_pro_mcp.host.batch_manager as bm_module
 from ida_pro_mcp.host.batch_manager import BatchManager
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.batch import BackgroundMixin
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_batch import BackgroundMixin
 
 # ---------------------------------------------------------------------------
 # execute_plan
@@ -258,7 +258,7 @@ def test_batch_persistence_is_per_instance(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Background (server_batch) fixes
+# Background (batch) fixes
 # ---------------------------------------------------------------------------
 
 class _FakeSessionManager:

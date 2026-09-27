@@ -1,6 +1,6 @@
 """Regression tests for p03_runtime: session recovery keeps exclusive ownership.
 
-Covers the fix in server_runtime.py where a successful recovery dropped the
+Covers the fix in runtime.py where a successful recovery dropped the
 runtime-ownership lease (a second MCP client could then claim the same IDB
 under the recovered runtime) and never started the analysis watchdog /
 semantic-index reuse background services for the recovered session.
@@ -11,8 +11,8 @@ import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server import runtime as server_runtime_mod
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 SID = "AB12CDEF"
 

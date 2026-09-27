@@ -64,7 +64,7 @@ for _key in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
 # Placeholders substituted at runtime:
 #   __ADDR__  first function start_ea   __ADDR2__ second   __IDB__ session idb path
 # Curated to be read-only / light / fast. _risk_ack=true bypasses the policy
-# REQUIRE_ACK gate (server_dispatch.py:952) so we exercise the real in-IDA path,
+# REQUIRE_ACK gate (dispatch.py:952) so we exercise the real in-IDA path,
 # not the ack-reject path. Chosen actions are non-destructive, so acking is safe.
 #
 # NOTE: the loop below only iterates the tools that tools/list advertises

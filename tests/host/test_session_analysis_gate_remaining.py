@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError, make_error
-from ida_pro_mcp.host.server import server_session as session_mod
+from ida_pro_mcp.host.server import session_dispatch as session_mod
 from tests.host.test_session_action_modes_full import _host
 
 

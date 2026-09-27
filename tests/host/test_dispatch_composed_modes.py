@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+from ida_pro_mcp.host.server.args import ServerArgsMixin
+from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
 
 class _InnerHost(ServerArgsMixin, ServerDispatchMixin):

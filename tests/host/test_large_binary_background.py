@@ -239,7 +239,7 @@ def test_background_reuse_across_client_restart(tmp_path, monkeypatch):
 
 
 def test_background_load_error_surfaces_in_status(tmp_path, server, monkeypatch):
-    from ida_pro_mcp.host.server import server_session
+    from ida_pro_mcp.host.server import session_dispatch
 
     binary = tmp_path / "err.bin"
     binary.write_bytes(b"\x00" * 1024)
@@ -250,18 +250,18 @@ def test_background_load_error_surfaces_in_status(tmp_path, server, monkeypatch)
 
     server._ensure_runtime_and_idb = _ensure
 
-    real_thread = server_session.threading.Thread
+    real_thread = session_dispatch.threading.Thread
 
     def _thread_factory(*args, **kwargs):
         if str(kwargs.get("name", "")).startswith("ida-bg-"):
             return SyncThread(*args, **kwargs)
         return real_thread(*args, **kwargs)
 
-    # Confine the routing factory to server_session: patching
-    # server_session.threading.Thread would swap the GLOBAL Thread for every
+    # Confine the routing factory to session_dispatch: patching
+    # session_dispatch.threading.Thread would swap the GLOBAL Thread for every
     # other consumer mid-test.
     monkeypatch.setattr(
-        server_session, "threading", consumer_namespace(Thread=_thread_factory)
+        session_dispatch, "threading", consumer_namespace(Thread=_thread_factory)
     )
 
     result = _open(server, "ida_open_background", {"binary_path": str(binary)})
@@ -279,7 +279,7 @@ def test_background_load_error_surfaces_in_status(tmp_path, server, monkeypatch)
 def test_large_binary_threshold_respects_env(tmp_path, monkeypatch, server):
     import importlib
 
-    from ida_pro_mcp.host.server import server_session
+    from ida_pro_mcp.host.server import session_dispatch
 
     # Reload config with the override set so the threshold comes from the
     # real env parse path in config.py, not a copy of the formula here.
@@ -288,7 +288,7 @@ def test_large_binary_threshold_respects_env(tmp_path, monkeypatch, server):
 
     importlib.reload(config)
     monkeypatch.setattr(
-        server_session,
+        session_dispatch,
         "LARGE_BINARY_THRESHOLD_BYTES",
         config.LARGE_BINARY_THRESHOLD_BYTES,
     )

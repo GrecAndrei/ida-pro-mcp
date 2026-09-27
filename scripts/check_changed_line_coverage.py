@@ -117,8 +117,18 @@ def evaluate_changed_line_coverage(
 
 
 def _git_diff(base: str) -> str:
+    """Return the added lines between *base* and the working tree.
+
+    ``-M`` asks git to detect renames, so moving a file is not reported as
+    every line being added. Without it, reorganizing a package makes the gate
+    fail on pre-existing uncovered code that the change did not touch, which
+    trains contributors to ignore the gate.
+
+    The comparison target is the working tree rather than ``HEAD`` so that
+    uncommitted changes are measured, not just what has been committed.
+    """
     result = subprocess.run(
-        ["git", "diff", "--unified=0", "--no-color", f"{base}..HEAD", "--"],
+        ["git", "diff", "--unified=0", "--no-color", "--find-renames", base, "--"],
         check=False,
         capture_output=True,
         text=True,

@@ -13,9 +13,9 @@ Analyst memory lives in the workspace findings table (written through the
 store); machinery — crawler state, trace tasks, evidence-gravity snapshots,
 and the per-session phase/policy core — lives in ``bb_machinery`` /
 ``bb_tasks`` owned by :mod:`blackboard_orchestration`. The phase/policy
-machines are in :mod:`server_blackboard_phase`, trace tasks in
-:mod:`server_blackboard_trace`, and the IDB-publishing surface in
-:mod:`server_blackboard_idb`.
+machines are in :mod:`blackboard_phase`, trace tasks in
+:mod:`blackboard_trace`, and the IDB-publishing surface in
+:mod:`blackboard_idb`.
 
 Canonical keep=true response shapes (write/search/frontier/next_target/
 crawler_status/list/read/coverage/export) are composed from
@@ -37,12 +37,14 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES, is_auto_name
 from ..stores.symbol_db import SymbolDB
+from .blackboard_idb import ServerBlackboardIdbMixin
 from .blackboard_legacy import path_has_symlink
 from .blackboard_orchestration import (
     EVIDENCE_GRAVITY_MAX_ITEMS,
     NS_GRAVITY,
     BlackboardOrchestrator,
 )
+from .blackboard_phase import ServerBlackboardPhaseMixin
 from .blackboard_shapes import (
     STRATEGY_EMPTY_NOTES as _STRATEGY_EMPTY,
     STRATEGY_NOTES as _STRATEGY_NOTES,
@@ -60,9 +62,7 @@ from .blackboard_shapes import (
     snapshot_to_markdown,
     write_response,
 )
-from .server_blackboard_idb import ServerBlackboardIdbMixin
-from .server_blackboard_phase import ServerBlackboardPhaseMixin
-from .server_blackboard_trace import ServerBlackboardTraceMixin
+from .blackboard_trace import ServerBlackboardTraceMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ORCHESTRATION_INIT_LOCK = threading.Lock()
@@ -185,9 +185,9 @@ def _coerce_str_list(value: Any) -> list[str]:
 class ServerBlackboardMixin(
     ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin, ServerBlackboardIdbMixin
 ):
-    # Phase/policy methods are in ServerBlackboardPhaseMixin (server_blackboard_phase.py)
-    # Trace methods are in ServerBlackboardTraceMixin (server_blackboard_trace.py)
-    # IDB-publish methods are in ServerBlackboardIdbMixin (server_blackboard_idb.py)
+    # Phase/policy methods are in ServerBlackboardPhaseMixin (blackboard_phase.py)
+    # Trace methods are in ServerBlackboardTraceMixin (blackboard_trace.py)
+    # IDB-publish methods are in ServerBlackboardIdbMixin (blackboard_idb.py)
 
     def shutdown(self) -> None:
         """Stop blackboard-owned background work before the next MRO stage.
@@ -1014,7 +1014,7 @@ class ServerBlackboardMixin(
             )
         return canonical, None
 
-    # The symlink guard had a copy here and another in server_dispatch on top of
+    # The symlink guard had a copy here and another in dispatch on top of
     # the original in blackboard_legacy, so a traversal fix had to be applied
     # three times and any miss left a hole. Alias the single implementation.
     _bb_path_has_symlink = staticmethod(path_has_symlink)

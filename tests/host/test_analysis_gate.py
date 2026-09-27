@@ -1,6 +1,6 @@
 """Regression tests for analysis gate.
 
-Pins the coherent lifecycle core in server_session.py:
+Pins the coherent lifecycle core in session_dispatch.py:
 
 - Per-session gate persisted through ``session.metadata['analysis_gate']``
   ('pending'/'complete'), idempotent, lock-guarded.
@@ -511,7 +511,7 @@ def test_ensure_runtime_and_idb_propagates_start_server_failure(tmp_path, monkey
 
 
 def test_spawn_runtime_background_records_error_and_skips_deleted(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.server import server_session
+    from ida_pro_mcp.host.server import session_dispatch
 
     server = _make_server(tmp_path, monkeypatch)
     server._ensure_runtime_and_idb = lambda s: {
@@ -520,18 +520,18 @@ def test_spawn_runtime_background_records_error_and_skips_deleted(tmp_path, monk
         "message": "boom",
     }
 
-    real_thread = server_session.threading.Thread
+    real_thread = session_dispatch.threading.Thread
 
     def _thread_factory(*args, **kwargs):
         if str(kwargs.get("name", "")).startswith("ida-bg-"):
             return SyncThread(*args, **kwargs)
         return real_thread(*args, **kwargs)
 
-    # Confine the routing factory to server_session: patching
-    # server_session.threading.Thread would swap the GLOBAL Thread for every
+    # Confine the routing factory to session_dispatch: patching
+    # session_dispatch.threading.Thread would swap the GLOBAL Thread for every
     # other consumer mid-test.
     monkeypatch.setattr(
-        server_session, "threading", consumer_namespace(Thread=_thread_factory)
+        session_dispatch, "threading", consumer_namespace(Thread=_thread_factory)
     )
     try:
         s1 = server.session_mgr.create_session("/tmp/bg1.bin")

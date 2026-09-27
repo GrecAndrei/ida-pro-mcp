@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 from ida_pro_mcp.host.batch_manager import BatchManager
 from ida_pro_mcp.host.errors import MCPError, make_error
-from ida_pro_mcp.host.server import server_batch
-from ida_pro_mcp.host.server.server_batch import BackgroundMixin
+from ida_pro_mcp.host.server import batch
+from ida_pro_mcp.host.server.batch import BackgroundMixin
 
 
 class _Sessions:
@@ -231,8 +231,8 @@ def test_matching_index_reuse_covers_cached_digest_malformed_db_and_stat_race(tm
     race_target = _session(tmp_path, "RACE_TARGET")
     race_source = _session(tmp_path, "RACE_SOURCE")
     _embedding_db(f"{race_source.idb_path}.embeddings.db", rows=[("0x3", "full")])
-    real_stat = server_batch.os.stat
-    real_isfile = server_batch.os.path.isfile
+    real_stat = batch.os.stat
+    real_isfile = batch.os.path.isfile
 
     def stat_with_race(path):
         if str(path) == race_source.binary_path:
@@ -244,8 +244,8 @@ def test_matching_index_reuse_covers_cached_digest_malformed_db_and_stat_race(tm
             return True
         return real_isfile(path)
 
-    monkeypatch.setattr(server_batch.os, "stat", stat_with_race)
-    monkeypatch.setattr(server_batch.os.path, "isfile", isfile_during_race)
+    monkeypatch.setattr(batch.os, "stat", stat_with_race)
+    monkeypatch.setattr(batch.os.path, "isfile", isfile_during_race)
     host = _BatchHarness([race_source, race_target])
     assert host._seed_index_from_matching_binary(race_target)["reason"] == "no_compatible_index"
     host._batch_manager.shutdown()
@@ -290,7 +290,7 @@ def test_lazy_index_initializers_converge_when_another_thread_wins_the_race(monk
         def __exit__(self, *_args):
             return False
 
-    monkeypatch.setattr(server_batch, "_LAZY_STATE_LOCK", _InstallLock())
+    monkeypatch.setattr(batch, "_LAZY_STATE_LOCK", _InstallLock())
     # Invoke the actual lazy lock path directly; the unlocked operation is
     # replaced because this test is only about double-checked initialization.
     original = host._seed_index_from_matching_binary_unlocked
@@ -311,7 +311,7 @@ def test_lazy_index_initializers_converge_when_another_thread_wins_the_race(monk
         def __exit__(self, *_args):
             return False
 
-    monkeypatch.setattr(server_batch, "_LAZY_STATE_LOCK", _InstallJobState())
+    monkeypatch.setattr(batch, "_LAZY_STATE_LOCK", _InstallJobState())
     host._semantic_index_jobs_lock = None
     host._semantic_index_tasks = None
     lock, active = host._semantic_index_job_state()
@@ -399,7 +399,7 @@ def test_lazy_batch_manager_and_ownership_iteration_edges(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-    monkeypatch.setattr(server_batch, "_LAZY_STATE_LOCK", _InstallManager())
+    monkeypatch.setattr(batch, "_LAZY_STATE_LOCK", _InstallManager())
     host._batch_mgr = None
     assert host._batch_manager is sentinel
 

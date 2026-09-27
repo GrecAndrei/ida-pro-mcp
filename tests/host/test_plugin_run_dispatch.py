@@ -21,7 +21,7 @@ if SRC not in sys.path:
 
 
 def _build_dispatcher():
-    from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
+    from ida_pro_mcp.host.server.dispatch import ServerDispatchMixin
 
     class FakeDispatcher(ServerDispatchMixin):
         def __init__(self):
@@ -187,7 +187,7 @@ def test_plugin_run_dispatch_payload_text():
     AST level to avoid importing zeromcp."""
     import ast
 
-    dispatch_src = Path(ROOT, "src", "ida_pro_mcp", "host", "server", "server_dispatch.py").read_text()
+    dispatch_src = Path(ROOT, "src", "ida_pro_mcp", "host", "server", "dispatch.py").read_text()
     tree = ast.parse(dispatch_src)
 
     found_handler = False

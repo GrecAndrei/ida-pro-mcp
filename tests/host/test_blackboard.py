@@ -18,7 +18,7 @@ import os
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 
 
 def _make_server(tmp_path) -> ServerBlackboardMixin:

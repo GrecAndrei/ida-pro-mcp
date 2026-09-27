@@ -17,6 +17,13 @@ from ida_pro_mcp.host.policy import (
     normalize_mode,
     strictest,
 )
+from ida_pro_mcp.host.server.args import ServerArgsMixin
+from ida_pro_mcp.host.server.dispatch import (
+    LONG_RUNNING_ACTIONS,
+    SAFE_MODE_BLOCKED_ACTIONS,
+    SAFE_MODE_BLOCKED_TOOLS,
+    ServerDispatchMixin,
+)
 from ida_pro_mcp.host.server.postprocess import (
     PP_KEYS,
     apply_post_processing,
@@ -24,14 +31,7 @@ from ida_pro_mcp.host.server.postprocess import (
     prepare_args_for_postprocess,
 )
 from ida_pro_mcp.host.server.rate_limit import is_rate_limit_exempt
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
-from ida_pro_mcp.host.server.server_dispatch import (
-    LONG_RUNNING_ACTIONS,
-    SAFE_MODE_BLOCKED_ACTIONS,
-    SAFE_MODE_BLOCKED_TOOLS,
-    ServerDispatchMixin,
-)
-from ida_pro_mcp.host.server.server_runtime import RpcQueueTimeout
+from ida_pro_mcp.host.server.runtime import RpcQueueTimeout
 
 
 def test_bounded_int_and_coerce_bool() -> None:
@@ -396,7 +396,7 @@ def test_execute_tool_and_inner_error_and_gate_paths(monkeypatch) -> None:
     # 3. Post-process pipeline exception caught safely (lines 1526-1528)
     host._pending_pp = {"limit": 1}
     host._pending_tool_args = None
-    with patch("ida_pro_mcp.host.server.server_dispatch.apply_post_processing", side_effect=RuntimeError("pp boom")):
+    with patch("ida_pro_mcp.host.server.dispatch.apply_post_processing", side_effect=RuntimeError("pp boom")):
         assert host._execute_tool("data", {"action": "functions"}) is not None
 
     # 4. Guardrail error shapes
@@ -454,7 +454,7 @@ def test_execute_tool_and_inner_error_and_gate_paths(monkeypatch) -> None:
     # 9. Policy evaluation BLOCK and REQUIRE_ACK decisions
     from dataclasses import replace
     base_policy = evaluate_policy("code", "disasm", mode="assist")
-    with patch("ida_pro_mcp.host.server.server_dispatch.evaluate_policy") as mock_eval:
+    with patch("ida_pro_mcp.host.server.dispatch.evaluate_policy") as mock_eval:
         mock_eval.return_value = replace(base_policy, decision=PolicyDecision.BLOCK, reasons=["blocked by rule"])
         block_res = host._execute_tool_inner("code", "code", {"action": "disasm"})
         assert block_res["code"] == MCPError.POLICY_DENIED

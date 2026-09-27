@@ -35,7 +35,7 @@ fallback and no hidden LLM service in the analysis path.
 
 - `src/ida_pro_mcp/host/agent_operations.py` owns the exact public `ida_*`
   catalog: schemas, examples, descriptions, mappings, and generated help.
-- `src/ida_pro_mcp/host/server/server_dispatch.py` owns host routing, policy,
+- `src/ida_pro_mcp/host/server/dispatch.py` owns host routing, policy,
   session checks, RPC handling, and response processing.
 - `src/ida_pro_mcp/host/schemas_data.py` and
   `src/ida_pro_mcp/host/server/tool_registry.py` define the legacy catalog;

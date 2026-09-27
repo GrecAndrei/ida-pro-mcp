@@ -14,7 +14,7 @@ from ..config import _env_float
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.lexical import signature_index_path
 from ..policy import PolicyDecision, ack_from_args, evaluate_policy
-from .server_client_state import ServerClientStateMixin, _ClientRequestState
+from .client_state import ServerClientStateMixin, _ClientRequestState
 
 _BACKGROUND_ACTIONS = {
     "submit": "_bg_submit",

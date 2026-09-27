@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server.server_blackboard_phase import ServerBlackboardPhaseMixin
+from ida_pro_mcp.host.server.blackboard_phase import ServerBlackboardPhaseMixin
 
 
 class _Store:

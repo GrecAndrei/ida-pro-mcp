@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ida_pro_mcp.host.server.server_response import ServerResponseMixin
+from ida_pro_mcp.host.server.response import ServerResponseMixin
 
 
 def _host(**attrs):
@@ -41,7 +41,7 @@ def test_pointer_note_gate_accumulates_threshold_and_suppresses_errors_or_thrott
         _pointer_note_last_shown_at=0.0,
         _pointer_note_interval_seconds=900,
     )
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_response.time.time", lambda: 100.0)
+    monkeypatch.setattr("ida_pro_mcp.host.server.response.time.time", lambda: 100.0)
     assert host._should_include_pointer_note("search", {"query": "0x401000"}, {}) is False
     assert host._pointer_note_pending_signal > 0
     assert host._should_include_pointer_note("calc", {"addr": "0x401000 + 0x20"}, {}) is True

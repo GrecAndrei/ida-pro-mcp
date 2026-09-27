@@ -27,7 +27,7 @@ from ..config import (
     log_rpc,
 )
 from ..errors import MCPError, is_error_result, make_error
-from .server_runtime_leases import (
+from .runtime_leases import (
     ServerRuntimeLeasesMixin,
     _lease_pid,
     _process_start_token,
@@ -1090,7 +1090,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 action = ""
 
             # Auto-nudge tracking. UsageIntelligence.observe is NOT called here:
-            # the dispatch path (server_dispatch._execute_tool) already feeds the
+            # the dispatch path (dispatch._execute_tool) already feeds the
             # rich observation (latency + error) once per tool call, and calling
             # it again here would double-count every call into the drift stats.
             # This method keeps last-activity tracking (above) plus the
@@ -1526,7 +1526,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             """True when a close/delete is in flight for *sid*.
 
             Reads the close-in-progress flag. When the full server is composed,
-            the server_session mixin shadows ``_session_is_closing`` over the
+            the session_dispatch mixin shadows ``_session_is_closing`` over the
             same attribute; the getattr keeps a bare runtime-only mixin host
             (which has no session mixin) working.
             """

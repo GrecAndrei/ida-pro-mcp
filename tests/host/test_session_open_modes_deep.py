@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server import server_session as session_mod
-from ida_pro_mcp.host.server.server_session import ServerSessionMixin
+from ida_pro_mcp.host.server import session_dispatch as session_mod
+from ida_pro_mcp.host.server.session_dispatch import ServerSessionMixin
 
 
 class _Session:

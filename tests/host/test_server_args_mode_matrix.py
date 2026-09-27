@@ -3,8 +3,8 @@
 import time
 
 from ida_pro_mcp.host.errors import MCPError, make_error
-from ida_pro_mcp.host.server import server_args as args_mod
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin
+from ida_pro_mcp.host.server import args as args_mod
+from ida_pro_mcp.host.server.args import ServerArgsMixin
 
 
 class _Harness(ServerArgsMixin):

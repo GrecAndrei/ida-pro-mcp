@@ -1,6 +1,6 @@
 """Regression tests for blackboard dict surface.
 
-The host blackboard handler (``server_blackboard.py``) was rewritten to be
+The host blackboard handler (``blackboard.py``) was rewritten to be
 dict-driven over the new store: every action routes to a ``_bb_action_*``
 method, the governance gate runs once per dispatch, evidence gravity is a
 bounded snapshot fired only on create, ``trace_run`` is non-blocking
@@ -28,13 +28,13 @@ import json
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.blackboard import (
+    _BLACKBOARD_ACTIONS,
+    ServerBlackboardMixin,
+)
 from ida_pro_mcp.host.server.blackboard_orchestration import (
     EVIDENCE_GRAVITY_MAX_ITEMS,
     NS_GRAVITY,
-)
-from ida_pro_mcp.host.server.server_blackboard import (
-    _BLACKBOARD_ACTIONS,
-    ServerBlackboardMixin,
 )
 
 

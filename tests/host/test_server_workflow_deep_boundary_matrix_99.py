@@ -6,9 +6,9 @@ import importlib
 
 import pytest
 
-from ida_pro_mcp.host.server.server_workflow import ServerWorkflowMixin
+from ida_pro_mcp.host.server.workflow import ServerWorkflowMixin
 
-workflow_module = importlib.import_module("ida_pro_mcp.host.server.server_workflow")
+workflow_module = importlib.import_module("ida_pro_mcp.host.server.workflow")
 
 
 class _WorkflowHost(ServerWorkflowMixin):

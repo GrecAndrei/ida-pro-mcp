@@ -1,7 +1,7 @@
 """Regression tests for usage fixes.
 
 Covers:
-  - UsageIntelligence.is_running() exists (server_dispatch gates the
+  - UsageIntelligence.is_running() exists (dispatch gates the
     STUCK_LOOP blocker on it).
   - DriftDetector LOOP detection is per-session, not host-global.
   - _check_all_sessions de-duplicates repeated warning notifications.

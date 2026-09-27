@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ida_pro_mcp.host.server.server_dispatch import _long_running_sock_timeout
+from ida_pro_mcp.host.server.dispatch import _long_running_sock_timeout
 
 
 def test_embedding_indexing_actions_get_the_extended_rpc_timeout(monkeypatch):

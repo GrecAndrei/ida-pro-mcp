@@ -14,11 +14,11 @@ import os
 import threading
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_multi_session import (
+from ida_pro_mcp.host.server.multi_session import (
     ServerMultiSessionMixin,
     SessionGroup,
 )
+from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.session import Session, SessionManager
 
 
@@ -166,7 +166,7 @@ def test_metadata_write_failure_other_error_logs_generic(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_client_state.py: sticky ownership adoption (D3-F10)
+# client_state.py: sticky ownership adoption (D3-F10)
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def test_actively_running_foreign_session_is_never_shared(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# server_client_state.py: mid-spawn teardown guard
+# client_state.py: mid-spawn teardown guard
 # ---------------------------------------------------------------------------
 
 
@@ -293,7 +293,7 @@ def test_end_connection_aborts_own_mid_spawn_runtime(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_multi_session.py: group persistence and rehydration (D3-F9)
+# multi_session.py: group persistence and rehydration (D3-F9)
 # ---------------------------------------------------------------------------
 
 

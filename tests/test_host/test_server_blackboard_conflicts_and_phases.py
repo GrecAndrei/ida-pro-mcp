@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
-from ida_pro_mcp.host.server.server_blackboard_phase import (
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server.blackboard_phase import (
     _FUNCS_WRITE_ACTIONS,
     ServerBlackboardPhaseMixin,
     _strip_durable,

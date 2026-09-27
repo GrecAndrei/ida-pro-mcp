@@ -15,8 +15,8 @@ import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.client_state import mint_agent_ticket
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket
 
 _FUTURE_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of test run time
 

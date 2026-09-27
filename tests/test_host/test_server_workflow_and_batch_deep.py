@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ida_pro_mcp.host.server.server_workflow import (
+from ida_pro_mcp.host.server.workflow import (
     _compose_call_key,
     _tools_cache_lock,
 )

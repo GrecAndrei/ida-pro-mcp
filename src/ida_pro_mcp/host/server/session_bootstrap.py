@@ -8,7 +8,7 @@ NOT advertised: none of them appear in ``TOOL_ACTIONS['session']`` (see
 schemas_data.py), so a client that enumerates valid actions never sees them,
 and they are not registered in tool_registry/schemas. They are reachable only
 through the raw dispatch path in ``ServerSessionMixin._handle_session``
-(server_session.py), which routes any ``action`` starting with ``bootstrap_``
+(session_dispatch.py), which routes any ``action`` starting with ``bootstrap_``
 here. This is an intentional contract for the orchestrator plan matrix
 (``session_skills.py`` ``_bootstrap_plan_matrix``), not a schema oversight —
 do not advertise these actions without an explicit product decision.
@@ -83,7 +83,7 @@ class ServerSessionBootstrapMixin:
     def _bootstrap_mgr_call(self, suffix: str, sid: str, **kwargs: Any) -> dict:
         """Call ``session_mgr.bootstrap_<suffix>`` with a NOT_IMPLEMENTED fallback.
 
-        Mirrors ``_run_session_spec`` (server_session.py): a missing or renamed
+        Mirrors ``_run_session_spec`` (session_dispatch.py): a missing or renamed
         manager method surfaces as a classifiable NOT_IMPLEMENTED envelope
         instead of a raw AttributeError. ``suffix`` is the action name without
         the ``bootstrap_`` prefix.

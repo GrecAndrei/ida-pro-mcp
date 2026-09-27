@@ -98,7 +98,7 @@ The public `ida_sso_activate`, `ida_agent_login`, and `ida_agent_logout`
 operations are the discoverable entry points. The equivalent legacy
 `session(action=sso_activate|agent_login|agent_logout)` calls remain available
 for compatibility. `mint_agent_ticket` is intentionally still a host-side
-Python helper in `host/server/server_client_state.py`; an external MCP client
+Python helper in `host/server/client_state.py`; an external MCP client
 must construct tickets itself (computing the HMAC with the realm secret) or run
 host-side code.
 

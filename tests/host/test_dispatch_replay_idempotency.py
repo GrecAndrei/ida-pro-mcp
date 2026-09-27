@@ -36,8 +36,8 @@ assert str(SRC) in sys.path or sys.path.insert(0, str(SRC)) is None
 importlib.import_module("ida_pro_mcp.host")
 
 from ida_pro_mcp.host.errors import MCPError, is_error_result  # noqa: E402
-from ida_pro_mcp.host.server.server_args import ServerArgsMixin  # noqa: E402
-from ida_pro_mcp.host.server.server_dispatch import (  # noqa: E402
+from ida_pro_mcp.host.server.args import ServerArgsMixin  # noqa: E402
+from ida_pro_mcp.host.server.dispatch import (  # noqa: E402
     LONG_RUNNING_ACTIONS,
     ServerDispatchMixin,
 )
@@ -337,7 +337,7 @@ class TestGadgetsSemanticFindRegistered:
     def test_dispatch_routes_gadgets_semantic_find(self):
         source = (
             Path(__file__).resolve().parents[2]
-            / "src" / "ida_pro_mcp" / "host" / "server" / "server_dispatch.py"
+            / "src" / "ida_pro_mcp" / "host" / "server" / "dispatch.py"
         ).read_text(encoding="utf-8")
         assert 'tool_name == "gadgets"' in source
         assert "_handle_gadgets_semantic_find" in source

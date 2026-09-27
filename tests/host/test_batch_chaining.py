@@ -1,7 +1,7 @@
 """Regression tests for batch chaining.
 
 Covers the pipeline primitive (paper section 4.2) built on the shared batch
-step executor in server_workflow_batch.py:
+step executor in workflow_batch.py:
 
 - a later step's argument binds from a prior step's result via ``step{i}_{key}``
   (top-level field) and ``step{i}.result{path}`` (dotted nested path);
@@ -26,8 +26,8 @@ exercise the find→read→disassemble pipeline on low blob offsets.
 from __future__ import annotations
 
 from ida_pro_mcp.host.errors import MCPError
-from ida_pro_mcp.host.server.server_workflow import ServerWorkflowMixin
-from ida_pro_mcp.host.server.server_workflow_batch import _NON_ARG_ANNOTATION_KEYS
+from ida_pro_mcp.host.server.workflow import ServerWorkflowMixin
+from ida_pro_mcp.host.server.workflow_batch import _NON_ARG_ANNOTATION_KEYS
 
 
 class _FakeBatchHost(ServerWorkflowMixin):

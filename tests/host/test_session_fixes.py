@@ -12,16 +12,16 @@ Covers the p02_session fixer pass:
   returns None (not a misleading "snapshot missing") when the session is gone.
 - _save_metadata and friends: pid-scoped temp files (no cross-host corruption).
 - concurrent metadata updates from independent managers always leave valid JSON.
-- server_session: coverage cache parses structured data/items, is session-keyed
+- session_dispatch: coverage cache parses structured data/items, is session-keyed
   and lock-guarded; search_notes honors ownership; state errors without a
   session; switch with reopen re-enters safe mode; _maybe_resolve_analysis_state
   matches the watcher's reload decision; cleanup_stale orphan-prune skips
   locked sessions; _run_workflow_sequence uses the error envelope; _wait_for_idb
   returns an absolute legacy-component path.
-- server_workflow_batch: batch output→input chaining reports an unresolved
+- workflow_batch: batch output→input chaining reports an unresolved
   step reference as a full INVALID_ARGS error envelope (the batch-side sibling
   of _run_workflow_sequence's error envelope), never a silent empty string.
-- server_multi_session: _session_groups access is lock-guarded and groups are
+- multi_session: _session_groups access is lock-guarded and groups are
   reconciled when sessions are deleted.
 """
 
@@ -34,11 +34,11 @@ import time
 from datetime import datetime
 
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server.multi_session import ServerMultiSessionMixin, SessionGroup
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_multi_session import ServerMultiSessionMixin, SessionGroup
-from ida_pro_mcp.host.server.server_session import ServerSessionMixin
-from ida_pro_mcp.host.server.server_workflow_batch import ServerWorkflowBatchMixin
 from ida_pro_mcp.host.server.session import BookmarkManager, Session, SessionManager
+from ida_pro_mcp.host.server.session_dispatch import ServerSessionMixin
+from ida_pro_mcp.host.server.workflow_batch import ServerWorkflowBatchMixin
 from tests._thread_doubles import CaptureThread
 
 
@@ -336,7 +336,7 @@ def test_restore_snapshot_returns_none_for_deleted_session(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: coverage cache + state payload
+# session_dispatch.py: coverage cache + state payload
 # ---------------------------------------------------------------------------
 
 
@@ -414,7 +414,7 @@ def test_state_with_no_session_returns_error():
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: search_notes ownership
+# session_dispatch.py: search_notes ownership
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +452,7 @@ def test_search_notes_requires_query(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: switch re-enters safe mode
+# session_dispatch.py: switch re-enters safe mode
 # ---------------------------------------------------------------------------
 
 
@@ -482,7 +482,7 @@ def test_switch_reopen_reenters_safe_mode(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: _maybe_resolve_analysis_state confirmation-only
+# session_dispatch.py: _maybe_resolve_analysis_state confirmation-only
 # ---------------------------------------------------------------------------
 
 
@@ -529,7 +529,7 @@ def test_on_analysis_complete_clears_pending_and_persists_gate(tmp_path, monkeyp
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: cleanup_stale orphan-prune ownership
+# session_dispatch.py: cleanup_stale orphan-prune ownership
 # ---------------------------------------------------------------------------
 
 
@@ -554,7 +554,7 @@ def test_cleanup_stale_orphan_prune_skips_locked_sessions(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: _run_workflow_sequence error envelope
+# session_dispatch.py: _run_workflow_sequence error envelope
 # ---------------------------------------------------------------------------
 
 
@@ -584,7 +584,7 @@ def test_workflow_sequence_uses_error_envelope_for_bad_steps():
 
 
 # ---------------------------------------------------------------------------
-# server_workflow_batch.py: chaining error envelope
+# workflow_batch.py: chaining error envelope
 # ---------------------------------------------------------------------------
 
 
@@ -635,7 +635,7 @@ def test_batch_chaining_unresolved_ref_uses_error_envelope():
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: _wait_for_idb legacy component path
+# session_dispatch.py: _wait_for_idb legacy component path
 # ---------------------------------------------------------------------------
 
 
@@ -661,7 +661,7 @@ def test_wait_for_idb_legacy_component_returns_absolute_path(tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: status / diff-dedup / import_session sanitization
+# session_dispatch.py: status / diff-dedup / import_session sanitization
 # ---------------------------------------------------------------------------
 
 
@@ -685,7 +685,7 @@ def test_status_reports_total_via_manager_count(tmp_path):
 
 
 def test_trigger_session_diff_dedups_identical_switches(monkeypatch):
-    import ida_pro_mcp.host.server.server_session as ss
+    import ida_pro_mcp.host.server.session_dispatch as ss
 
     spawned = []
 
@@ -737,7 +737,7 @@ def test_import_session_sanitizes_ida_args(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# server_multi_session.py: group lock + reconciliation
+# multi_session.py: group lock + reconciliation
 # ---------------------------------------------------------------------------
 
 
@@ -769,7 +769,7 @@ def test_multi_session_groups_concurrent_access_does_not_crash():
     errors = []
 
     def creator():
-        # Every real writer in server_multi_session.py takes the lock (e.g.
+        # Every real writer in multi_session.py takes the lock (e.g.
         # _ms_group_create / _drop_sid_from_groups), so the writer must model
         # the locked producer the audit lens cares about — an unlocked writer
         # would only test a scenario production never runs.

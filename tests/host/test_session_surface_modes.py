@@ -56,7 +56,7 @@ def test_session_switch_and_runtime_wait_modes(tmp_path, monkeypatch):
     component.unlink()
     session.idb_path = str(tmp_path / "missing.i64")
     host._runtime_record = lambda _sid: {"process": _Process(alive=False)}
-    monkeypatch.setattr("ida_pro_mcp.host.server.server_session.os.listdir", lambda _path: (_ for _ in ()).throw(OSError("gone")))
+    monkeypatch.setattr("ida_pro_mcp.host.server.session_dispatch.os.listdir", lambda _path: (_ for _ in ()).throw(OSError("gone")))
     assert host._wait_for_idb(session, timeout=0) is False
 
 

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from ida_pro_mcp.host.server.blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
 

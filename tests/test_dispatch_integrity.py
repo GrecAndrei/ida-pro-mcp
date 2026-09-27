@@ -23,7 +23,7 @@ def schemas_data():
 
 @pytest.fixture(scope="module")
 def dispatch_source():
-    p = SRC / "ida_pro_mcp" / "host" / "server" / "server_dispatch.py"
+    p = SRC / "ida_pro_mcp" / "host" / "server" / "dispatch.py"
     return p.read_text(encoding="utf-8")
 
 

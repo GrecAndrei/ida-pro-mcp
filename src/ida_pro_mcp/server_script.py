@@ -116,7 +116,7 @@ try:
 except Exception:
     pass
 
-# IDA_MCP_BYPASS_SYNC is set by the host runtime (server_runtime.py) when
+# IDA_MCP_BYPASS_SYNC is set by the host runtime (runtime.py) when
 # launching IDA. Do not force it here at module import: the env var
 # disables the @idaread/@idawrite safety wrapper globally, so it should
 # only be active for code paths that opt in via the bypass_sync()
@@ -418,7 +418,7 @@ def process_single(r):
         }
 
     # Session-token auth is mandatory, never optional-on-empty: the host
-    # injects a token for every managed session (server_runtime.py), and a
+    # injects a token for every managed session (runtime.py), and a
     # bridge launched without one must refuse tool calls instead of leaving
     # arbitrary tool execution (incl. python code exec) open to any local
     # process that can reach the RPC socket.

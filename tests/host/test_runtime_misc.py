@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
-from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
+from ida_pro_mcp.host.server import runtime as server_runtime_mod
+from ida_pro_mcp.host.server.runtime import ServerRuntimeMixin
 
 SID = "AB12CDEF"
 

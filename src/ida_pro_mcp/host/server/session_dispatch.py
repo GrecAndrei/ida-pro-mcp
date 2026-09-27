@@ -32,8 +32,8 @@ from ..config import (
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..schemas import TOOL_ACTIONS
-from .server_client_state import ServerClientStateMixin
-from .server_session_bootstrap import ServerSessionBootstrapMixin
+from .client_state import ServerClientStateMixin
+from .session_bootstrap import ServerSessionBootstrapMixin
 from .tool_registry import register_tool_actions
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1119,7 +1119,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         that do not compose the response mixin are a no-op. Dropping the key
         means a session re-opened through pending starts from 0 (its first 2
         enriched calls fire the resume again) while a long-lived session keeps
-        the monotonic count that prevents re-firing (server_response.py).
+        the monotonic count that prevents re-firing (response.py).
         """
         lock = getattr(self, "_session_resume_calls_lock", None)
         calls = getattr(self, "_session_resume_calls", None)
@@ -2692,7 +2692,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             analysis_options = None
 
         # h01 unresolved #2: while the rebuild tears down and respawns the
-        # runtime, flag the session as reloading so the server_dispatch
+        # runtime, flag the session as reloading so the dispatch
         # IDA_BUSY gate blocks racing tool calls and status confirmations are
         # suppressed (the fresh spawn re-enters pending on its own). The marker
         # is cleared in `finally` on every exit path, including failures.

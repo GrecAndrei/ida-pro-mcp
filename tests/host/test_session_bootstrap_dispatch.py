@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ida_pro_mcp.host.server.server_session_bootstrap import (
+from ida_pro_mcp.host.server.session_bootstrap import (
     ServerSessionBootstrapMixin,
     _coerce_observed01,
     _coerce_predicted01,

@@ -6,8 +6,8 @@ import threading
 from types import SimpleNamespace
 
 import ida_pro_mcp.host.server.server as server_module
+from ida_pro_mcp.host.server.client_state import _ClientRequestState
 from ida_pro_mcp.host.server.server import IDAMCPServer
-from ida_pro_mcp.host.server.server_client_state import _ClientRequestState
 
 
 def test_request_properties_and_global_insight_cache_fallback(monkeypatch, tmp_path):

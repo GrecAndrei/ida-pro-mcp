@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from ida_pro_mcp.host.policy import PolicyDecision
-from ida_pro_mcp.host.server import server_workflow_batch as batch_module
-from ida_pro_mcp.host.server.server_workflow_batch import ServerWorkflowBatchMixin
+from ida_pro_mcp.host.server import workflow_batch as batch_module
+from ida_pro_mcp.host.server.workflow_batch import ServerWorkflowBatchMixin
 
 
 class _RateLimiter:
