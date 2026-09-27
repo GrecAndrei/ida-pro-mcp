@@ -71,18 +71,25 @@ class BudgetConfig:
         cls,
         env: dict[str, str] | None = None,
         *,
-        provider_mode: str = "generic",
+        max_input_chars: int | None = None,
     ) -> "BudgetConfig":
         values = os.environ if env is None else env
 
-        # Jev charges for input tokens only; output is free. Reserve enough
-        # output tokens for a broad typed-question fan-out. Custom providers
-        # retain the generic defaults unless the operator raises them.
-        jev_mode = str(provider_mode or "").strip().lower() == "jev"
-        default_request_input_tokens = 65_536 if jev_mode else 8_192
-        default_request_output_tokens = 8_192 if jev_mode else 2_048
-        default_session_tokens = 15_000_000 if jev_mode else 100_000
-        default_daily_tokens = 150_000_000 if jev_mode else 500_000
+        # The per-request input reservation follows the provider's configured
+        # input bound rather than its name, so a reservation can never be
+        # smaller than the packet the provider is allowed to receive. Host
+        # estimates are four bytes per token, matching the compact-state
+        # window checks. Identical input bounds therefore reserve identically
+        # for every mode, and no provider is charged a multiplier it did not
+        # ask for.
+        default_request_input_tokens = 8_192
+        if max_input_chars is not None:
+            try:
+                bound = int(max_input_chars)
+            except (TypeError, ValueError):
+                bound = 0
+            if bound > 0:
+                default_request_input_tokens = max(1, min(10_000_000, -(-bound // 4)))
 
         def integer(
             names: tuple[str, ...],
@@ -162,26 +169,23 @@ class BudgetConfig:
                 ("IDA_MCP_JEV_REQUEST_INPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_INPUT_TOKENS"),
                 default_request_input_tokens,
                 1,
-                65_536 if jev_mode else 10_000_000,
             ),
             request_output_tokens=integer(
                 ("IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS", "IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS"),
-                default_request_output_tokens,
+                2_048,
                 1,
             ),
             request_count_session=integer(("IDA_MCP_JEV_SESSION_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_SESSION_REQUEST_LIMIT"), 200, 1),
             request_count_daily=integer(("IDA_MCP_JEV_DAILY_REQUEST_LIMIT", "IDA_MCP_INTELLIGENCE_DAILY_REQUEST_LIMIT"), 2_000, 1),
             token_budget_session=integer(
                 ("IDA_MCP_JEV_SESSION_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_SESSION_TOKEN_BUDGET"),
-                default_session_tokens,
+                100_000,
                 1,
-                1_000_000_000 if jev_mode else 10_000_000,
             ),
             token_budget_daily=integer(
                 ("IDA_MCP_JEV_DAILY_TOKEN_BUDGET", "IDA_MCP_INTELLIGENCE_DAILY_TOKEN_BUDGET"),
-                default_daily_tokens,
+                500_000,
                 1,
-                10_000_000_000 if jev_mode else 10_000_000,
             ),
             cost_budget_session=number(("IDA_MCP_JEV_SESSION_BUDGET_USD", "IDA_MCP_INTELLIGENCE_SESSION_BUDGET_USD"), 5.0),
             cost_budget_daily=number(("IDA_MCP_JEV_DAILY_BUDGET_USD", "IDA_MCP_INTELLIGENCE_DAILY_BUDGET_USD"), 20.0),

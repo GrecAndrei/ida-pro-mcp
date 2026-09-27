@@ -23,8 +23,17 @@ MODES = frozenset({"jev", "custom", "disabled"})
 JEV_BASE_URL = "https://api.typesafe.ai"
 JEV_INVOKE_PATH = "/v1/systemone"
 JEV_DEFAULT_MODEL = "jev-latest"
-JEV_DEFAULT_INPUT_USD_PER_MTOK = 0.042
-JEV_DEFAULT_OUTPUT_USD_PER_MTOK = 0.0
+# Reference prices for operator confirmation only. They are deliberately NOT
+# applied as implicit defaults: paid Jev traffic is opt-in, so an operator must
+# set IDA_MCP_JEV_INPUT_USD_PER_MTOK / IDA_MCP_JEV_OUTPUT_USD_PER_MTOK (or
+# explicitly acknowledge unpriced usage with
+# IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1) to open the spend gate. With neither,
+# pricing stays unknown and the ledger blocks every request before transport.
+# The installer offers these values as prompt/CLI defaults; the host never
+# inherits them. Published figures must be rechecked against
+# https://docs.typesafe.ai/models before being quoted as current.
+JEV_REFERENCE_INPUT_USD_PER_MTOK = 0.042
+JEV_REFERENCE_OUTPUT_USD_PER_MTOK = 0.0
 CONFIG_FILE_NAME = "intelligence.json"
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
@@ -830,10 +839,9 @@ def resolve_provider_config(
         model = _safe_identifier(values.get("IDA_MCP_JEV_MODEL") or provider.get("model"), name="IDA_MCP_JEV_MODEL", default=JEV_DEFAULT_MODEL)
         input_price = _price_value(values.get("IDA_MCP_JEV_INPUT_USD_PER_MTOK", provider.get("input_usd_per_mtok")), name="jev input price")
         output_price = _price_value(values.get("IDA_MCP_JEV_OUTPUT_USD_PER_MTOK", provider.get("output_usd_per_mtok")), name="jev output price")
-        if input_price is None:
-            input_price = JEV_DEFAULT_INPUT_USD_PER_MTOK
-        if output_price is None:
-            output_price = JEV_DEFAULT_OUTPUT_USD_PER_MTOK
+        # No implicit pricing here. Unset prices leave ``pricing_configured``
+        # false so UsageLedger fails closed before transport; spending requires
+        # an explicit operator opt-in.
         return ProviderConfig(
             mode="jev",
             provider_id="typesafe-jev",

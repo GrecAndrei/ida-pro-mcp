@@ -27,6 +27,15 @@ def main() -> int:
         help="Explicit intelligence provider mode for advisory checks",
     )
     parser.add_argument("--jev-model", default="jev-latest")
+    parser.add_argument(
+        "--jev-input-usd-per-mtok", default="",
+        help="opt in to metered Jev input; unset keeps the spend gate closed and "
+        "Jev advisory calls are blocked before transport",
+    )
+    parser.add_argument(
+        "--jev-output-usd-per-mtok", default="",
+        help="opt in to metered Jev output; unset keeps the spend gate closed",
+    )
     parser.add_argument("--call-timeout", type=int, default=180, help="Maximum seconds for one MCP call or IDA startup")
     parser.add_argument("--pytest-timeout", type=int, default=600, help="Maximum seconds for each pytest case")
     args = parser.parse_args()
@@ -43,6 +52,18 @@ def main() -> int:
     env["IDA_MCP_INTELLIGENCE_MODE"] = args.intelligence_mode
     if args.jev_model:
         env["IDA_MCP_JEV_MODEL"] = args.jev_model
+    if args.jev_input_usd_per_mtok:
+        env["IDA_MCP_JEV_INPUT_USD_PER_MTOK"] = str(args.jev_input_usd_per_mtok)
+    if args.jev_output_usd_per_mtok:
+        env["IDA_MCP_JEV_OUTPUT_USD_PER_MTOK"] = str(args.jev_output_usd_per_mtok)
+    if args.intelligence_mode == "jev" and not (
+        args.jev_input_usd_per_mtok and args.jev_output_usd_per_mtok
+    ):
+        print(
+            "warning: Jev spend is disabled because no input/output price was "
+            "given; Jev advisory calls will be blocked before transport. Pass "
+            "--jev-input-usd-per-mtok and --jev-output-usd-per-mtok to opt in."
+        )
 
     return subprocess.run(
         [

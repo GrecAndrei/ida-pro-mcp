@@ -59,10 +59,14 @@ detail="deep")` can advisory-rank the deterministic eligible candidates.
 
 Jev never runs the suggested IDA call, decides mutation policy, supplies
 `risk_ack`, or writes findings. The analyst verifies every useful hypothesis
-against IDA's deterministic output. The current published Jev 1.13 input price
-is `$0.042` per million tokens and output is free: 32K input tokens cost about
-`$0.001344` at that rate. The server's usage status reports the actual token
-and cost totals for each request. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+against IDA's deterministic output. Jev is metered and its spend is opt-in: the
+host blocks Jev requests before transport until you configure a price with
+`IDA_MCP_JEV_INPUT_USD_PER_MTOK` / `IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` (or
+acknowledge unpriced usage). The current published Jev 1.13 input price is
+`$0.042` per million tokens and output is free, so 32K input tokens cost about
+`$0.001344` at that rate — confirm it before relying on it. The server's usage
+status reports the actual token and cost totals for each request.
+[TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
 
 ## 3. Turn observations into explicit workspace state
 

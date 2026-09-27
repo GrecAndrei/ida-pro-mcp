@@ -230,6 +230,37 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     if opts.intelligence_mode == "jev":
         opts.jev_model = _prompt_text("Jev model", default=opts.jev_model or "jev-latest") or "jev-latest"
         ui.info("Provide TYPESAFE_API_KEY or TYPESAFE_API_KEY_FILE in the server environment; it is never stored by the installer.")
+        # Paid Jev traffic is opt-in. The published price is offered as a
+        # suggestion the operator confirms, never applied silently: leaving both
+        # fields empty keeps the host spend gate closed and every Jev request is
+        # blocked before transport.
+        from ida_pro_mcp.host.intelligence.providers.config import (
+            JEV_REFERENCE_INPUT_USD_PER_MTOK,
+            JEV_REFERENCE_OUTPUT_USD_PER_MTOK,
+        )
+
+        ui.info(
+            "Jev is a metered provider. Spend stays disabled until you state a "
+            "price per million tokens; the host blocks Jev requests before "
+            "transport while pricing is unknown. Current published reference: "
+            f"${JEV_REFERENCE_INPUT_USD_PER_MTOK} input, "
+            f"${JEV_REFERENCE_OUTPUT_USD_PER_MTOK} output per million tokens "
+            "(verify at https://docs.typesafe.ai/models)."
+        )
+        current_input = opts.jev_input_usd_per_mtok or ""
+        current_output = opts.jev_output_usd_per_mtok or ""
+        opts.jev_input_usd_per_mtok = _prompt_text(
+            "Jev input price in USD per million tokens "
+            f"(published reference: {JEV_REFERENCE_INPUT_USD_PER_MTOK}; "
+            f"currently configured: {current_input or 'none'}; "
+            "press Enter to keep spend disabled)"
+        )
+        opts.jev_output_usd_per_mtok = _prompt_text(
+            "Jev output price in USD per million tokens "
+            f"(published reference: {JEV_REFERENCE_OUTPUT_USD_PER_MTOK}; "
+            f"currently configured: {current_output or 'none'}; "
+            "press Enter to keep spend disabled)"
+        )
     elif opts.intelligence_mode == "custom":
         opts.custom_base_url = _prompt_text("Custom HTTPS origin", default=opts.custom_base_url)
         opts.custom_allowed_origins = _prompt_text(
@@ -368,6 +399,17 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="intelligence provider mode (default: disabled; no local/Gemini/native fallback)",
     )
     parser.add_argument("--jev-model", default="jev-latest", help="Jev model identifier")
+    parser.add_argument(
+        "--jev-input-usd-per-mtok", default="",
+        help="opt in to metered Jev input by stating the input price in USD per "
+        "million tokens; unset keeps the spend gate closed (requests are blocked "
+        "before transport)",
+    )
+    parser.add_argument(
+        "--jev-output-usd-per-mtok", default="",
+        help="opt in to metered Jev output by stating the output price in USD per "
+        "million tokens; unset keeps the spend gate closed",
+    )
     parser.add_argument("--custom-base-url", default="", help="custom provider HTTPS origin")
     parser.add_argument(
         "--custom-allowed-origin", action="append", default=[],
@@ -445,6 +487,8 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         interactive=True if args.interactive else (False if args.no_interactive else None),
         intelligence_mode=args.intelligence_mode,
         jev_model=args.jev_model,
+        jev_input_usd_per_mtok=args.jev_input_usd_per_mtok,
+        jev_output_usd_per_mtok=args.jev_output_usd_per_mtok,
         custom_base_url=args.custom_base_url,
         custom_allowed_origins=",".join(args.custom_allowed_origin),
         custom_model=args.custom_model,
@@ -722,6 +766,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             # them out of validation so a signatures-only or disabled install
             # does not manufacture a cross-mode conflict.
             "IDA_MCP_JEV_MODEL": opts.jev_model if opts.intelligence_mode == "jev" else "",
+            "IDA_MCP_JEV_INPUT_USD_PER_MTOK": opts.jev_input_usd_per_mtok if opts.intelligence_mode == "jev" else "",
+            "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK": opts.jev_output_usd_per_mtok if opts.intelligence_mode == "jev" else "",
             "IDA_MCP_CUSTOM_BASE_URL": opts.custom_base_url if opts.intelligence_mode == "custom" else "",
             "IDA_MCP_CUSTOM_ALLOWED_ORIGINS": opts.custom_allowed_origins if opts.intelligence_mode == "custom" else "",
             "IDA_MCP_CUSTOM_MODEL": opts.custom_model if opts.intelligence_mode == "custom" else "",
@@ -731,6 +777,18 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             "IDA_MCP_CUSTOM_LOCAL_HTTP": "1" if opts.intelligence_mode == "custom" and opts.custom_local_http else "",
         }
         resolve_provider_config(env=provider_env, state={})
+        if (
+            opts.intelligence_mode == "jev"
+            and not (opts.jev_input_usd_per_mtok.strip() and opts.jev_output_usd_per_mtok.strip())
+        ):
+            # Jev is installed but not armed for paid traffic. The host blocks
+            # every Jev request before transport while pricing is unknown; this
+            # is a usable, deterministic install, not a failure.
+            ui.warn(
+                "Jev spend is disabled: no input/output price was configured. "
+                "Jev requests will be blocked before transport. Re-run with "
+                "--jev-input-usd-per-mtok and --jev-output-usd-per-mtok to opt in."
+            )
         if chosen_install is not None and not opts.dry_run:
             state_path = install_root / STATE_FILE
             backup_file(state_path, report, dry_run=False)
@@ -914,6 +972,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 install_root,
                 intelligence_mode=opts.intelligence_mode,
                 jev_model=opts.jev_model,
+                jev_input_usd_per_mtok=opts.jev_input_usd_per_mtok,
+                jev_output_usd_per_mtok=opts.jev_output_usd_per_mtok,
                 custom_base_url=opts.custom_base_url,
                 custom_allowed_origins=opts.custom_allowed_origins,
                 custom_model=opts.custom_model,

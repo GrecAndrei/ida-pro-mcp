@@ -134,14 +134,34 @@ session or day. `ida_usage_report` lists bounded attempt metadata: provider,
 model, operation, token counts, latency, status, error code, and estimated cost
 when pricing is known. It never stores request state or answer content.
 
-In explicit Jev mode, defaults allow up to 65,536 estimated input tokens and
-8,192 output tokens per request, 15,000,000 tokens per session, and
-150,000,000 per day, with the existing `$5` / `$20` cost ceilings and request
-count limits. Output is currently free, but the host reserves output tokens for
-its request and total-token limits. Jev 1.13 is listed at `$0.042` per million
-input tokens; at that price, 32,000 input tokens cost about `$0.001344` and
-64,000 cost about `$0.002688`. These published figures were checked on
-2026-09-24 and may change. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+Jev is a metered provider, so spend is **opt-in**. The host never applies a
+price by default: leaving `IDA_MCP_JEV_INPUT_USD_PER_MTOK` and
+`IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` unset leaves pricing unconfigured, and the
+usage ledger blocks every Jev request *before transport* with
+`reason="unknown_pricing"`. Setting both prices is the operator's explicit
+acknowledgment that paid traffic is intended; setting
+`IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1` is the alternative acknowledgment for
+operators who accept unpriced usage. `ida_usage_status` reports
+`pricing_configured` so the gate state is visible. The installer offers the
+published rate as a prompt and `--jev-input-usd-per-mtok` /
+`--jev-output-usd-per-mtok` flags, and writes them only when supplied.
+
+Budget defaults are shared across modes and are not raised automatically for
+Jev: 2,048 output tokens per request, 100,000 tokens per session, 500,000 per
+day, with `$5` / `$20` cost ceilings and 200/2,000 request-count limits. The
+per-request *input* reservation is derived from the provider's configured
+`max_input_chars` at the host's four-bytes-per-token estimate (262,144 chars
+reserves 65,536 input tokens; 32,768 chars reserves 8,192), so a reservation is
+never smaller than the packet a provider may receive, and identical input bounds
+reserve identically for every mode. Raise any ceiling explicitly with
+`IDA_MCP_JEV_*` or `IDA_MCP_INTELLIGENCE_*` environment variables.
+
+Output is currently free, but the host reserves output tokens for its request
+and total-token limits. Jev 1.13 is listed at `$0.042` per million input
+tokens; at that rate, 32,000 input tokens cost about `$0.001344` and 64,000 cost
+about `$0.002688`. These published figures were checked on 2026-09-24 and may
+change, so treat them as a reference to confirm rather than a default the
+server applies. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
 
 TypeSafe documents a 64K combined state-and-questions context and a 32K limit
 for state plus the longest individual question. The host allows up to a 120

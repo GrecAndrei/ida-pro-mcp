@@ -611,3 +611,79 @@ def test_build_stdio_config_records_idalib_runtime(tmp_path):
 
     cfg2 = build_stdio_config(tmp_path / "python", tmp_path)
     assert "IDA_MCP_RUNTIME" not in cfg2["env"]
+
+
+def test_build_stdio_config_keeps_jev_spend_opt_in(tmp_path):
+    from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    # Selecting Jev installs the provider but must not arm metered traffic.
+    unarmed = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        intelligence_mode="jev",
+        jev_model="jev-latest",
+    )
+    assert unarmed["env"]["IDA_MCP_INTELLIGENCE_MODE"] == "jev"
+    assert unarmed["env"]["IDA_MCP_JEV_MODEL"] == "jev-latest"
+    assert "IDA_MCP_JEV_INPUT_USD_PER_MTOK" not in unarmed["env"]
+    assert "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK" not in unarmed["env"]
+    # The host agrees: pricing is unconfigured, so the spend gate is closed.
+    resolved = resolve_provider_config(env=unarmed["env"], state={})
+    assert resolved.input_usd_per_mtok is None
+    assert resolved.output_usd_per_mtok is None
+
+    # Naming prices is the explicit opt-in that opens the gate.
+    armed = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        intelligence_mode="jev",
+        jev_model="jev-latest",
+        jev_input_usd_per_mtok="0.042",
+        jev_output_usd_per_mtok="0",
+    )
+    assert armed["env"]["IDA_MCP_JEV_INPUT_USD_PER_MTOK"] == "0.042"
+    assert armed["env"]["IDA_MCP_JEV_OUTPUT_USD_PER_MTOK"] == "0"
+    priced = resolve_provider_config(env=armed["env"], state={})
+    assert priced.input_usd_per_mtok == 0.042
+
+    # A price never leaks into a non-Jev install.
+    disabled = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        intelligence_mode="disabled",
+        jev_input_usd_per_mtok="0.042",
+        jev_output_usd_per_mtok="0",
+    )
+    assert disabled["env"]["IDA_MCP_INTELLIGENCE_MODE"] == "disabled"
+    assert "IDA_MCP_JEV_INPUT_USD_PER_MTOK" not in disabled["env"]
+    assert "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK" not in disabled["env"]
+
+
+def test_installer_cli_exposes_jev_pricing_opt_in():
+    from ida_pro_mcp.installer.main import parse_args
+
+    default = parse_args(["--intelligence-mode", "jev"])
+    assert default.intelligence_mode == "jev"
+    assert default.jev_input_usd_per_mtok == ""
+    assert default.jev_output_usd_per_mtok == ""
+
+    opted_in = parse_args(
+        [
+            "--intelligence-mode", "jev",
+            "--jev-input-usd-per-mtok", "0.042",
+            "--jev-output-usd-per-mtok", "0",
+        ]
+    )
+    assert opted_in.jev_input_usd_per_mtok == "0.042"
+    assert opted_in.jev_output_usd_per_mtok == "0"
+
+    # Selecting a provider other than Jev cannot carry Jev pricing.
+    disabled = parse_args(
+        [
+            "--intelligence-mode", "disabled",
+            "--jev-input-usd-per-mtok", "0.042",
+        ]
+    )
+    assert disabled.intelligence_mode == "disabled"
+    assert disabled.jev_input_usd_per_mtok == "0.042"

@@ -39,7 +39,7 @@ def build_provider(
 def default_usage_ledger(
     *,
     env: Mapping[str, str] | None = None,
-    provider_mode: str | None = None,
+    max_input_chars: int | None = None,
 ) -> UsageLedger:
     # Resolve the environment at call time. Tests, per-install launchers, and
     # multiple host instances may select different cache roots after this
@@ -52,12 +52,12 @@ def default_usage_ledger(
         default_dir = CACHE_DIR
     source = os.environ if env is None else env
     cache_dir = source.get("IDA_MCP_CACHE_DIR") or source.get("IDA_MCP_DATA_DIR") or default_dir
-    if provider_mode is None:
+    if max_input_chars is None:
         try:
-            provider_mode = resolve_provider_config(env=env).mode
+            max_input_chars = resolve_provider_config(env=env).max_input_chars
         except Exception:
-            provider_mode = "generic"
-    budget = BudgetConfig.from_env(dict(source), provider_mode=provider_mode)
+            max_input_chars = None
+    budget = BudgetConfig.from_env(dict(source), max_input_chars=max_input_chars)
     return UsageLedger(os.path.join(str(cache_dir), "provider_usage.sqlite3"), budget=budget)
 
 
@@ -72,7 +72,7 @@ def resolve_provider(
 ):
     config = resolve_provider_config(env=env, state=state, state_path=state_path)
     if with_ledger and ledger is None:
-        ledger = default_usage_ledger(env=env, provider_mode=config.mode)
+        ledger = default_usage_ledger(env=env, max_input_chars=config.max_input_chars)
     return build_provider(config, transport=transport, ledger=ledger)
 
 

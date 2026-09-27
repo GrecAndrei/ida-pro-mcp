@@ -839,6 +839,8 @@ def build_stdio_config(
     ida_runtime: str = "",
     intelligence_mode: str = "disabled",
     jev_model: str = "",
+    jev_input_usd_per_mtok: str = "",
+    jev_output_usd_per_mtok: str = "",
     custom_base_url: str = "",
     custom_allowed_origins: str = "",
     custom_model: str = "",
@@ -896,6 +898,16 @@ def build_stdio_config(
     env["IDA_MCP_INTELLIGENCE_MODE"] = mode
     if mode == "jev" and jev_model:
         env["IDA_MCP_JEV_MODEL"] = str(jev_model).strip()
+    if mode == "jev":
+        # Pricing is the operator's opt-in to metered traffic. Absent values are
+        # omitted rather than defaulted, so the host keeps the spend gate closed
+        # and blocks Jev requests before transport.
+        input_price = str(jev_input_usd_per_mtok or "").strip()
+        output_price = str(jev_output_usd_per_mtok or "").strip()
+        if input_price:
+            env["IDA_MCP_JEV_INPUT_USD_PER_MTOK"] = input_price
+        if output_price:
+            env["IDA_MCP_JEV_OUTPUT_USD_PER_MTOK"] = output_price
     if mode == "custom":
         if custom_base_url:
             env["IDA_MCP_CUSTOM_BASE_URL"] = str(custom_base_url).strip()

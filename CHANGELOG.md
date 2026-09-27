@@ -1,3 +1,32 @@
+## 2026-09-24 — Make Jev spend and budget headroom opt-in
+
+- Stop applying the published Jev price implicitly. Unset
+  `IDA_MCP_JEV_INPUT_USD_PER_MTOK` / `IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` now leave
+  pricing unconfigured, so the usage ledger blocks every Jev request before
+  transport with `reason="unknown_pricing"` instead of silently metering paid
+  traffic. Naming a price, or setting `IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1`, is
+  the explicit operator opt-in. `ida_usage_status` reports the gate through
+  `pricing_configured`.
+- Remove the automatic Jev budget multiplier. Session and daily token ceilings
+  return to the shared 100,000 / 500,000 defaults for every mode instead of
+  being raised 150x/300x for Jev alone; ceilings are raised explicitly through
+  the existing `IDA_MCP_JEV_*` / `IDA_MCP_INTELLIGENCE_*` variables.
+- Derive the per-request input reservation from the provider's configured
+  `max_input_chars` at the host's four-bytes-per-token estimate, so a
+  reservation can never be smaller than the packet a provider may receive
+  (262,144 chars reserves 65,536 tokens; 32,768 reserves 8,192) and identical
+  input bounds reserve identically for all modes.
+- Extend the installer: `--jev-input-usd-per-mtok` / `--jev-output-usd-per-mtok`
+  flags, an interactive prompt that shows the published rate for confirmation
+  while Enter leaves spend disabled, and generated client env that omits the
+  price variables unless supplied. Selecting Jev without pricing now installs a
+  working provider and warns that requests will be blocked before transport.
+- Document the opt-in pricing and budget contract in `AGENTS.md`,
+  `docs/wiki/core/intelligence.md`, and `docs/wiki/reverse-engineering-workflow.md`.
+- Add matching `--jev-input-usd-per-mtok` / `--jev-output-usd-per-mtok` opt-in
+  to `scripts/run_live_agent_surface.py`, which warns instead of silently
+  running advisory calls that would now be blocked.
+
 ## 2026-09-24 — Use Jev's typed context for wider advisory investigations
 
 - Expand single-question candidate windows to 16/32/64 and neighborhood
@@ -22,9 +51,9 @@
 - Return a separately ranked advisory order, expose disagreement between the
   selected next function and its per-function priority scores, and suggest one
   matching provider-neutral `ida_*` operation without invoking it.
-- Raise explicit Jev request budgets to use the supported context, apply the
-  current published input price to usage accounting, and retain separate
-  conservative defaults for custom providers and disabled mode.
+- Raise the explicit Jev request input bound to use the supported context.
+  Pricing and session/daily token ceilings stay opt-in and mode-independent; see
+  "Make Jev spend and budget headroom opt-in" above.
 
 ## 2026-09-24 — Scope commit guardrails to the reviewed branch
 

@@ -22,6 +22,7 @@ from ida_pro_mcp.host.intelligence.providers import (
     ProviderResponse,
     StateSnapshot,
     Usage,
+    UsageLedger,
     resolve_provider_config,
 )
 from ida_pro_mcp.host.intelligence.providers.registry import default_usage_ledger
@@ -334,30 +335,64 @@ def test_malformed_neighborhood_response_fails_closed():
     assert result["advisory_order"] is None
 
 
-def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
-    jev_budget = BudgetConfig.from_env({}, provider_mode="jev")
-    custom_budget = BudgetConfig.from_env({}, provider_mode="custom")
-    assert jev_budget.request_input_tokens == 65_536
-    assert jev_budget.request_output_tokens == 8_192
-    assert jev_budget.token_budget_session == 15_000_000
-    assert jev_budget.token_budget_daily == 150_000_000
+def test_jev_spend_and_budgets_are_opt_in(monkeypatch, tmp_path):
+    # Budgets follow the provider's input bound, not its name, and no mode
+    # receives an automatic multiplier.
+    assert BudgetConfig.from_env({}, max_input_chars=262_144).request_input_tokens == 65_536
+    assert BudgetConfig.from_env({}, max_input_chars=32_768).request_input_tokens == 8_192
+    assert BudgetConfig.from_env({}).request_input_tokens == 8_192
+    # An operator-supplied bound always wins over the derived reservation.
+    assert BudgetConfig.from_env({}, max_input_chars=1_000_000).request_input_tokens == 250_000
+
+    jev_budget = BudgetConfig.from_env({}, max_input_chars=262_144)
+    custom_budget = BudgetConfig.from_env({}, max_input_chars=32_768)
+    assert jev_budget.request_output_tokens == 2_048
+    assert jev_budget.token_budget_session == 100_000
+    assert jev_budget.token_budget_daily == 500_000
     assert (jev_budget.cost_budget_session, jev_budget.cost_budget_daily) == (5.0, 20.0)
-    assert custom_budget.request_input_tokens == 8_192
     assert custom_budget.token_budget_session == 100_000
     assert custom_budget.token_budget_daily == 500_000
 
-    config = resolve_provider_config(
+    # Metered Jev traffic is opt-in: without an explicit price the config
+    # reports pricing as unconfigured instead of silently applying a rate.
+    import ida_pro_mcp.host.intelligence.providers.registry as registry
+
+    assert registry.provider_status(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "TYPESAFE_API_KEY": "synthetic-key",
+        }
+    )["provider"]["pricing_configured"] is False
+    assert registry.provider_status(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "TYPESAFE_API_KEY": "synthetic-key",
+            "IDA_MCP_JEV_INPUT_USD_PER_MTOK": "0.042",
+            "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK": "0",
+        }
+    )["provider"]["pricing_configured"] is True
+
+    unpriced = resolve_provider_config(
         env={
             "IDA_MCP_INTELLIGENCE_MODE": "jev",
             "TYPESAFE_API_KEY": "synthetic-key",
         }
     )
-    assert config.input_usd_per_mtok == pytest.approx(0.042)
-    assert config.output_usd_per_mtok == 0.0
-    assert config.max_input_chars == 262_144
-    assert config.max_questions == 64
+    assert unpriced.input_usd_per_mtok is None
+    assert unpriced.output_usd_per_mtok is None
+    assert unpriced.max_input_chars == 262_144
+    assert unpriced.max_questions == 64
 
-    import ida_pro_mcp.host.intelligence.providers.registry as registry
+    priced = resolve_provider_config(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "TYPESAFE_API_KEY": "synthetic-key",
+            "IDA_MCP_JEV_INPUT_USD_PER_MTOK": "0.042",
+            "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK": "0",
+        }
+    )
+    assert priced.input_usd_per_mtok == pytest.approx(0.042)
+    assert priced.output_usd_per_mtok == 0.0
 
     monkeypatch.setattr(
         registry,
@@ -370,9 +405,12 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
             "IDA_MCP_CACHE_DIR": str(tmp_path),
         }
     )
+    # The reservation still covers the configured packet, but the session and
+    # daily ceilings stay at the shared defaults.
     assert ledger.budget.request_input_tokens == 65_536
-    assert ledger.budget.request_output_tokens == 8_192
-    assert ledger.budget.token_budget_daily == 150_000_000
+    assert ledger.budget.request_output_tokens == 2_048
+    assert ledger.budget.token_budget_session == 100_000
+    assert ledger.budget.token_budget_daily == 500_000
 
     generic = registry.default_usage_ledger(
         env={
@@ -380,7 +418,7 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
             "IDA_MCP_CACHE_DIR": str(tmp_path),
         }
     )
-    assert generic.budget == BudgetConfig.from_env({}, provider_mode="generic")
+    assert generic.budget == BudgetConfig.from_env({})
 
     disabled = registry.resolve_provider(
         env={
@@ -392,6 +430,43 @@ def test_jev_budget_and_pricing_defaults_are_mode_aware(monkeypatch, tmp_path):
     assert type(disabled).__name__ == "DisabledProvider"
 
 
+def test_unpriced_jev_requests_are_blocked_before_transport(tmp_path):
+    from ida_pro_mcp.host.intelligence.providers.types import ProviderBudgetError
+
+    config = resolve_provider_config(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "TYPESAFE_API_KEY": "synthetic-key",
+        }
+    )
+    ledger = UsageLedger(tmp_path / "usage.sqlite3", budget=BudgetConfig.from_env({}, max_input_chars=config.max_input_chars))
+    with pytest.raises(ProviderBudgetError) as excinfo:
+        ledger.reserve(
+            session_id="session-1",
+            provider=config.provider_id,
+            model=config.model,
+            operation="advisory",
+            input_price=config.input_usd_per_mtok,
+            output_price=config.output_usd_per_mtok,
+        )
+    assert excinfo.value.details["reason"] == "unknown_pricing"
+
+    # Naming a price is the opt-in that opens the gate.
+    armed = UsageLedger(tmp_path / "armed.sqlite3", budget=BudgetConfig.from_env({}, max_input_chars=config.max_input_chars))
+    reservation = armed.reserve(
+        session_id="session-1",
+        provider=config.provider_id,
+        model=config.model,
+        operation="advisory",
+        input_price=0.042,
+        output_price=0.0,
+        input_tokens=32_000,
+        output_tokens=2_048,
+    )
+    assert reservation.price_known is True
+    assert reservation.reserved_cost_usd == pytest.approx(0.001344)
+
+
 def test_jev_budget_defaults_can_be_overridden():
     budget = BudgetConfig.from_env(
         {
@@ -399,7 +474,7 @@ def test_jev_budget_defaults_can_be_overridden():
             "IDA_MCP_JEV_SESSION_TOKEN_BUDGET": "2000000",
             "IDA_MCP_JEV_DAILY_BUDGET_USD": "7.5",
         },
-        provider_mode="jev",
+        max_input_chars=262_144,
     )
     assert budget.request_input_tokens == 32_768
     assert budget.token_budget_session == 2_000_000

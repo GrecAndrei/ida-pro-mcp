@@ -161,6 +161,10 @@ class InstallerOptions:
     # are Jev, operator-configured custom BYOK, and disabled.
     intelligence_mode: str = "disabled"  # jev | custom | disabled
     jev_model: str = "jev-latest"
+    # Paid Jev traffic is opt-in. Empty means "no pricing configured", which
+    # leaves the host spend gate closed and blocks requests before transport.
+    jev_input_usd_per_mtok: str = ""
+    jev_output_usd_per_mtok: str = ""
     custom_base_url: str = ""
     custom_allowed_origins: str = ""
     custom_model: str = ""

@@ -158,10 +158,13 @@ provider limit. The decompile neighborhood uses up to 8/16/30 candidates with
 two questions each plus three shared questions. The decompile context path
 also sends a shared compact focus/caller/callee packet and returns a typed
 neighborhood assessment with an optional deterministic `ida_*` suggestion;
-the caller decides whether to run it. Jev's current model context and price
-limits are documented in `docs/wiki/core/intelligence.md`. Architecture
-advisory is a hypothesis only and does not auto-fill processor, bitness, or
-endianness. Keep new advisories provider-neutral and optional.
+the caller decides whether to run it. Jev spend is opt-in: the host applies no
+price by default and the ledger blocks Jev requests before transport while
+pricing is unknown, and no mode receives an automatic budget multiplier. Jev's
+current model context and the opt-in pricing and budget limits are documented in
+`docs/wiki/core/intelligence.md`. Architecture advisory is a hypothesis only and
+does not auto-fill processor, bitness, or endianness. Keep new advisories
+provider-neutral and optional.
 
 ## Tests, coverage, and live IDA
 
