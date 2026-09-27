@@ -1,3 +1,37 @@
+## 2026-09-27 — Document the full intelligence environment reference
+
+Documentation only; no runtime, contract, or persistence change.
+
+A scan found that the wiki documented **7 of the 38** environment variables the
+intelligence layer actually reads. Anyone configuring the layer had to guess the
+names of the other 31, and nothing failed when a new variable was added in code
+without docs.
+
+`docs/wiki/core/intelligence.md` now carries a complete environment variable
+reference, organized as posture, pricing and the spend gate, budgets, and Jev
+transport, with the default that applies when each is unset and the accepted
+range where one is enforced. Every default was read from
+`host/intelligence/providers/config.py` and
+`providers/usage_accounting.py` rather than restated from prose, and the budget
+defaults are additionally pinned against `BudgetConfig.from_env({})` by test. The
+alias rule is now stated explicitly: each budget setting accepts both a
+mode-neutral `IDA_MCP_INTELLIGENCE_*` name and an `IDA_MCP_JEV_*` name, and the
+Jev name takes precedence when both are set.
+
+`docs/wiki/client-configuration.md` previously described the provider mode but
+omitted both the kill switch and the spend gate — the two things an operator
+actually reaches for. It now opens with a "Turning the whole layer off" section
+carrying the unset/true/false table, the precedence rule over every other
+configuration source, the guarantee that switching off cannot itself be blocked,
+the fail-closed mode validation, and the reported `disabled_reason`. Sections
+for provider selection, opt-in Jev spend, and credentials follow.
+
+Add `tests/host/test_intelligence_env_reference.py`, which scans the source for
+the variables actually read and requires each to appear in the reference. It
+derives the Jev/INTELLIGENCE alias pairs from the source so a new alias cannot
+ship undocumented on one side, and it fails if the scan ever comes back nearly
+empty rather than passing vacuously.
+
 ## 2026-09-27 — Bring docs, wiki, and the contribution rules up to date
 
 Documentation and rule clarity only; no runtime, contract, or persistence

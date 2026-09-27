@@ -109,6 +109,40 @@ the report and error log when diagnosing a partial setup.
 
 ## Intelligence provider configuration
 
+### Turning the whole layer off
+
+`IDA_MCP_INTELLIGENCE_ENABLED` is the kill switch for the entire intelligence
+layer. It is **orthogonal** to the mode, and the two combine:
+
+| Value | Effect |
+| --- | --- |
+| unset | Follow the mode. This is the default. |
+| `1` / `true` | Permit the selected provider, without choosing one. |
+| `0` / `false` | **Disable the whole layer.** |
+
+An explicit `false` is an unconditional kill switch and outranks every other
+configuration source: the `IDA_MCP_INTELLIGENCE_MODE` environment variable, the
+persisted `intelligence.json` state, and the mode the installer wrote into your
+client configuration. It also short-circuits leftover provider, legacy, and
+mode-conflict checks, so **switching off can never be blocked by other
+configuration** and can never stop the host from starting deterministically.
+
+Mode *values* are still validated first, so a typo such as `IDA_MCP_INTELLIGENCE_MODE=jevv`
+is reported as an error rather than silently treated as off. A malformed
+switch value fails closed.
+
+With the layer off, no provider is constructed, and the deterministic pool
+order, heuristic and structural ranking, and lexical signature retrieval all
+remain available. Advisory calls degrade instead of failing: they keep the
+fail-closed shape (`advisory_order` null, `applied` false, `fail_closed_order`
+populated). `ida_intelligence_status` reports `intelligence_enabled`,
+`deterministic_only`, and `disabled_reason` — either `kill_switch` or `mode`.
+
+The installer always writes the resolved posture explicitly, so you can see the
+state as one readable line in your client config rather than inferring it.
+
+### Selecting a provider
+
 The provider mode is explicit: `disabled` (default), `jev`, or `custom`.
 Deterministic IDA analysis and lexical retrieval work in disabled mode. Jev
 uses `TYPESAFE_API_KEY` over host-side HTTP; custom mode requires an HTTPS base
@@ -119,6 +153,25 @@ translated. Typed questions are `choice`/`noul`/`score` only; answers cannot
 authorize mutations or write findings. The shared advisor stage returns
 bounded advisory metadata and may suggest a deterministic `ida_*` follow-up;
 it never invokes the suggestion. See [Intelligence](core/intelligence.md).
+
+In the interactive wizard, choosing "Off (deterministic and lexical analysis
+only)" is the first option. Selecting a provider *installs* it but only *arms*
+it when you confirm, and the installer warns when a provider is configured while
+the layer is off.
+
+### Jev spend is opt-in
+
+Jev is metered, so the host **never applies a price by default**. Leaving
+`IDA_MCP_JEV_INPUT_USD_PER_MTOK` and `IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` unset
+leaves pricing unconfigured, and the usage ledger blocks every Jev request
+*before transport* with `reason="unknown_pricing"`. Setting both prices is your
+explicit acknowledgment that paid traffic is intended. Alternatively, set
+`IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1` to accept unpriced usage.
+`ida_usage_status` reports `pricing_configured` so the gate state is visible.
+See [Intelligence](core/intelligence.md) for the reference rate and budget
+ceilings.
+
+### Credentials
 
 The installer never writes API keys into client configuration. Providers read
 credentials at request time. Review `ida_intelligence_status`,

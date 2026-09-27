@@ -213,6 +213,79 @@ KiB, and caps the serialized Jev request at 256 KiB by default. These are
 four-byte-per-token host estimates, not the provider tokenizer; the usage
 response is reconciled against the ledger. The provider can be configured with
 smaller limits, and the host never lets a Jev request exceed these defaults.
+
+## Environment variable reference
+
+Every variable the intelligence layer reads, with the default that applies when
+it is unset. Booleans accept `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`; a
+malformed boolean fails closed rather than being guessed at.
+
+### Posture
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `IDA_MCP_INTELLIGENCE_ENABLED` | unset (follow mode) | Kill switch. `0`/`false` disables the whole layer unconditionally and outranks every other configuration source. `1`/`true` permits the selected provider without choosing one. |
+| `IDA_MCP_INTELLIGENCE_MODE` | `disabled` | Provider mode: `disabled`, `jev`, or `custom`. Values are validated, so a typo is reported. |
+| `IDA_MCP_INTELLIGENCE_CONFIG` | unset | Path to an explicit provider config file, bypassing state discovery. |
+| `IDA_MCP_INTELLIGENCE_PROVIDER` | unset | Provider selector in config files. |
+| `IDA_MCP_INTELLIGENCE_BACKEND` | unset | Legacy backend selector; rejected rather than translated. |
+| `IDA_MCP_JEV_MODEL` | unset | Model identifier for the Jev provider. |
+
+### Pricing and the spend gate
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `IDA_MCP_JEV_INPUT_USD_PER_MTOK` | unset | Input price per million tokens. **Unset means no price is applied and Jev requests are blocked before transport.** |
+| `IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` | unset | Output price per million tokens, same rule. |
+| `IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING` | unset | `1` accepts unpriced Jev usage instead of blocking it. |
+| `IDA_MCP_JEV_BLOCK_UNKNOWN_PRICING` | `1` | Inverse of the above. `0` is equivalent to allowing unknown pricing. |
+| `IDA_MCP_INTELLIGENCE_BLOCK_UNKNOWN_PRICING` | — | Mode-neutral alias for `IDA_MCP_JEV_BLOCK_UNKNOWN_PRICING`. |
+
+### Budgets
+
+Each of these has a mode-neutral `IDA_MCP_INTELLIGENCE_*` alias. The
+`IDA_MCP_JEV_*` name takes precedence when both are set. Budgets are **shared
+across modes** and are not raised automatically for Jev.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `IDA_MCP_JEV_BUDGET_MODE` | `block` | `block` refuses over-budget requests; `warn` allows them and reports. |
+| `IDA_MCP_INTELLIGENCE_BUDGET_MODE` | — | Alias for the above. |
+| `IDA_MCP_JEV_WARNING_THRESHOLDS` | `0.70,0.90` | Comma-separated fractions of a budget at which to warn. At most 16 values, each strictly between 0 and 1. |
+| `IDA_MCP_INTELLIGENCE_WARNING_THRESHOLDS` | — | Alias for the above. |
+| `IDA_MCP_JEV_REQUEST_INPUT_TOKENS` | derived | Input tokens reserved per request. Defaults to `max_input_chars / 4`, so a reservation is never smaller than the packet the provider may receive. |
+| `IDA_MCP_INTELLIGENCE_REQUEST_INPUT_TOKENS` | — | Alias for the above. |
+| `IDA_MCP_JEV_REQUEST_OUTPUT_TOKENS` | `2048` | Output tokens reserved per request. |
+| `IDA_MCP_INTELLIGENCE_REQUEST_OUTPUT_TOKENS` | — | Alias for the above. |
+| `IDA_MCP_JEV_SESSION_TOKEN_BUDGET` | `100000` | Total tokens per session. |
+| `IDA_MCP_INTELLIGENCE_SESSION_TOKEN_BUDGET` | — | Alias for the above. |
+| `IDA_MCP_JEV_DAILY_TOKEN_BUDGET` | `500000` | Total tokens per day. |
+| `IDA_MCP_INTELLIGENCE_DAILY_TOKEN_BUDGET` | — | Alias for the above. |
+| `IDA_MCP_JEV_SESSION_BUDGET_USD` | `5.0` | Cost ceiling per session. |
+| `IDA_MCP_INTELLIGENCE_SESSION_BUDGET_USD` | — | Alias for the above. |
+| `IDA_MCP_JEV_DAILY_BUDGET_USD` | `20.0` | Cost ceiling per day. |
+| `IDA_MCP_INTELLIGENCE_DAILY_BUDGET_USD` | — | Alias for the above. |
+| `IDA_MCP_JEV_SESSION_REQUEST_LIMIT` | `200` | Requests per session. |
+| `IDA_MCP_INTELLIGENCE_SESSION_REQUEST_LIMIT` | — | Alias for the above. |
+| `IDA_MCP_JEV_DAILY_REQUEST_LIMIT` | `2000` | Requests per day. |
+| `IDA_MCP_INTELLIGENCE_DAILY_REQUEST_LIMIT` | — | Alias for the above. |
+
+### Jev transport
+
+| Variable | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `IDA_MCP_JEV_BASE_URL` | fixed TypeSafe endpoint | — | Override the endpoint. Custom origins require an explicit HTTPS allowlist. |
+| `IDA_MCP_JEV_CONNECT_TIMEOUT` | `5.0` | 0.1–60 | Connect timeout in seconds. |
+| `IDA_MCP_JEV_READ_TIMEOUT` | `30.0` | 0.1–300 | Read timeout in seconds. |
+| `IDA_MCP_JEV_TIMEOUT` | `60.0` | 0.1–600 | Total request timeout in seconds. |
+| `IDA_MCP_JEV_MAX_ATTEMPTS` | `3` | 1–5 | Attempts before giving up. |
+| `IDA_MCP_JEV_MAX_INPUT_CHARS` | `262144` | 1024–1000000 | Largest input packet. Drives the derived input reservation. |
+| `IDA_MCP_JEV_MAX_QUESTIONS` | `64` | — | Question ceiling for one request. |
+| `IDA_MCP_JEV_MAX_RESPONSE_BYTES` | `1048576` | 1024–16777216 | Largest accepted response body. |
+
+Legacy embedding, Gemini, native, and reranker settings are rejected with a
+structured configuration error rather than silently translated, so a stale
+configuration fails loudly instead of quietly changing behavior.
 The typed API permits up to 255 Choice options, while this server limits a
 request to 64 questions. Custom mode keeps its own configured limits. Warnings
 are emitted at 70% and 90%;
