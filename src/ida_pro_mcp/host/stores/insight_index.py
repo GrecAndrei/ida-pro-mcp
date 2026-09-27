@@ -24,30 +24,9 @@ import time
 from collections import defaultdict
 from typing import Any
 
-# Canonical behavior tags for reverse engineering functions
-CANONICAL_TAGS = frozenset({
-    "crypto",
-    "network",
-    "file_io",
-    "registry",
-    "process",
-    "string_decode",
-    "allocator",
-    "exception_handler",
-    "obfuscation",
-    "compression",
-    "hashing",
-    "encoding",
-    "parser",
-    "main",
-    "init",
-    "cleanup",
-    "loop",
-    "recursive",
-    "thunk",
-    "library",
-    "data",
-})
+# Canonical behavior tags for reverse engineering functions. Single source of
+# truth; the vocabulary is not restated here so it cannot drift.
+from ...behavior_tags import CANONICAL_TAGS  # noqa: F401  (re-exported)
 
 
 class InsightIndex:

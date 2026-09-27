@@ -37,6 +37,7 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES, is_auto_name
 from ..stores.symbol_db import SymbolDB
+from .blackboard_legacy import path_has_symlink
 from .blackboard_orchestration import (
     EVIDENCE_GRAVITY_MAX_ITEMS,
     NS_GRAVITY,
@@ -1013,25 +1014,10 @@ class ServerBlackboardMixin(
             )
         return canonical, None
 
-    @staticmethod
-    def _bb_path_has_symlink(abs_path: str, allowed_root: str) -> bool:
-        if not abs_path or not allowed_root:
-            return True
-        try:
-            rel = os.path.relpath(abs_path, allowed_root)
-        except ValueError:
-            return True
-        if rel.startswith("..") or os.path.isabs(rel):
-            return True
-        parts = rel.split(os.sep)
-        current = allowed_root
-        for part in parts:
-            if not part:
-                continue
-            current = os.path.join(current, part)
-            if os.path.islink(current):
-                return True
-        return False
+    # The symlink guard had a copy here and another in server_dispatch on top of
+    # the original in blackboard_legacy, so a traversal fix had to be applied
+    # three times and any miss left a hole. Alias the single implementation.
+    _bb_path_has_symlink = staticmethod(path_has_symlink)
 
     # ------------------------------------------------------------------
     # Findings export (canonical snapshot via blackboard_shapes)

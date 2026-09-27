@@ -40,6 +40,7 @@ from ..schemas import (
     TOOLS,
     _resolve_tool_alias,
 )
+from .blackboard_legacy import path_has_symlink
 from .postprocess import (
     PP_KEYS,
     apply_post_processing,
@@ -797,25 +798,9 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return None
         return None
 
-    @staticmethod
-    def _memory_path_has_symlink(abs_path: str, allowed_root: str) -> bool:
-        if not abs_path or not allowed_root:
-            return True
-        try:
-            rel = os.path.relpath(abs_path, allowed_root)
-        except ValueError:
-            return True
-        if rel.startswith("..") or os.path.isabs(rel):
-            return True
-        parts = rel.split(os.sep)
-        current = allowed_root
-        for part in parts:
-            if not part:
-                continue
-            current = os.path.join(current, part)
-            if os.path.islink(current):
-                return True
-        return False
+    # Alias of the single shared implementation; see the note on
+    # ServerBlackboardMixin._bb_path_has_symlink.
+    _memory_path_has_symlink = staticmethod(path_has_symlink)
 
     def _handle_memory_filesystem(self, args: dict) -> dict:
         import os as _os

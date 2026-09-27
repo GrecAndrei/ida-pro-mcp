@@ -1,3 +1,37 @@
+## 2026-09-27 — Collapse duplicated helpers onto single implementations
+
+Measured the tree for dead code before cutting anything. There is none to
+remove: across `src/`, zero top-level symbols have both zero external references
+and zero coverage, there are zero unreachable statements after
+`return`/`raise`/`break`/`continue`, and `ruff` reports no unused imports or
+variables. Surface that looks unused is reached dynamically through the action
+dispatch tables. What did exist was duplicated logic:
+
+- The path-traversal guard `path_has_symlink` existed **three times** — in
+  `blackboard_legacy`, `server_blackboard`, and `server_dispatch`. A fix to a
+  symlink escape had to be applied three times and a single miss left a hole in
+  two of them. All three names are now aliases of the one implementation in
+  `blackboard_legacy`; the three copies were verified behaviorally identical
+  across 56 path/root combinations before collapsing.
+- The 21-tag `CANONICAL_TAGS` vocabulary was duplicated verbatim in
+  `stores/insight_index.py` and `ida_mcp/tools/search/core.py`, free to drift.
+  Both now import `CANONICAL_TAGS` from the new `ida_pro_mcp/behavior_tags.py`.
+- `_sess_coerce_tag` and `_sess_coerce_untag` were byte-identical; `untag` is
+  now an alias of `tag`.
+- `_blackboard_probability` was a verbatim copy of `advisory._bounded_probability`
+  and now delegates to it, which also retires a stale `import math`.
+
+Two remaining duplicate pairs are intentionally left alone: the AST walkers in
+`ida_mcp/tools/ctree.py` and `code_helpers.py`, and the wiki header parser shared
+between host and IDA-side. The flat-plugin layout loads each `ida_mcp` tool
+module standalone and each mutates `sys.path` for `_common`, so cross-module
+imports there would break the plugin load path.
+
+Add `tests/host/test_single_implementation_guards.py`, which asserts the guards
+are the *same function object* rather than copies, so a re-introduced
+copy-paste fails a test instead of quietly diverging. Net −65 lines with three
+added tests; full offline suite 5,452 passed, 6 skipped.
+
 ## 2026-09-24 — Add an unconditional intelligence-layer off switch
 
 - Add `IDA_MCP_INTELLIGENCE_ENABLED` as a kill switch independent of the

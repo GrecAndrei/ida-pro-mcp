@@ -28,7 +28,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-import math
 import re
 import sqlite3
 import threading
@@ -1104,13 +1103,11 @@ def is_governance_error(result: dict) -> bool:
 
 
 def _blackboard_probability(value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return 0.0
-    if not math.isfinite(number):
-        return 0.0
-    return round(max(0.0, min(1.0, number)), 4)
+    # One clamp for every confidence/priority field; this was a verbatim copy of
+    # advisory._bounded_probability, so a change to one left the other stale.
+    from ..intelligence.advisory import _bounded_probability
+
+    return _bounded_probability(value)
 
 
 def _blackboard_address(value: Any) -> str:
