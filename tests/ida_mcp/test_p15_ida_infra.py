@@ -25,6 +25,11 @@ from pathlib import Path
 
 import pytest
 
+from tests._isolated_repo_loader import (
+    load_standalone_package_module,
+    register_ida_mcp_package,
+)
+
 REPO = Path(__file__).resolve().parents[2]
 IDA_MCP = REPO / "src" / "ida_pro_mcp" / "ida_mcp"
 
@@ -32,17 +37,13 @@ IDA_MCP = REPO / "src" / "ida_pro_mcp" / "ida_mcp"
 def _load_standalone(relpath: str, name: str):
     """Load an ida_mcp source module standalone (no package init).
 
-    ``__package__`` is pinned so ``from .rpc import ...`` style relative
-    imports resolve through the stub package below instead of failing.
+    Registers the module inside the ``ida_pro_mcp.ida_mcp`` stub package so its
+    ``from .rpc import ...`` style relative imports resolve against the stubs
+    registered by the caller, without tripping the deprecated
+    ``__package__ != __spec__.parent`` path. See
+    ``tests._isolated_repo_loader.load_standalone_package_module``.
     """
-    path = IDA_MCP / f"{relpath}.py"
-    spec = importlib.util.spec_from_file_location(name, str(path))
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "ida_pro_mcp.ida_mcp"
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_standalone_package_module(relpath, name)
 
 
 def _run_worker(fn):
@@ -64,16 +65,8 @@ def _run_worker(fn):
 
 
 def _register_ida_mcp_pkg():
-    """Register ``ida_pro_mcp.ida_mcp`` as a stub package pointing at the real
-    source dir so standalone loads can resolve ``ida_pro_mcp.ida_mcp.*``
-    submodules (via sys.modules) without importing the real package init."""
-    pkg = sys.modules.get("ida_pro_mcp") or types.ModuleType("ida_pro_mcp")
-    pkg.__path__ = [str(REPO / "src" / "ida_pro_mcp")]
-    sys.modules["ida_pro_mcp"] = pkg
-    sub = sys.modules.get("ida_pro_mcp.ida_mcp") or types.ModuleType("ida_pro_mcp.ida_mcp")
-    sub.__path__ = [str(IDA_MCP)]
-    sys.modules["ida_pro_mcp.ida_mcp"] = sub
-    return sub
+    """Register the ``ida_pro_mcp.ida_mcp`` stub package; see the shared loader."""
+    return register_ida_mcp_package()
 
 
 def _install_ida_stubs():

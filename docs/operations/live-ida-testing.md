@@ -60,15 +60,20 @@ The licensed-IDA suites run with `IDA_MCP_INTELLIGENCE_MODE=disabled` and
 therefore remain deterministic and offline with respect to providers. They
 verify lexical indexing and search without a model. Remote Jev checks are a
 separate opt-in suite: they do not start IDA and require a rotated
-`TYPESAFE_API_KEY`, explicit pricing, and a temporary cache:
+`TYPESAFE_API_KEY`, the layer armed, explicit pricing, and a temporary cache:
 
 ```bash
 IDA_MCP_LIVE_TEST=1 \
 IDA_MCP_INTELLIGENCE_MODE=jev \
+IDA_MCP_INTELLIGENCE_ENABLED=1 \
 IDA_MCP_JEV_INPUT_USD_PER_MTOK=1 \
 IDA_MCP_JEV_OUTPUT_USD_PER_MTOK=1 \
 pytest -q tests/integration/test_jev_live.py -m live_jev
 ```
+
+`IDA_MCP_INTELLIGENCE_ENABLED=1` is required: without it the operator kill
+switch keeps the whole layer off, the run stays deterministic, and the suite
+would pass without ever contacting Jev.
 
 Do not put credentials in reports or client configuration. A missing or
 unusable Jev runtime fails this explicit remote-provider run. A missing or

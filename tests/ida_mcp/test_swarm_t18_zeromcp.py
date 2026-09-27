@@ -23,30 +23,22 @@ import sys
 import types
 from pathlib import Path
 
+from tests._isolated_repo_loader import (
+    load_standalone_package_module,
+    register_ida_mcp_package,
+)
+
 REPO = Path(__file__).resolve().parents[2]
 IDA_MCP = REPO / "src" / "ida_pro_mcp" / "ida_mcp"
 
 
 def _load_standalone(relpath: str, name: str):
     """Load an ida_mcp source module standalone (no package init)."""
-    path = IDA_MCP / f"{relpath}.py"
-    spec = importlib.util.spec_from_file_location(name, str(path))
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "ida_pro_mcp.ida_mcp"
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_standalone_package_module(relpath, name)
 
 
 def _register_ida_mcp_pkg():
-    pkg = sys.modules.get("ida_pro_mcp") or types.ModuleType("ida_pro_mcp")
-    pkg.__path__ = [str(REPO / "src" / "ida_pro_mcp")]
-    sys.modules["ida_pro_mcp"] = pkg
-    sub = sys.modules.get("ida_pro_mcp.ida_mcp") or types.ModuleType("ida_pro_mcp.ida_mcp")
-    sub.__path__ = [str(IDA_MCP)]
-    sys.modules["ida_pro_mcp.ida_mcp"] = sub
-    return sub
+    return register_ida_mcp_package()
 
 
 def _load_mcp_http():

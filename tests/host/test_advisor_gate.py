@@ -12,11 +12,11 @@ from ida_pro_mcp.host.intelligence.advisor_gate import (
 
 
 def test_pool_caps_named():
-    assert DETAIL_POOL_CAPS == {"triage": 4, "normal": 8, "deep": 16}
-    assert pool_cap("triage") == 4
-    assert pool_cap("normal") == 8
-    assert pool_cap("deep") == 16
-    assert pool_cap("wat") == 8
+    assert DETAIL_POOL_CAPS == {"triage": 16, "normal": 32, "deep": 64}
+    assert pool_cap("triage") == 16
+    assert pool_cap("normal") == 32
+    assert pool_cap("deep") == 64
+    assert pool_cap("wat") == 32
 
 
 def test_evidence_card_caps_signatures():

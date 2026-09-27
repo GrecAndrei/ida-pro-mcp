@@ -280,8 +280,10 @@ makes the selected advisory requests network-visible:
   and compact signatures. Raw decompilation, prompts, completions, and
   credentials are not logged or persisted. Answers cannot authorize mutations,
   satisfy `risk_ack`, or write blackboard findings; failures fail closed to
-  lexical order. A unified advisor stage, full evidence card, disagreement
-  flag, and triage/deep profiles are **Planned** — see
+  lexical order. The shared advisor stage can assess a bounded function
+  neighborhood in one request and suggest a next deterministic `ida_*` call;
+  the caller decides whether to run it. Jev remains optional and provider-neutral
+  tools stay usable in disabled mode; see
   [Intelligence](docs/wiki/core/intelligence.md).
 - Custom cloud origins require an explicit HTTPS allowlist. Plain HTTP is
   accepted only for loopback endpoints when explicitly enabled.
@@ -380,8 +382,8 @@ optional Jev remote checks stay opt-in; see `AGENTS.md` and
 - [Investigation workspace](docs/wiki/core/investigation.md) — findings,
   evidence, targets, and exports.
 - [Intelligence and providers](docs/wiki/core/intelligence.md) — Jev, custom
-  BYOK, disabled mode, usage budgets, lexical retrieval, and Planned advisor
-  redesign notes.
+  BYOK, disabled mode, usage budgets, lexical retrieval, and shared
+  investigation advisories.
 - [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration.
 - [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
   flow for readers who need implementation detail.

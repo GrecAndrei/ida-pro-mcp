@@ -13,8 +13,10 @@ The server uses deterministic IDA SDK calls. Intelligence is explicitly
 configured as `jev`, `custom`, or `disabled`; disabled mode provides
 fully-local lexical retrieval and there is no local/Gemini/native model
 fallback. Jev/custom answers are host-side typed questions only and cannot
-authorize mutations — see [Intelligence](core/intelligence.md) for shipped
-vs Planned advisor redesign.
+authorize mutations. When enabled, a decompile result can include a shared
+function-neighborhood assessment and one suggested next `ida_*` call; the MCP
+client decides whether to make that call. See
+[Intelligence](core/intelligence.md).
 
 When an alpha release is published, the GitHub release also includes a source
 bundle with the installer. Verify its `SHA256SUMS`, extract it, and run

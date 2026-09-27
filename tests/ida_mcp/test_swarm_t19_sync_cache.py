@@ -19,6 +19,8 @@ import threading
 import types
 from pathlib import Path
 
+from tests._isolated_repo_loader import load_standalone_package_module
+
 REPO = Path(__file__).resolve().parents[2]
 IDA_MCP = REPO / "src" / "ida_pro_mcp" / "ida_mcp"
 
@@ -58,14 +60,7 @@ def _install_ida_stubs():
 
 
 def _load_standalone(relpath: str, name: str):
-    path = IDA_MCP / f"{relpath}.py"
-    spec = importlib.util.spec_from_file_location(name, str(path))
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "ida_pro_mcp.ida_mcp"
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_standalone_package_module(relpath, name)
 
 
 def _load_sync():

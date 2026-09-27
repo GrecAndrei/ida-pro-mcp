@@ -140,7 +140,17 @@ shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-install
 at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
 
 Provider mode is selected explicitly with `IDA_MCP_INTELLIGENCE_MODE=jev`,
-`custom`, or `disabled`. Jev uses the fixed TypeSafe endpoint over host-side
+`custom`, or `disabled`, and the whole layer is governed by
+`IDA_MCP_INTELLIGENCE_ENABLED`. Unset means "follow the mode". An explicit
+false value is an unconditional kill switch: it outranks the mode environment
+variable, the persisted state file, and installer-written client configuration,
+and it short-circuits leftover provider, legacy, and conflict checks so
+switching off can never be blocked by other configuration. A malformed value
+fails closed. With the layer off, no provider is constructed, no request is
+attempted, and the deterministic pool order plus lexical retrieval remain
+available; `provider_status` reports `intelligence_enabled`,
+`deterministic_only`, and `disabled_reason` (`kill_switch` or `mode`).
+Jev uses the fixed TypeSafe endpoint over host-side
 HTTP; custom origins require an explicit HTTPS allowlist, with loopback-only
 HTTP as an opt-in. Typed questions are `choice` / `noul` / `score` only on
 compact signatures — never mutations, `risk_ack`, or blackboard writes. Do not
@@ -151,13 +161,20 @@ Provider tests use mocked transports; report any unavailable external Jev or
 licensed IDA runtime rather than substituting another backend.
 
 **Shipped vs Planned (intelligence):** Jev is called from multiple host sites
-(`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base), not a single
-advisor stage. `advisory_ranking` crumbs exist on some responses; a full
-evidence card, disagreement flag, triage/deep session profiles, and a unified
-advisor stage are **Planned** — do not document them as shipped. Architecture
-advisory may still fill processor/bitness into an inferred profile (footgun);
-**Planned** is no arch auto-fill until stage + evidence + disagreement land.
-See `docs/wiki/core/intelligence.md`.
+(`ask_behavior`, `rank_targets`, rerank, arch/GP/load-base) through the shared
+advisor gate. Single-question candidate windows follow
+`detail=triage|normal|deep` at 16/32/64; multi-question paths honor the
+provider limit. The decompile neighborhood uses up to 8/16/30 candidates with
+two questions each plus three shared questions. The decompile context path
+also sends a shared compact focus/caller/callee packet and returns a typed
+neighborhood assessment with an optional deterministic `ida_*` suggestion;
+the caller decides whether to run it. Jev spend is opt-in: the host applies no
+price by default and the ledger blocks Jev requests before transport while
+pricing is unknown, and no mode receives an automatic budget multiplier. Jev's
+current model context and the opt-in pricing and budget limits are documented in
+`docs/wiki/core/intelligence.md`. Architecture advisory is a hypothesis only and
+does not auto-fill processor, bitness, or endianness. Keep new advisories
+provider-neutral and optional.
 
 ## Tests, coverage, and live IDA
 

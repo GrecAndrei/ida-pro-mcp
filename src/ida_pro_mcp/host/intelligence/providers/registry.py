@@ -36,7 +36,11 @@ def build_provider(
     raise ValueError("unsupported intelligence mode")
 
 
-def default_usage_ledger(*, env: Mapping[str, str] | None = None) -> UsageLedger:
+def default_usage_ledger(
+    *,
+    env: Mapping[str, str] | None = None,
+    max_input_chars: int | None = None,
+) -> UsageLedger:
     # Resolve the environment at call time. Tests, per-install launchers, and
     # multiple host instances may select different cache roots after this
     # module has already been imported.
@@ -48,7 +52,12 @@ def default_usage_ledger(*, env: Mapping[str, str] | None = None) -> UsageLedger
         default_dir = CACHE_DIR
     source = os.environ if env is None else env
     cache_dir = source.get("IDA_MCP_CACHE_DIR") or source.get("IDA_MCP_DATA_DIR") or default_dir
-    budget = BudgetConfig.from_env(dict(env)) if env is not None else None
+    if max_input_chars is None:
+        try:
+            max_input_chars = resolve_provider_config(env=env).max_input_chars
+        except Exception:
+            max_input_chars = None
+    budget = BudgetConfig.from_env(dict(source), max_input_chars=max_input_chars)
     return UsageLedger(os.path.join(str(cache_dir), "provider_usage.sqlite3"), budget=budget)
 
 
@@ -63,7 +72,7 @@ def resolve_provider(
 ):
     config = resolve_provider_config(env=env, state=state, state_path=state_path)
     if with_ledger and ledger is None:
-        ledger = default_usage_ledger(env=env)
+        ledger = default_usage_ledger(env=env, max_input_chars=config.max_input_chars)
     return build_provider(config, transport=transport, ledger=ledger)
 
 

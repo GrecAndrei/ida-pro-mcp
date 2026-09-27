@@ -12,9 +12,11 @@ import contextlib
 import copy
 import hashlib
 import json
+import re
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 from . import helpers as _helpers
@@ -27,6 +29,30 @@ from .core import (
 from .embeddings import _file_mtime_ns
 from .lexical import LexicalFunctionIndex, signature_index_path
 
+_DECOMPILER_LITERAL_RE = re.compile(r'(?s)(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')')
+_DECOMPILER_COMMENT_RE = re.compile(r"(?s)/\*.*?\*/|//[^\r\n]*")
+_CALL_EXPRESSION_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_CONDITION_OPERATOR_RE = re.compile(
+    r"==|!=|<=|>=|&&|\|\||(?<![<])<(?![<])|(?<![-<>])>(?![>])|&|\||\^|!"
+)
+_NUMERIC_LITERAL_RE = re.compile(r"0[xX][0-9A-Fa-f]+|\b\d+(?:\.\d+)?\b")
+_SAFE_FEATURE_LABEL_RE = re.compile(r"[A-Za-z0-9_.$:+/()-]{1,96}")
+_CONTROL_CALLS = frozenset({"if", "for", "while", "switch", "sizeof", "alignof", "catch"})
+_CONDITION_OPERATOR_LABELS = {
+    "==": "equal",
+    "!=": "not_equal",
+    "<=": "less_equal",
+    ">=": "greater_equal",
+    "<": "less_than",
+    ">": "greater_than",
+    "&&": "and",
+    "||": "or",
+    "&": "bit_and",
+    "|": "bit_or",
+    "^": "bit_xor",
+    "!": "not",
+}
+
 
 def _intel_profile_enabled() -> bool:
     """Look up the canonical symbol at call time so tests/runtime can toggle
@@ -34,6 +60,314 @@ def _intel_profile_enabled() -> bool:
     from . import core as intelligence_core
 
     return bool(intelligence_core.INTEL_PROFILE)
+
+
+def _compact_function_signature(
+    body: Any,
+    prototype: Any = "",
+    function_name: Any = "",
+) -> str:
+    """Describe a decompiled function without forwarding its source text.
+
+    The signature retains useful symbol/API names, call sites, and coarse
+    control-flow shape. Literal values and comments are removed before any
+    text-derived feature is collected; arguments, statements, and expressions
+    stay local to IDA.
+    """
+    source = str(body or "")
+    source = _DECOMPILER_LITERAL_RE.sub(" ", source)
+    source = _DECOMPILER_COMMENT_RE.sub(" ", source)
+    prototype_text = _DECOMPILER_LITERAL_RE.sub(" ", str(prototype or ""))
+    prototype_text = _DECOMPILER_COMMENT_RE.sub(" ", prototype_text)
+    if not source.strip() and not prototype_text.strip():
+        return ""
+
+    function_symbol = str(function_name or "").strip().casefold()
+    call_names: list[str] = []
+    seen_calls: set[str] = set()
+    call_expressions = [
+        name
+        for name in _CALL_EXPRESSION_RE.findall(source)
+        if name.lower() not in _CONTROL_CALLS and name.casefold() != function_symbol
+    ]
+    for name in call_expressions:
+        if name in seen_calls:
+            continue
+        seen_calls.add(name)
+        call_names.append(name[:96])
+        if len(call_names) >= 48:
+            break
+
+    identifier_terms = _extract_signature(source, max_idents=256)
+    prototype_terms = _extract_signature(prototype_text, max_idents=48)
+    conditionals = len(re.findall(r"\b(?:if|switch|case)\b|\?", source))
+    loops = len(re.findall(r"\b(?:for|while|do)\b", source))
+    comparisons = len(re.findall(r"==|!=|<=|>=|(?<![<])<(?!<)|(?<![>])>(?!>)", source))
+    member_accesses = len(re.findall(r"->|(?<!\.)\.(?!\.)", source))
+    indexed_accesses = len(re.findall(r"\[[^]\r\n]{0,80}\]", source))
+    shape = (
+        f"calls={len(call_expressions)}, conditionals={conditionals}, loops={loops}, "
+        f"comparisons={comparisons}, member_accesses={member_accesses}, "
+        f"indexed_accesses={indexed_accesses}"
+    )
+
+    fields = [f"shape: {shape}"]
+    if prototype_terms:
+        fields.append(f"prototype terms: {prototype_terms}")
+    if call_names:
+        fields.append(f"call symbols: {' '.join(call_names)}")
+    if identifier_terms:
+        fields.append(f"identifier terms: {identifier_terms}")
+    return "; ".join(fields)[:8_192]
+
+
+def _safe_feature_labels(values: Any, *, limit: int = 24) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        return []
+    labels: list[str] = []
+    for value in values[: max(0, int(limit))]:
+        if not isinstance(value, str):
+            continue
+        label = value.strip().split(" — ", 1)[0]
+        if _SAFE_FEATURE_LABEL_RE.fullmatch(label) and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _function_evidence_features(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Project deterministic decompiler output into compact safe evidence."""
+    features: dict[str, Any] = {}
+    for source_key, target_key in (
+        ("api_calls", "api_calls"),
+        ("crypto_hints", "crypto_hints"),
+        ("behavior_tags", "ida_behavior_tags"),
+    ):
+        labels = _safe_feature_labels(record.get(source_key))
+        if labels:
+            features[target_key] = labels
+
+    patterns: list[str] = []
+    raw_patterns = record.get("dangerous_patterns")
+    if not isinstance(raw_patterns, (list, tuple)):
+        raw_patterns = []
+    for item in raw_patterns[:24]:
+        if isinstance(item, Mapping):
+            label = item.get("pattern")
+        elif isinstance(item, str):
+            label = item.split(" — ", 1)[0]
+        else:
+            continue
+        if isinstance(label, str):
+            safe = _safe_feature_labels([label], limit=1)
+            if safe and safe[0] not in patterns:
+                patterns.append(safe[0])
+    if patterns:
+        features["risk_patterns"] = patterns
+
+    for source_key, target_key in (("callers", "caller_symbols"), ("callees", "callee_symbols")):
+        neighbors = record.get(source_key)
+        if not isinstance(neighbors, list):
+            continue
+        compact_neighbors: list[dict[str, str]] = []
+        for item in neighbors[:16]:
+            if not isinstance(item, Mapping):
+                continue
+            address = item.get("addr") or item.get("address")
+            name = item.get("name")
+            compact: dict[str, str] = {}
+            if isinstance(address, str) and re.fullmatch(r"(?:0x)?[0-9A-Fa-f]{1,16}", address.strip()):
+                compact["address"] = address.strip()[:18]
+            safe_name = _safe_feature_labels([name], limit=1) if isinstance(name, str) else []
+            if safe_name:
+                compact["name"] = safe_name[0]
+            if compact:
+                compact_neighbors.append(compact)
+        if compact_neighbors:
+            features[target_key] = compact_neighbors
+
+    complexity = record.get("complexity")
+    if isinstance(complexity, Mapping):
+        compact_complexity = {
+            key: value
+            for key in ("lines", "calls", "branches", "loops", "xor_ops", "switch_cases")
+            if isinstance((value := complexity.get(key)), int)
+            and not isinstance(value, bool)
+            and 0 <= value <= 1_000_000
+        }
+        if compact_complexity:
+            features["complexity"] = compact_complexity
+
+    raw_structure = record.get("structure")
+    if isinstance(raw_structure, Mapping):
+        compact_structure: dict[str, Any] = {}
+        cfg = raw_structure.get("cfg")
+        if isinstance(cfg, Mapping):
+            for source_key, target_key in (
+                ("nodes", "blocks"),
+                ("edges", "edges"),
+                ("entry_blocks", "entry_blocks"),
+                ("exit_blocks", "exit_blocks"),
+                ("back_edges", "back_edges"),
+                ("cyclomatic_complexity", "cyclomatic_complexity"),
+            ):
+                value = cfg.get(source_key)
+                if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1_000_000:
+                    compact_structure[target_key] = value
+        call_targets = _safe_feature_labels(raw_structure.get("call_targets"))
+        if call_targets:
+            compact_structure["call_targets"] = call_targets
+        points = raw_structure.get("control_points")
+        if isinstance(points, list):
+            control_flow: list[dict[str, Any]] = []
+            for point in points[:8]:
+                if not isinstance(point, Mapping):
+                    continue
+                kind_values = _safe_feature_labels([point.get("kind")], limit=1)
+                if not kind_values:
+                    continue
+                condition = str(point.get("condition") or "")
+                condition = _DECOMPILER_LITERAL_RE.sub(" ", condition)
+                condition = _DECOMPILER_COMMENT_RE.sub(" ", condition)
+                control = {"kind": kind_values[0]}
+                variables = _extract_signature(condition, max_idents=12).split()
+                if variables:
+                    control["variables"] = variables
+                operators = [
+                    _CONDITION_OPERATOR_LABELS[token]
+                    for token in _CONDITION_OPERATOR_RE.findall(condition)
+                ]
+                if operators:
+                    control["operators"] = operators[:8]
+                if _NUMERIC_LITERAL_RE.search(condition):
+                    control["has_constant"] = True
+                control_flow.append(control)
+            if control_flow:
+                compact_structure["control_flow"] = control_flow
+            kinds = _safe_feature_labels(
+                [item.get("kind") for item in control_flow],
+                limit=8,
+            )
+            if kinds:
+                compact_structure["control_kinds"] = kinds
+        dataflow = raw_structure.get("dataflow")
+        if isinstance(dataflow, Mapping):
+            arguments = _safe_feature_labels(dataflow.get("argument_variables"), limit=16)
+            if arguments:
+                compact_structure["argument_names"] = arguments
+        if compact_structure:
+            features["structure"] = compact_structure
+    return features
+
+
+def _decompile_neighborhood_candidates(
+    payload: Mapping[str, Any],
+    pseudocode: str,
+    focus_address: str,
+    focus_name: str,
+) -> list[dict[str, Any]]:
+    """Extract compact local signatures for a focus function and its chain.
+
+    Decompiler text remains host-local. Only symbol/API names, coarse
+    structural counts, and the observed caller/callee relation are returned
+    for a typed provider request.
+    """
+    records = payload.get("results")
+    roots = records if isinstance(records, list) else [payload]
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(
+        address: Any,
+        name: Any,
+        body: Any,
+        relationship: str,
+        prototype: Any = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        signature = _compact_function_signature(body, prototype, name)
+        if not signature:
+            return
+        addr_text = str(address or "")[:64]
+        name_text = str(name or "")[:256]
+        identity = addr_text or f"{relationship}:{name_text}:{signature[:64]}"
+        if identity in seen:
+            return
+        seen.add(identity)
+        candidate = {
+            "address": addr_text,
+            "name": name_text,
+            "relationship": relationship,
+            "signature": signature,
+        }
+        if isinstance(metadata, Mapping):
+            candidate.update(_function_evidence_features(metadata))
+        candidates.append(candidate)
+
+    for root_index, root in enumerate(roots):
+        if not isinstance(root, Mapping):
+            continue
+        root_addr = root.get("addr") or (focus_address if root_index == 0 else "")
+        root_name = root.get("name") or (focus_name if root_index == 0 else "")
+        body = root.get("pseudocode") or root.get("code")
+        if root_index == 0 and not body:
+            body = pseudocode
+        add(
+            root_addr,
+            root_name,
+            body,
+            "focus" if root_index == 0 else "batch_member",
+            root.get("prototype"),
+            root,
+        )
+
+        related_groups = [
+            (relationship, root.get(field))
+            for field, relationship in (
+                ("callers_context", "caller"),
+                ("callees_context", "callee"),
+            )
+        ]
+        max_related = max(
+            (len(items) for _relationship, items in related_groups if isinstance(items, list)),
+            default=0,
+        )
+        for related_index in range(max_related):
+            for relationship, related in related_groups:
+                if not isinstance(related, list) or related_index >= len(related):
+                    continue
+                item = related[related_index]
+                if not isinstance(item, Mapping):
+                    continue
+                add(
+                    item.get("addr") or item.get("address"),
+                    item.get("name"),
+                    item.get("signature") or item.get("pseudocode_head"),
+                    relationship,
+                    metadata=item,
+                )
+    return candidates
+
+
+def _recommended_ida_call(evidence_kind: Any, address: Any) -> dict[str, Any] | None:
+    """Map a typed evidence choice to one provider-neutral public operation."""
+    target = str(address or "").strip()[:64]
+    if not target:
+        return None
+    operations: dict[str, tuple[str, dict[str, Any]]] = {
+        "inspect_callers": ("ida_callers", {"address": target}),
+        "inspect_callees": ("ida_callees", {"address": target}),
+        "inspect_xrefs": ("ida_xrefs_to", {"address": target}),
+        "inspect_control_flow": (
+            "ida_decompile",
+            {"address": target, "details": True},
+        ),
+        "inspect_strings": ("ida_list_strings", {"limit": 50}),
+    }
+    selected = operations.get(str(evidence_kind or ""))
+    if selected is None:
+        return None
+    tool, arguments = selected
+    return {"tool": tool, "arguments": arguments}
 
 
 class ContextAssembler:
@@ -772,6 +1106,7 @@ class ContextAssembler:
         idb_path: str,
         bb_store=None,
         mode: str = "full",
+        detail: str = "normal",
     ) -> dict[str, Any]:
         """
         Build a context_pack for injection into the tool response.
@@ -797,7 +1132,15 @@ class ContextAssembler:
                 self._merge_related_findings(pack, bb_addr, "address_linked", session_id=session_id)
 
         # ── 2. Decompile-specific enrichment
-        is_decompile = tool == "code" and action in ("decompile", "semantic_decompile", "decompile_chain")
+        is_decompile = tool == "ida_decompile" or (
+            tool == "code"
+            and action in (
+                "decompile",
+                "semantic_decompile",
+                "decompile_chain",
+                "smart_decompile",
+            )
+        )
         pseudocode = ""
         if is_decompile:
             pseudocode = payload.get("code") or payload.get("pseudocode") or payload.get("output") or ""
@@ -811,7 +1154,17 @@ class ContextAssembler:
         if pseudocode and len(pseudocode.strip()) > 80:
             t_dec = self._perf_start()
             with contextlib.suppress(Exception):
-                self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id, mode=mode)
+                self._enrich_decompile(
+                    pack,
+                    payload,
+                    pseudocode,
+                    addr,
+                    idb_path,
+                    bb_store,
+                    session_id,
+                    mode=mode,
+                    detail=detail,
+                )
             self._perf_end(session_id, "decompile_enrich", t_dec)
 
         # ── 2b. Search/xref result enrichment ─────────────────────────────
@@ -898,57 +1251,130 @@ class ContextAssembler:
         bb_store,
         session_id: str,
         mode: str = "full",
+        detail: str = "normal",
     ) -> None:
         """
         Decompile-specific enrichment. Deterministic first, provider advisory second.
 
         Priority order:
-          1. Behavior classification via the explicit typed-question provider (full mode)
+          1. Neighborhood assessment via the typed-question provider (detail-scaled)
           2. Suggested next actions (full mode)
           3. Signature-index similarity when an explicit vector-compatible extension is supplied
           4. Cross-address blackboard retrieval (callgraph-linked, fast SQL)
           5. Semantic blackboard retrieval (slow, only if bb_store populated)
         """
         _full = mode == "full"
-        func_name = payload.get("name") or f"sub_{addr}"
+        advisor_detail = str(detail or "normal").strip().lower()
+        if advisor_detail not in {"triage", "normal", "deep"}:
+            advisor_detail = "normal"
+        result_rows = payload.get("results")
+        first_result = (
+            result_rows[0]
+            if isinstance(result_rows, list)
+            and result_rows
+            and isinstance(result_rows[0], Mapping)
+            else {}
+        )
+        func_name = payload.get("name") or first_result.get("name") or f"sub_{addr}"
 
         # ── Advisory behavior decision through the explicit provider ──
         # Only a compact signature/metadata view crosses the provider boundary;
         # raw decompilation remains local and is never persisted by this path.
-        behavior_hits: list = []
-        if _full and pseudocode.strip():
+        behavior_hits: list[dict[str, Any]] = []
+        if pseudocode.strip():
             try:
-                signature = _extract_signature(pseudocode, max_idents=48)
+                candidates = _decompile_neighborhood_candidates(
+                    payload,
+                    pseudocode,
+                    str(addr),
+                    str(func_name),
+                )
+                signature = candidates[0]["signature"] if candidates else ""
                 classifier = getattr(self, "_classifier", None)
-                if classifier is not None and not isinstance(classifier, BehaviorClassifier):
+                if signature and classifier is not None and not isinstance(classifier, BehaviorClassifier):
                     # Focused callers may inject a deterministic classifier
                     # double; production always uses the provider-backed
                     # BehaviorClassifier below.
                     advisory = classifier.classify(signature, threshold=0.0, top_k=4, block=False)
-                else:
-                    from .advisory import ask_behavior
+                    if isinstance(advisory, list):
+                        behavior_hits = advisory
+                elif candidates:
+                    from .advisory import assess_function_neighborhood
 
-                    advisory = ask_behavior(
-                        {
-                            "address": addr,
-                            "name": str(func_name)[:256],
-                            "signature": signature,
-                        },
-                        session_id=session_id,
-                        operation="context_behavior",
+                    focus_record = (
+                        result_rows[0]
+                        if isinstance(result_rows, list) and result_rows and isinstance(result_rows[0], Mapping)
+                        else payload
                     )
-                if isinstance(advisory, list):
-                    behavior_hits = advisory
-                elif isinstance(advisory, dict) and advisory.get("error"):
+                    advisory = assess_function_neighborhood(
+                        {
+                            "focus_address": str(addr),
+                            "focus_name": str(func_name)[:256],
+                            "focus_signature": signature,
+                            "architecture": focus_record.get("architecture") or focus_record.get("processor"),
+                            "bitness": focus_record.get("bitness"),
+                            "endian": focus_record.get("endian"),
+                            "file_format": focus_record.get("file_format"),
+                            "caller_count": focus_record.get("caller_count"),
+                            "callee_count": focus_record.get("callee_count"),
+                            "candidate_source": "decompile_chain" if len(candidates) > 1 else "decompile",
+                        },
+                        candidates,
+                        session_id=session_id,
+                        operation="context_neighborhood",
+                        detail=advisor_detail,
+                    )
+                else:
+                    advisory = None
+                if isinstance(advisory, dict) and advisory.get("error"):
                     pack["intelligence_provider"] = {
                         "code": advisory.get("code"),
                         "message": advisory.get("message"),
                     }
+                elif isinstance(advisory, dict) and isinstance(advisory.get("functions"), list):
+                    behavior_hits = advisory["functions"]
+                    focus_hit = next(
+                        (
+                            hit
+                            for hit in behavior_hits
+                            if hit.get("relationship") == "focus"
+                            or str(hit.get("address") or "") == str(addr)
+                        ),
+                        None,
+                    )
+                    pack["investigation_advisory"] = {
+                        "priorities": advisory.get("priorities", []),
+                        "recommended_next": advisory.get("recommended_next"),
+                        "recommended_evidence": advisory.get("recommended_evidence"),
+                        "recommended_tool_call": _recommended_ida_call(
+                            advisory.get("recommended_evidence"), addr
+                        ),
+                        "advisory_order": [
+                            {
+                                key: item.get(key)
+                                for key in ("candidate_id", "address", "name", "relationship")
+                            }
+                            for item in advisory.get("advisory_order", [])
+                            if isinstance(item, Mapping)
+                        ],
+                        "evidence_sufficiency": advisory.get("evidence_sufficiency"),
+                        "priority_disagreement": advisory.get("priority_disagreement"),
+                        "evidence": advisory.get("evidence", {}),
+                        "disagreement": advisory.get("disagreement", False),
+                        "applied": False,
+                    }
+                    if focus_hit is not None:
+                        pack["behavior_tags"] = [focus_hit.get("behavior")]
+                elif isinstance(advisory, list):
+                    behavior_hits = advisory
             except Exception:
                 behavior_hits = []
         if behavior_hits:
             pack["behavior_classifications"] = behavior_hits
-            pack["behavior_tags"] = [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")]
+            pack.setdefault(
+                "behavior_tags",
+                [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")],
+            )
 
         # ── Step 4: Next-action suggestion (full mode only).
         # The earlier API-pattern/structural rule evaluation was removed; only

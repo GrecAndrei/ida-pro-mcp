@@ -52,3 +52,71 @@ def test_main_cli_argument_parsing_and_env(monkeypatch, tmp_path):
     assert captured_env["IDA_MCP_LIVE_BINARY"] == str(dummy_bin.resolve())
     assert captured_env["IDA_MCP_INTELLIGENCE_MODE"] == "disabled"
     assert captured_env["IDA_MCP_JEV_MODEL"] == "jev-latest"
+    assert captured_env["IDA_MCP_INTELLIGENCE_ENABLED"] == "0"
+
+
+def _run(monkeypatch, args, capsys):
+    captured: dict = {}
+
+    def mock_subprocess_run(cmd, cwd=None, env=None, check=False):
+        captured["cmd"] = list(cmd)
+        captured["env"] = dict(env or {})
+        return mock.MagicMock(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr(sys, "argv", ["run_live_agent_surface.py", *args])
+    rc = run_live_agent_surface.main()
+    return rc, captured, capsys.readouterr().out
+
+
+def test_layer_switch_defaults_to_off_and_warns(monkeypatch, capsys):
+    rc, captured, out = _run(
+        monkeypatch, ["--intelligence-mode", "custom"], capsys
+    )
+    assert rc == 0
+    assert captured["env"]["IDA_MCP_INTELLIGENCE_MODE"] == "custom"
+    assert captured["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "0"
+    assert "intelligence layer is off" in out
+    assert "--intelligence-enabled" in out
+
+
+def test_layer_switch_arms_provider_without_warnings(monkeypatch, capsys):
+    rc, captured, out = _run(
+        monkeypatch,
+        ["--intelligence-mode", "custom", "--intelligence-enabled"],
+        capsys,
+    )
+    assert rc == 0
+    assert captured["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "1"
+    assert "intelligence layer is off" not in out
+
+
+def test_jev_spend_gate_warns_until_priced(monkeypatch, capsys):
+    rc, captured, out = _run(
+        monkeypatch, ["--intelligence-mode", "jev", "--intelligence-enabled"], capsys
+    )
+    assert rc == 0
+    assert captured["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "1"
+    assert "IDA_MCP_JEV_INPUT_USD_PER_MTOK" not in captured["env"]
+    assert "Jev spend is disabled" in out
+
+    rc, captured, out = _run(
+        monkeypatch,
+        ["--intelligence-mode", "jev", "--intelligence-enabled",
+         "--jev-input-usd-per-mtok", "0.042", "--jev-output-usd-per-mtok", "0"],
+        capsys,
+    )
+    assert rc == 0
+    assert captured["env"]["IDA_MCP_JEV_INPUT_USD_PER_MTOK"] == "0.042"
+    assert captured["env"]["IDA_MCP_JEV_OUTPUT_USD_PER_MTOK"] == "0"
+    assert "Jev spend is disabled" not in out
+
+
+def test_disabled_mode_emits_no_provider_warnings(monkeypatch, capsys):
+    rc, captured, out = _run(
+        monkeypatch, ["--intelligence-mode", "disabled"], capsys
+    )
+    assert rc == 0
+    assert captured["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "0"
+    assert "intelligence layer is off" not in out
+    assert "Jev spend is disabled" not in out

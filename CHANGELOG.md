@@ -1,3 +1,202 @@
+## 2026-09-27 — Stop the test loader relying on deprecated import behavior
+
+`ida_mcp` modules are loaded standalone so tests can exercise them without the
+IDA SDK. The loader registered each module under a flat top-level `sys.modules`
+key and then hand-pinned `__package__` to the real package name, which left
+`__package__ != __spec__.parent` — a state the import system reports as
+deprecated. It warns today, and the fallback that keeps `from .rpc import ...`
+resolving is slated for removal, so 36 tests across `test_p15_ida_infra`,
+`test_swarm_t18_zeromcp`, `test_swarm_t19_sync_cache`,
+`test_error_handling_deep_boundary_matrix_99`, and
+`test_coverage_protocol_edges` depended on it. The suite passed only because
+warnings were not surfaced; running with `-W error::DeprecationWarning` failed
+all 36 and emitted 58 warnings.
+
+`load_standalone_package_module` in `tests/_isolated_repo_loader.py` now
+registers the module as `ida_pro_mcp.ida_mcp.<name>`, so the two values agree by
+construction and relative imports resolve to the same stubs. Per-test
+isolation is unaffected: the key is still unique per test and `conftest.py`
+snapshots and restores `sys.modules` around each test. The loader also cleans up
+its `sys.modules` entry when `exec_module` raises, so a failed load can no
+longer leave a half-initialized module for a later relative import to find.
+
+The three identical local copies of `_load_standalone` and the two copies of
+`_register_ida_mcp_pkg` are replaced by the shared helpers, which assert the
+`__package__`/`__spec__.parent` agreement rather than pinning it. Add
+`tests/test_standalone_loader_deprecations.py` covering the package
+registration, the deprecation-free load, per-test isolation, and the failed-load
+cleanup. The full offline suite now passes with `-W error::DeprecationWarning`:
+5,482 passed, 6 skipped, 0 warnings.
+
+## 2026-09-27 — Make the coarse and fine behavior vocabularies one system
+
+The 21 coarse `CANONICAL_TAGS` and the 19 fine `BEHAVIOR_LABELS` described the
+same concept from two unrelated lists in different layers, with nothing stopping
+a label from being added to one and forgotten in the other. Both now live in
+`ida_pro_mcp/behavior_tags.py` with a declared `COARSE_TO_FINE` mapping, and
+`advisory.BEHAVIOR_LABELS` re-exports the canonical tuple so its public surface
+is unchanged.
+
+Both vocabularies are kept because both are load-bearing and neither is
+redundant: the coarse set backs the public `ida_index_functions` operation and
+the `behavior_tags` search filter constraints, while the fine set is the answer
+vocabulary a typed-question provider may select from. What was removed is the
+*conflict* — two independent definitions — not a capability. `unknown` is
+declared as the explicit no-evidence answer and deliberately maps to no coarse
+tag.
+
+Add `tests/host/test_behavior_vocabulary.py`, which asserts the mapping is
+total, that every mapped coarse tag exists, and that all three layers resolve to
+the same vocabulary, so the two cannot silently drift apart again. The
+IDA-side search module is loaded through the repo's standalone plugin loader in
+that test, matching how it actually loads at runtime.
+
+## 2026-09-27 — Collapse duplicated helpers onto single implementations
+
+Measured the tree for dead code before cutting anything. There is none to
+remove: across `src/`, zero top-level symbols have both zero external references
+and zero coverage, there are zero unreachable statements after
+`return`/`raise`/`break`/`continue`, and `ruff` reports no unused imports or
+variables. Surface that looks unused is reached dynamically through the action
+dispatch tables. What did exist was duplicated logic:
+
+- The path-traversal guard `path_has_symlink` existed **three times** — in
+  `blackboard_legacy`, `server_blackboard`, and `server_dispatch`. A fix to a
+  symlink escape had to be applied three times and a single miss left a hole in
+  two of them. All three names are now aliases of the one implementation in
+  `blackboard_legacy`; the three copies were verified behaviorally identical
+  across 56 path/root combinations before collapsing.
+- The 21-tag `CANONICAL_TAGS` vocabulary was duplicated verbatim in
+  `stores/insight_index.py` and `ida_mcp/tools/search/core.py`, free to drift.
+  Both now import `CANONICAL_TAGS` from the new `ida_pro_mcp/behavior_tags.py`.
+- `_sess_coerce_tag` and `_sess_coerce_untag` were byte-identical; `untag` is
+  now an alias of `tag`.
+- `_blackboard_probability` was a verbatim copy of `advisory._bounded_probability`
+  and now delegates to it, which also retires a stale `import math`.
+
+Two remaining duplicate pairs are intentionally left alone: the AST walkers in
+`ida_mcp/tools/ctree.py` and `code_helpers.py`, and the wiki header parser shared
+between host and IDA-side. The flat-plugin layout loads each `ida_mcp` tool
+module standalone and each mutates `sys.path` for `_common`, so cross-module
+imports there would break the plugin load path.
+
+Add `tests/host/test_single_implementation_guards.py`, which asserts the guards
+are the *same function object* rather than copies, so a re-introduced
+copy-paste fails a test instead of quietly diverging. Net −65 lines with three
+added tests; full offline suite 5,452 passed, 6 skipped.
+
+## 2026-09-24 — Add an unconditional intelligence-layer off switch
+
+- Add `IDA_MCP_INTELLIGENCE_ENABLED` as a kill switch independent of the
+  provider mode. Unset follows `IDA_MCP_INTELLIGENCE_MODE`; an explicit false
+  value disables the whole layer. A malformed value fails closed.
+- Make the switch outrank every other configuration source: the mode
+  environment variable, the persisted `intelligence.json` state, and the mode
+  the installer writes into client configuration. It short-circuits leftover
+  provider settings, legacy settings, and mode-conflict errors, so switching the
+  layer off can never be blocked by other configuration and can never stop the
+  host from starting deterministically. Mode values are still validated first so
+  a typo is reported rather than silently treated as "off".
+- Report the posture through `provider_status` / `ida_usage_status` as
+  `intelligence_enabled`, `deterministic_only`, and `disabled_reason`
+  (`kill_switch` or `mode`).
+- Complete the deterministic posture: with the layer off no provider is
+  constructed and `invoke` raises `INTELLIGENCE_DISABLED`, while the
+  deterministic pool order, heuristic ranking, and lexical signature retrieval
+  remain available. Advisory results keep the fail-closed shape
+  (`advisory_order: null`, `applied: false`, `fail_closed_order` populated) so
+  operations degrade instead of failing. No change to lexical ranking quality.
+- Installer: write the resolved posture explicitly as
+  `IDA_MCP_INTELLIGENCE_ENABLED` in generated client configuration, add
+  `--intelligence-enabled` / `--intelligence-disabled`, and present "Off
+  (deterministic and lexical analysis only)" as the first wizard option.
+  Selecting a provider in the wizard installs it but only arms it on explicit
+  confirmation, and warns when a provider is configured while the layer is off.
+- Give `scripts/run_live_agent_surface.py` the same switch and warnings, and make
+  the `live_jev` suite skip explicitly when the layer is switched off instead of
+  failing on a confusing mode assertion. Document the required
+  `IDA_MCP_INTELLIGENCE_ENABLED=1` in `docs/operations/live-ida-testing.md`.
+- Cover the new behavior and the neighborhood advisory fail-closed paths that
+  were previously untested: malformed provider limits, provider selection raising
+  a provider error or an unexpected error, a shared-question budget too small for
+  any candidate, and missing required answers. Changed-line coverage is 99.6%
+  (573/575); the two remaining lines are defensive guards unreachable through the
+  public path.
+
+## 2026-09-24 — Make Jev spend and budget headroom opt-in
+
+- Stop applying the published Jev price implicitly. Unset
+  `IDA_MCP_JEV_INPUT_USD_PER_MTOK` / `IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` now leave
+  pricing unconfigured, so the usage ledger blocks every Jev request before
+  transport with `reason="unknown_pricing"` instead of silently metering paid
+  traffic. Naming a price, or setting `IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1`, is
+  the explicit operator opt-in. `ida_usage_status` reports the gate through
+  `pricing_configured`.
+- Remove the automatic Jev budget multiplier. Session and daily token ceilings
+  return to the shared 100,000 / 500,000 defaults for every mode instead of
+  being raised 150x/300x for Jev alone; ceilings are raised explicitly through
+  the existing `IDA_MCP_JEV_*` / `IDA_MCP_INTELLIGENCE_*` variables.
+- Derive the per-request input reservation from the provider's configured
+  `max_input_chars` at the host's four-bytes-per-token estimate, so a
+  reservation can never be smaller than the packet a provider may receive
+  (262,144 chars reserves 65,536 tokens; 32,768 reserves 8,192) and identical
+  input bounds reserve identically for all modes.
+- Extend the installer: `--jev-input-usd-per-mtok` / `--jev-output-usd-per-mtok`
+  flags, an interactive prompt that shows the published rate for confirmation
+  while Enter leaves spend disabled, and generated client env that omits the
+  price variables unless supplied. Selecting Jev without pricing now installs a
+  working provider and warns that requests will be blocked before transport.
+- Document the opt-in pricing and budget contract in `AGENTS.md`,
+  `docs/wiki/core/intelligence.md`, and `docs/wiki/reverse-engineering-workflow.md`.
+- Add matching `--jev-input-usd-per-mtok` / `--jev-output-usd-per-mtok` opt-in
+  to `scripts/run_live_agent_surface.py`, which warns instead of silently
+  running advisory calls that would now be blocked.
+
+## 2026-09-24 — Use Jev's typed context for wider advisory investigations
+
+- Expand single-question candidate windows to 16/32/64 and neighborhood
+  assessment to 8/16/30 functions, bounded by each provider's question and
+  request limits. Pack the largest deterministic signature summaries that fit
+  the available context.
+- Support the documented 255-option Choice limit and reconcile Jev's larger
+  typed-question fan-out with input, output, session, and daily usage budgets.
+- Document the 64K combined / 32K state-plus-longest-question limits, current
+  Jev pricing checked on 2026-09-24, and an illustrative end-to-end reversing
+  workflow showing how Jev prioritizes deterministic IDA follow-up.
+
+## 2026-09-24 — Center host advisories on a shared investigation packet
+
+- Batch behavior and follow-up judgments over a shared focus-function and
+  caller/callee packet. Compact signatures preserve API symbols and coarse
+  control-flow cues while keeping literals, comments, arguments, and full
+  decompilation out of provider state.
+- Scale the shared packet with `detail=triage|normal|deep`; compact responses
+  now surface typed advisory metadata for the default public `ida_decompile`
+  operation, while deep responses include it in `context_pack`.
+- Return a separately ranked advisory order, expose disagreement between the
+  selected next function and its per-function priority scores, and suggest one
+  matching provider-neutral `ida_*` operation without invoking it.
+- Raise the explicit Jev request input bound to use the supported context.
+  Pricing and session/daily token ceilings stay opt-in and mode-independent; see
+  "Make Jev spend and budget headroom opt-in" above.
+
+## 2026-09-24 — Scope commit guardrails to the reviewed branch
+
+- Validate commit subjects and changelog entries only for commits introduced
+  by a pull request, rather than rechecking older history before the policy
+  baseline. Manual runs compare against the default branch.
+
+## 2026-09-24 — Cover bounded advisory edge cases
+
+- Add regression coverage for compact feature projection, context fallback,
+  provider fail-closed paths, safe suggestion mapping, and response address
+  routing.
+
+## 2026-09-24 — Stabilize the architecture advisory fixture
+
+- Replace random fixture bytes with a deterministic raw sample so the test
+  cannot accidentally resemble a Cortex-M vector table.
+
 ## 2026-09-23 — Complete Jev advisor and Blackboard integration
 
 - Routed provider-backed choices and ranking through the shared host advisor

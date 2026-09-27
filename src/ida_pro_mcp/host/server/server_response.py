@@ -396,6 +396,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 else self._get_blackboard_store()
             )
             mode = str((opts or {}).get("mode") or "").strip().lower()
+            detail = str((opts or {}).get("detail") or "normal").strip().lower()
             pack = self.assembler.assemble(
                 tool=tool_name,
                 action=action,
@@ -405,6 +406,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 idb_path=idb_path or "",
                 bb_store=bb_store,
                 mode=mode,
+                detail=detail,
             )
             if pack:
                 mode = str((opts or {}).get("mode") or "").strip().lower()
@@ -412,6 +414,17 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 if mode == "full":
                     payload["context_pack"] = pack
                 else:
+                    # Compact mode still returns the small, typed behavior
+                    # summary. Full context stays in context_pack for deep
+                    # responses; tool suggestions remain advisory in either
+                    # mode and are never executed by the host.
+                    for key in (
+                        "behavior_classifications",
+                        "behavior_tags",
+                        "investigation_advisory",
+                    ):
+                        if key in pack:
+                            payload[key] = pack[key]
                     # Compact mode: the semantic assembler contributes findings
                     # related by meaning or by graph distance. Exact-address
                     # recall has already run, so drop anything it covered
@@ -1203,7 +1216,12 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 if isinstance(compacted, dict):
                     addr = ""
                     if isinstance(call_args, dict):
-                        addr = str(call_args.get("addr") or call_args.get("addrs") or "")
+                        addr = str(
+                            call_args.get("address")
+                            or call_args.get("addr")
+                            or call_args.get("addrs")
+                            or ""
+                        )
                     self._assemble_and_inject_context(
                         tool_name, action_name, compacted, addr,
                         opts=opts, session=target_session,

@@ -20,9 +20,27 @@ from urllib.parse import SplitResult, urlsplit
 from .types import _SECRET_KEY_RE, _SECRET_VALUE_RE, ProviderCapabilities, ProviderConfigError
 
 MODES = frozenset({"jev", "custom", "disabled"})
+# Operator kill switch for the whole intelligence layer. Unset means "follow
+# IDA_MCP_INTELLIGENCE_MODE". An explicit false value disables every provider
+# regardless of the mode environment variable, the persisted state file, or the
+# installer-written client configuration, so the layer can always be turned off
+# from one place. An explicit true value permits the selected provider but does
+# not choose one. A malformed value fails closed.
+INTELLIGENCE_ENABLED_ENV = "IDA_MCP_INTELLIGENCE_ENABLED"
 JEV_BASE_URL = "https://api.typesafe.ai"
 JEV_INVOKE_PATH = "/v1/systemone"
 JEV_DEFAULT_MODEL = "jev-latest"
+# Reference prices for operator confirmation only. They are deliberately NOT
+# applied as implicit defaults: paid Jev traffic is opt-in, so an operator must
+# set IDA_MCP_JEV_INPUT_USD_PER_MTOK / IDA_MCP_JEV_OUTPUT_USD_PER_MTOK (or
+# explicitly acknowledge unpriced usage with
+# IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1) to open the spend gate. With neither,
+# pricing stays unknown and the ledger blocks every request before transport.
+# The installer offers these values as prompt/CLI defaults; the host never
+# inherits them. Published figures must be rechecked against
+# https://docs.typesafe.ai/models before being quoted as current.
+JEV_REFERENCE_INPUT_USD_PER_MTOK = 0.042
+JEV_REFERENCE_OUTPUT_USD_PER_MTOK = 0.0
 CONFIG_FILE_NAME = "intelligence.json"
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
@@ -160,12 +178,17 @@ class ProviderConfig:
     max_attempts: int = 3
     backoff_initial_seconds: float = 0.5
     backoff_max_seconds: float = 8.0
-    max_input_chars: int = 32_768
+    max_input_chars: int = 262_144
     max_questions: int = 64
     max_response_bytes: int = 1_048_576
     input_usd_per_mtok: float | None = None
     output_usd_per_mtok: float | None = None
     allow_unknown_pricing: bool = False
+    # Resolved layer posture. ``intelligence_enabled`` is false only when the
+    # operator kill switch is set; ``disabled_reason`` records whether the layer
+    # is off because of that switch or simply because the mode is disabled.
+    intelligence_enabled: bool = True
+    disabled_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -270,6 +293,9 @@ class ProviderConfig:
                 "max_response_bytes": self.max_response_bytes,
             },
             "pricing_configured": self.input_usd_per_mtok is not None and self.output_usd_per_mtok is not None,
+            "intelligence_enabled": bool(self.intelligence_enabled),
+            "deterministic_only": self.mode == "disabled",
+            "disabled_reason": self.disabled_reason,
         }
 
 
@@ -611,6 +637,21 @@ def _auth_from(
     )
 
 
+def intelligence_switch(env: Mapping[str, str] | None = None) -> bool | None:
+    """Return the operator kill switch, or ``None`` when it is unset.
+
+    ``False`` unconditionally disables the whole intelligence layer, so the
+    deterministic and lexical analysis path is all that remains and no provider
+    request is ever attempted. ``True`` permits the configured provider without
+    selecting one. Unset leaves ``IDA_MCP_INTELLIGENCE_MODE`` in charge.
+    """
+    values = os.environ if env is None else env
+    raw = values.get(INTELLIGENCE_ENABLED_ENV)
+    if raw is None or not str(raw).strip():
+        return None
+    return _bool_value(raw, name=INTELLIGENCE_ENABLED_ENV)
+
+
 def _mode_from(state: Mapping[str, Any], env: Mapping[str, str]) -> str:
     state_mode = state.get("intelligence_mode", state.get("mode"))
     provider = _state_provider(state)
@@ -626,6 +667,12 @@ def _mode_from(state: Mapping[str, Any], env: Mapping[str, str]) -> str:
         raise ProviderConfigError("IDA_MCP_INTELLIGENCE_MODE must be jev, custom, or disabled")
     if normalized_state and normalized_state not in MODES:
         raise ProviderConfigError("persisted intelligence mode must be jev, custom, or disabled")
+    if intelligence_switch(env) is False:
+        # The operator kill switch wins over every provider selection, including
+        # a conflicting persisted state. Mode values are still validated above
+        # so a typo is reported rather than silently swallowed, but a mode
+        # conflict must not be able to block an emergency shutdown.
+        return "disabled"
     if normalized_env and normalized_state and normalized_env != normalized_state:
         raise ProviderConfigError("environment and persisted intelligence modes conflict")
     return normalized_env or normalized_state or "disabled"
@@ -757,6 +804,29 @@ def resolve_provider_config(
         if schema_version not in {1, 2}:
             raise ProviderConfigError("intelligence configuration schema_version is unsupported")
     mode = _mode_from(persisted, values)
+    switch = intelligence_switch(values)
+    if mode == "disabled":
+        # ``kill_switch`` means the operator switched the layer off even though a
+        # provider may still be selected in configuration.
+        disabled_reason = "kill_switch" if switch is False else "mode"
+    else:
+        disabled_reason = None
+    if switch is False:
+        # The kill switch short-circuits every remaining provider check. Leftover
+        # Jev/custom settings, legacy settings, or a conflicting persisted state
+        # must not be able to stop the host from starting deterministically:
+        # switching the layer off has to work in one place, unconditionally.
+        # Mode values were already validated in _mode_from, so a typo is still
+        # reported rather than silently treated as "off".
+        return ProviderConfig(
+            mode="disabled",
+            provider_id="disabled",
+            model=None,
+            capabilities=ProviderCapabilities(lexical_fallback=True),
+            data_policy="local_only",
+            intelligence_enabled=False,
+            disabled_reason=disabled_reason,
+        )
     legacy = _legacy_configured(values)
     if legacy:
         raise ProviderConfigError(
@@ -799,6 +869,8 @@ def resolve_provider_config(
             model=None,
             capabilities=ProviderCapabilities(lexical_fallback=True),
             data_policy="local_only",
+            intelligence_enabled=switch is not False,
+            disabled_reason=disabled_reason,
         )
 
     if mode == "jev":
@@ -828,6 +900,9 @@ def resolve_provider_config(
         model = _safe_identifier(values.get("IDA_MCP_JEV_MODEL") or provider.get("model"), name="IDA_MCP_JEV_MODEL", default=JEV_DEFAULT_MODEL)
         input_price = _price_value(values.get("IDA_MCP_JEV_INPUT_USD_PER_MTOK", provider.get("input_usd_per_mtok")), name="jev input price")
         output_price = _price_value(values.get("IDA_MCP_JEV_OUTPUT_USD_PER_MTOK", provider.get("output_usd_per_mtok")), name="jev output price")
+        # No implicit pricing here. Unset prices leave ``pricing_configured``
+        # false so UsageLedger fails closed before transport; spending requires
+        # an explicit operator opt-in.
         return ProviderConfig(
             mode="jev",
             provider_id="typesafe-jev",
@@ -840,6 +915,8 @@ def resolve_provider_config(
             input_usd_per_mtok=input_price,
             output_usd_per_mtok=output_price,
             allow_unknown_pricing=_bool_value(values.get("IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING", provider.get("allow_unknown_pricing")), name="jev unknown pricing", default=False),
+            intelligence_enabled=switch is not False,
+            disabled_reason=disabled_reason,
             connect_timeout_seconds=_float_value(
                 values.get("IDA_MCP_JEV_CONNECT_TIMEOUT", provider.get("connect_timeout_seconds")), name="jev connect timeout", default=5.0, minimum=0.1, maximum=60.0
             ),
@@ -850,7 +927,7 @@ def resolve_provider_config(
                 values.get("IDA_MCP_JEV_MAX_RESPONSE_BYTES", provider.get("max_response_bytes")), name="jev max response bytes", default=1_048_576, minimum=1024, maximum=16_777_216
             ),
             max_input_chars=_int_value(
-                values.get("IDA_MCP_JEV_MAX_INPUT_CHARS", provider.get("max_input_chars")), name="jev max input chars", default=32_768, minimum=1024, maximum=1_000_000
+                values.get("IDA_MCP_JEV_MAX_INPUT_CHARS", provider.get("max_input_chars")), name="jev max input chars", default=262_144, minimum=1024, maximum=1_000_000
             ),
             max_questions=_int_value(
                 values.get("IDA_MCP_JEV_MAX_QUESTIONS", provider.get("max_questions")), name="jev max questions", default=64, minimum=1, maximum=64
@@ -1030,6 +1107,8 @@ def resolve_provider_config(
         input_usd_per_mtok=_price_value(values.get("IDA_MCP_CUSTOM_INPUT_USD_PER_MTOK", provider.get("input_usd_per_mtok")), name="custom input price"),
         output_usd_per_mtok=_price_value(values.get("IDA_MCP_CUSTOM_OUTPUT_USD_PER_MTOK", provider.get("output_usd_per_mtok")), name="custom output price"),
         allow_unknown_pricing=_bool_value(values.get("IDA_MCP_CUSTOM_ALLOW_UNKNOWN_PRICING", provider.get("allow_unknown_pricing")), name="custom unknown pricing", default=False),
+        intelligence_enabled=switch is not False,
+        disabled_reason=disabled_reason,
     )
 
 

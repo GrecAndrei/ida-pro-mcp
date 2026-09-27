@@ -354,7 +354,8 @@ GLOBAL_RESPONSE_CONTROLS = {
         "description": (
             "Primary response/truncation dial (shared with Jev session profiles). "
             "triage=small budgets, normal=default compact, deep=full output. "
-            "Also caps the Jev advisor pool: triage=4, normal=8, deep=16."
+            "Single-question Jev pools: triage=16, normal=32, deep=64; "
+            "multi-question workflows stay within the provider question limit."
         ),
     },
     "accept_advisory": {

@@ -24,13 +24,13 @@ from ida_pro_mcp.host.intelligence.providers import Answer, ProviderResponse, Qu
 
 
 def test_pool_sizes_triage_normal_deep():
-    assert DETAIL_POOL_CAPS == {"triage": 4, "normal": 8, "deep": 16}
-    assert pool_cap("triage") == 4
-    assert pool_cap("normal") == 8
-    assert pool_cap("deep") == 16
-    assert len(cap_pool(list(range(20)), "triage")) == 4
-    assert len(cap_pool(list(range(20)), "normal")) == 8
-    assert len(cap_pool(list(range(20)), "deep")) == 16
+    assert DETAIL_POOL_CAPS == {"triage": 16, "normal": 32, "deep": 64}
+    assert pool_cap("triage") == 16
+    assert pool_cap("normal") == 32
+    assert pool_cap("deep") == 64
+    assert len(cap_pool(list(range(80)), "triage")) == 16
+    assert len(cap_pool(list(range(80)), "normal")) == 32
+    assert len(cap_pool(list(range(80)), "deep")) == 64
 
 
 def test_primary_stays_deterministic_and_disagreement_flag():
@@ -163,7 +163,7 @@ def test_arch_advisory_does_not_write_processor_bitness():
         }
 
     with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tf.write(os.urandom(256))
+        tf.write(bytes(256))
         path = tf.name
     try:
         with patch(

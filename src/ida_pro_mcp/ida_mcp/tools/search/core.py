@@ -17,6 +17,7 @@ from .._common import (
     looks_like_address,
     validate_addr
 )
+from ....behavior_tags import CANONICAL_TAGS as _CANONICAL_TAGS  # noqa: F401  (re-exported)
 
 from ...support.semantic_matching import (  # noqa: F401
     DEFAULT_RESCORE_TOP_N,
@@ -169,14 +170,6 @@ def get_cached_strings() -> list[dict]:
 # ============================================================================
 # Configuration
 # ============================================================================
-
-_CANONICAL_TAGS = frozenset({
-    "crypto", "network", "file_io", "registry", "process",
-    "string_decode", "allocator", "exception_handler",
-    "obfuscation", "compression", "hashing", "encoding",
-    "parser", "main", "init", "cleanup", "loop",
-    "recursive", "thunk", "library", "data",
-})
 
 MAX_LIMIT = 500
 LINE_MAX = 240

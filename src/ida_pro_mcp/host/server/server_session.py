@@ -107,14 +107,9 @@ def _sess_coerce_tag(args):
     return {"tag": tag}, None
 
 
-def _sess_coerce_untag(args):
-    tag = args.get("tag")
-    if not tag:
-        return None, make_error(MCPError.INVALID_ARGS, "tag required")
-    tag = str(tag).strip()[:MAX_TAG_LEN]
-    if not tag:
-        return None, make_error(MCPError.INVALID_ARGS, "tag required")
-    return {"tag": tag}, None
+# untag validates exactly like tag, so it is the same function rather than a
+# restatement: a divergence here would let the two session actions disagree.
+_sess_coerce_untag = _sess_coerce_tag
 
 
 def _sess_coerce_note(args):

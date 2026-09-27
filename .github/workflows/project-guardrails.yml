@@ -27,10 +27,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          baseline="$(git log --reverse --format=%H -- .github/commit-policy-baseline | tail -n 1)"
-          test -n "$baseline" || { echo "commit policy baseline is missing" >&2; exit 1; }
-          baseline_parent="$(git rev-parse "$baseline^")"
-          report="$(python scripts/check_commit_policy.py --range "$baseline_parent..HEAD")"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            revision_base="${{ github.event.pull_request.base.sha }}"
+          else
+            default_branch="origin/${{ github.event.repository.default_branch }}"
+            if ! git show-ref --verify --quiet "refs/remotes/$default_branch"; then
+              echo "default branch ref is missing: $default_branch" >&2
+              exit 1
+            fi
+            revision_base="$(git merge-base "$default_branch" HEAD)"
+            if [[ "$revision_base" == "$(git rev-parse HEAD)" ]]; then
+              revision_base="$(git rev-parse HEAD^)"
+            fi
+          fi
+          report="$(python scripts/check_commit_policy.py --range "$revision_base..HEAD")"
           printf '%s\n' "$report"
           highest="$(printf '%s\n' "$report" | sed -n 's/^highest_class=//p')"
           test -n "$highest" || { echo "commit policy did not report a class" >&2; exit 1; }

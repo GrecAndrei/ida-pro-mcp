@@ -19,6 +19,13 @@ pytestmark = [
         or os.environ.get("IDA_MCP_INTELLIGENCE_MODE") != "jev",
         reason="Real Jev tests require TYPESAFE_API_KEY and IDA_MCP_INTELLIGENCE_MODE=jev",
     ),
+    pytest.mark.skipif(
+        # The operator kill switch outranks the mode, so a jev mode with the
+        # layer switched off would otherwise fail confusingly instead of skipping.
+        str(os.environ.get("IDA_MCP_INTELLIGENCE_ENABLED", "")).strip().lower()
+        in {"0", "false", "off", "no"},
+        reason="Real Jev tests require IDA_MCP_INTELLIGENCE_ENABLED=1; the layer is switched off",
+    ),
     pytest.mark.timeout(120),
 ]
 

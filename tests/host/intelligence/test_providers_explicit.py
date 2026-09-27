@@ -11,6 +11,7 @@ from ida_pro_mcp.host.intelligence.providers import (
     CustomProvider,
     DisabledProvider,
     IntelligenceDisabledError,
+    JevProvider,
     JevUnavailableError,
     ProviderBudgetError,
     ProviderConfigError,
@@ -28,6 +29,7 @@ from ida_pro_mcp.host.intelligence.providers import (
 )
 from ida_pro_mcp.host.intelligence.providers.base import parse_response
 from ida_pro_mcp.host.intelligence.providers.http import HttpResponse, JsonHttpTransport, TransportError
+from ida_pro_mcp.host.intelligence.providers.types import MAX_CHOICE_OPTIONS
 
 
 def _custom_env(**extra):
@@ -305,6 +307,91 @@ def test_state_and_question_context_are_bounded_and_redacted():
         "instructions": "pick",
         "criteria": {"yes": None, "no": None},
     }
+
+
+def test_choice_question_and_probability_maps_support_jev_limit_of_255():
+    choices = [f"c{index}" for index in range(MAX_CHOICE_OPTIONS)]
+    question = Question("q1", "choice", "Choose the best bounded candidate", choices)
+    request = ProviderRequest(
+        StateSnapshot.from_mapping({"signature": "bounded"}),
+        (question,),
+        "jev-1.13.0",
+    )
+
+    assert len(request.to_wire()["questions"]["q1"]["criteria"]) == 255
+    probabilities = dict.fromkeys(choices, 1 / MAX_CHOICE_OPTIONS)
+    response = parse_response(
+        {
+            "model": "jev-1.13.0",
+            "answers": {
+                "q1": {
+                    "type": "choice",
+                    "choice": choices[-1],
+                    "probabilities": probabilities,
+                }
+            },
+            "usage": {"input_tokens": 1, "output_tokens": 0},
+        },
+        request,
+    )
+    assert len(response.answers["q1"].probabilities) == 255
+    assert response.answers["q1"].value == choices[-1]
+
+    with pytest.raises(ProviderProtocolError):
+        Question(
+            "too_many",
+            "choice",
+            "Choose one",
+            [f"c{index}" for index in range(MAX_CHOICE_OPTIONS + 1)],
+        )
+
+
+def test_jev_context_preflight_does_not_limit_custom_providers(monkeypatch):
+    import ida_pro_mcp.host.intelligence.providers.remote as remote
+
+    monkeypatch.setattr(remote, "MAX_STATE_AND_LONGEST_QUESTION_BYTES", 1)
+    jev = JevProvider(
+        resolve_provider_config(
+            env={
+                "IDA_MCP_INTELLIGENCE_MODE": "jev",
+                "TYPESAFE_API_KEY": "synthetic-key",
+            }
+        )
+    )
+    question = Question("q1", "noul", "Check this bounded signature")
+    with pytest.raises(ProviderProtocolError, match="Jev state and longest question"):
+        jev.build_request({"signature": "bounded"}, [question])
+
+    custom = CustomProvider(resolve_provider_config(env=_custom_env()))
+    assert custom.build_request({"signature": "bounded"}, [question]).questions == (
+        question,
+    )
+
+
+def test_jev_total_request_preflight_remains_fixed_when_configured_limit_is_higher(monkeypatch):
+    import ida_pro_mcp.host.intelligence.providers.remote as remote
+
+    monkeypatch.setattr(remote, "MAX_JEV_REQUEST_BYTES", 1_024)
+    jev = JevProvider(
+        resolve_provider_config(
+            env={
+                "IDA_MCP_INTELLIGENCE_MODE": "jev",
+                "TYPESAFE_API_KEY": "synthetic-key",
+                "IDA_MCP_JEV_MAX_INPUT_CHARS": "1000000",
+            }
+        )
+    )
+    custom = CustomProvider(
+        resolve_provider_config(
+            env=_custom_env(IDA_MCP_CUSTOM_MAX_INPUT_CHARS="4096")
+        )
+    )
+    state = {"signature": "x" * 1_200}
+    question = Question("q1", "noul", "check")
+
+    with pytest.raises(ProviderProtocolError, match="configured context limit"):
+        jev.build_request(state, [question])
+    assert custom.build_request(state, [question]).state.values["signature"]
 
 
 def test_response_validation_rejects_missing_duplicate_or_bad_usage():

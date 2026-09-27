@@ -28,8 +28,10 @@ Hard boundary — document and enforce as current behavior:
 
 - Typed questions only: `choice`, `noul`, and `score`.
 - Host-side HTTP only (Jev fixed TypeSafe endpoint, or allowlisted custom).
-- Compact signatures / metadata / bytes-disassembly samples only — no raw
-  decompilation, prompts, completions, or credentials logged or persisted.
+- Shared compact investigation state can contain multiple function signatures,
+  caller/callee relationships, IDs, and safe architecture metadata. Full raw
+  decompilation, literal dumps, prompts, completions, and credentials are
+  excluded from provider state and never persisted by the provider layer.
 - Provider answers never authorize mutations, satisfy `risk_ack`, or write
   blackboard findings. Deterministic IDA policy remains authoritative.
 - Disabled, unavailable, malformed, timed-out, or budget-blocked providers
@@ -38,10 +40,27 @@ Hard boundary — document and enforce as current behavior:
 
 Provider transport runs in the MCP host. For query expansion the host asks its
 provider before the IDA RPC and sends only bounded expansion labels to the
-deterministic search. For behavior search, function classification, gadget
-classification, and reranking, IDA returns bounded candidate signatures and
-the host asks the provider after the RPC. Provider configuration and credential
-variables are removed from the IDA child environment.
+deterministic search. For function behavior, `ContextAssembler` derives compact
+signatures locally from the focus function and any caller/callee context
+returned by `decompile_chain`. The packet includes API/crypto/risk labels,
+bounded CFG/dataflow counts, and normalized branch cues when IDA provides
+them. Literal values, comments, raw conditions, and full decompilation stay
+local. One shared state then carries per-function behavior and priority
+questions plus neighborhood-level next-evidence questions. The
+`detail=triage|normal|deep` allows 16/32/64 candidates in single-question
+workflows. A neighborhood candidate needs two questions plus three shared
+questions, so those limits become 8/16/30 functions, capped again by the
+selected provider's question limit. Normal and deep responses surface the
+typed result, while deep also includes it in `context_pack`. The response
+names candidate IDs, includes a ranked advisory order, and can suggest one
+concrete provider-neutral `ida_*` follow-up for the MCP client to consider.
+It never executes that operation. The evidence card's 16 short signature
+previews are only a display limit; they do not reduce the analysis pool. Other
+behavior, gadget, reranking,
+architecture, and Blackboard paths also send
+bounded signatures or metadata after deterministic IDA work. Provider
+configuration and credential variables are removed from the IDA child
+environment.
 
 **Advisor stage (shipped, Jev v2 / `dd866be`):** host call sites
 (`ask_behavior`, `rank_targets`, typed-question rerank, arch / GP / load-base)
@@ -53,6 +72,15 @@ returns a sibling `advisory_order` with an evidence card. `accept_advisory=true`
 is the explicit opt-in that applies a valid reorder. The card records bounded
 signatures, budget use, confidence, disagreement, and deterministic fail-closed
 order.
+
+**Neighborhood assessment (shipped):** the decompile context path sends the
+focus function and compact signatures for observed callers/callees in one
+shared provider request. The configured provider returns per-function behavior and
+priority, a separately chosen next candidate, a deterministic evidence kind,
+and an evidence-sufficiency score. An internal disagreement field records when
+the candidate choice differs from the highest per-function priority. The host
+may include a matching `ida_*` call as a suggestion; it never runs that call or
+changes the IDB.
 
 Background Blackboard organization uses the same gate after finding changes.
 It recommends lanes for bounded findings and scores only observed xrefs and
@@ -99,6 +127,44 @@ order as the primary list; the option remains host-side.
 as a compatibility alias. Vector-family clustering is not part of the current
 public operation surface; use lexical search and structural filters instead.
 
+## Turning the layer off
+
+The whole intelligence layer is governed by `IDA_MCP_INTELLIGENCE_ENABLED`,
+which is separate from the provider mode:
+
+| Value | Effect |
+|---|---|
+| unset | follow `IDA_MCP_INTELLIGENCE_MODE` (itself defaulting to `disabled`) |
+| `0` / `false` / `off` / `no` | **unconditional kill switch** — the layer is off |
+| `1` / `true` / `on` / `yes` | the selected provider may run; this does not choose one |
+| anything else | configuration error; the host fails closed |
+
+A false value outranks everything: the mode environment variable, the persisted
+`intelligence.json` state, and the `IDA_MCP_INTELLIGENCE_MODE` the installer
+wrote into your client configuration. It also short-circuits leftover provider
+settings, legacy settings, and mode-conflict errors, so turning the layer off
+can never be blocked by other configuration. Mode *values* are still validated
+first, so a typo is reported rather than silently treated as "off".
+
+With the layer off no provider is constructed, no network request is attempted,
+and `invoke` raises `INTELLIGENCE_DISABLED`. The deterministic version is what
+remains: the primary candidate list is always the deterministic pool order,
+heuristic and structural ranking still run, and `LexicalFunctionIndex` still
+backs signature retrieval. Advisory results degrade to the fail-closed shape —
+`advisory_order: null`, `applied: false`, `fail_closed_order` populated — so
+operations degrade instead of failing.
+
+Check the current posture with `ida_usage_status` or the provider status, which
+report `intelligence_enabled`, `deterministic_only`, and `disabled_reason`
+(`kill_switch` or `mode`).
+
+The installer writes the resolved posture explicitly as
+`IDA_MCP_INTELLIGENCE_ENABLED` in generated client configuration, so the
+on/off state is one readable line. Pass `--intelligence-enabled` to arm a
+selected provider, or `--intelligence-disabled` to force it off. Selecting a
+provider in the interactive wizard installs it but does not arm it unless you
+confirm.
+
 ## Usage and budgets
 
 `ida_usage_status` reports metadata-only request, token, and cost totals for a
@@ -106,11 +172,47 @@ session or day. `ida_usage_report` lists bounded attempt metadata: provider,
 model, operation, token counts, latency, status, error code, and estimated cost
 when pricing is known. It never stores request state or answer content.
 
-The default proposed budgets are 100,000 session tokens / `$5`, 500,000 daily
-tokens / `$20`, and bounded request/count limits. Warnings are emitted at 70%
-and 90%. `IDA_MCP_JEV_BUDGET_MODE=block` hard-blocks over-budget requests;
-`warn` records the warning and continues. Unknown pricing blocks by default;
-explicitly opt in only when the operator accepts unpriced usage.
+Jev is a metered provider, so spend is **opt-in**. The host never applies a
+price by default: leaving `IDA_MCP_JEV_INPUT_USD_PER_MTOK` and
+`IDA_MCP_JEV_OUTPUT_USD_PER_MTOK` unset leaves pricing unconfigured, and the
+usage ledger blocks every Jev request *before transport* with
+`reason="unknown_pricing"`. Setting both prices is the operator's explicit
+acknowledgment that paid traffic is intended; setting
+`IDA_MCP_JEV_ALLOW_UNKNOWN_PRICING=1` is the alternative acknowledgment for
+operators who accept unpriced usage. `ida_usage_status` reports
+`pricing_configured` so the gate state is visible. The installer offers the
+published rate as a prompt and `--jev-input-usd-per-mtok` /
+`--jev-output-usd-per-mtok` flags, and writes them only when supplied.
+
+Budget defaults are shared across modes and are not raised automatically for
+Jev: 2,048 output tokens per request, 100,000 tokens per session, 500,000 per
+day, with `$5` / `$20` cost ceilings and 200/2,000 request-count limits. The
+per-request *input* reservation is derived from the provider's configured
+`max_input_chars` at the host's four-bytes-per-token estimate (262,144 chars
+reserves 65,536 input tokens; 32,768 chars reserves 8,192), so a reservation is
+never smaller than the packet a provider may receive, and identical input bounds
+reserve identically for every mode. Raise any ceiling explicitly with
+`IDA_MCP_JEV_*` or `IDA_MCP_INTELLIGENCE_*` environment variables.
+
+Output is currently free, but the host reserves output tokens for its request
+and total-token limits. Jev 1.13 is listed at `$0.042` per million input
+tokens; at that rate, 32,000 input tokens cost about `$0.001344` and 64,000 cost
+about `$0.002688`. These published figures were checked on 2026-09-24 and may
+change, so treat them as a reference to confirm rather than a default the
+server applies. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+
+TypeSafe documents a 64K combined state-and-questions context and a 32K limit
+for state plus the longest individual question. The host allows up to a 120
+KiB compact state, checks the state-plus-longest-question window against 128
+KiB, and caps the serialized Jev request at 256 KiB by default. These are
+four-byte-per-token host estimates, not the provider tokenizer; the usage
+response is reconciled against the ledger. The provider can be configured with
+smaller limits, and the host never lets a Jev request exceed these defaults.
+The typed API permits up to 255 Choice options, while this server limits a
+request to 64 questions. Custom mode keeps its own configured limits. Warnings
+are emitted at 70% and 90%;
+`IDA_MCP_JEV_BUDGET_MODE=block` blocks over-budget requests, while `warn`
+records the warning and continues.
 
 ## Advisor stage contract (shipped)
 
@@ -119,13 +221,24 @@ in sibling `advisory_order`. Reordering the primary list requires explicit
 opt-in via `accept_advisory_requested` (boolean / truthy strings only through
 that helper — never raw `bool(args.get(...))`).
 
-### Pool caps by `detail`
+### Candidate windows by `detail`
 
-| `detail` | Cap |
-|----------|-----|
-| triage   | 4   |
-| normal   | 8   |
-| deep     | 16  |
+Single-question workflows ask once per candidate:
+
+| `detail` | Candidate cap |
+|----------|---------------|
+| triage   | 16            |
+| normal   | 32            |
+| deep     | 64            |
+
+Neighborhood assessment asks two questions per candidate and three shared
+questions:
+
+| `detail` | Candidate cap | Questions |
+|----------|---------------|-----------|
+| triage   | 8             | 19        |
+| normal   | 16            | 35        |
+| deep     | 30            | 63        |
 
 ### Evidence card (required on every advisory result)
 
