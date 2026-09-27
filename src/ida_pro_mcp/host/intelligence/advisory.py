@@ -14,6 +14,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from ...behavior_tags import BEHAVIOR_LABELS as _BEHAVIOR_LABELS
 from .advisor_stage import (
     accept_advisory_requested,
     build_evidence_card,
@@ -40,29 +41,12 @@ from .providers.types import (
     MAX_STATE_AND_LONGEST_QUESTION_BYTES,
 )
 
-# Stable labels are local application metadata, not model instructions.  The
+# Stable labels are local application metadata, not model instructions. The
 # provider may select a label but never executes or authorizes it.
-BEHAVIOR_LABELS = (
-    "crypto_symmetric",
-    "crypto_asymmetric",
-    "crypto_hash",
-    "network_http",
-    "network_socket",
-    "network_protocol",
-    "file_io",
-    "memory_allocation",
-    "process_control",
-    "authentication",
-    "serialization",
-    "logging",
-    "parsing",
-    "error_handling",
-    "rop_chain",
-    "write_what_where",
-    "code_exec",
-    "stack_pivot",
-    "unknown",
-)
+# The fine-grained advisory answer vocabulary and its declared relationship to the
+# coarse routing/indexing tags both live in behavior_tags, the single source of
+# truth. Re-exported here because it is part of this module's public surface.
+BEHAVIOR_LABELS = _BEHAVIOR_LABELS
 
 ARCHITECTURE_CHOICES = {
     "metapc32": "32-bit x86 code",

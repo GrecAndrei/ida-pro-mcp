@@ -1,3 +1,26 @@
+## 2026-09-27 — Make the coarse and fine behavior vocabularies one system
+
+The 21 coarse `CANONICAL_TAGS` and the 19 fine `BEHAVIOR_LABELS` described the
+same concept from two unrelated lists in different layers, with nothing stopping
+a label from being added to one and forgotten in the other. Both now live in
+`ida_pro_mcp/behavior_tags.py` with a declared `COARSE_TO_FINE` mapping, and
+`advisory.BEHAVIOR_LABELS` re-exports the canonical tuple so its public surface
+is unchanged.
+
+Both vocabularies are kept because both are load-bearing and neither is
+redundant: the coarse set backs the public `ida_index_functions` operation and
+the `behavior_tags` search filter constraints, while the fine set is the answer
+vocabulary a typed-question provider may select from. What was removed is the
+*conflict* — two independent definitions — not a capability. `unknown` is
+declared as the explicit no-evidence answer and deliberately maps to no coarse
+tag.
+
+Add `tests/host/test_behavior_vocabulary.py`, which asserts the mapping is
+total, that every mapped coarse tag exists, and that all three layers resolve to
+the same vocabulary, so the two cannot silently drift apart again. The
+IDA-side search module is loaded through the repo's standalone plugin loader in
+that test, matching how it actually loads at runtime.
+
 ## 2026-09-27 — Collapse duplicated helpers onto single implementations
 
 Measured the tree for dead code before cutting anything. There is none to
