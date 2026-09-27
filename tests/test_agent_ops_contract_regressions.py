@@ -1,4 +1,4 @@
-"""Regression tests for the p01 contract/policy fixes on agent operations.
+"""Regression tests for agent ops contract regressions.
 
 Covers:
   - risk_ack is now required (and mapped to _risk_ack) on ops that mutate the

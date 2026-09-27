@@ -1,4 +1,4 @@
-"""Regression tests for the p01 contract/policy fixes.
+"""Regression tests for policy classification regressions.
 
 Covers the host policy classification fixes:
   - (tool, action) pairs on read-only tools that actually write the IDB or

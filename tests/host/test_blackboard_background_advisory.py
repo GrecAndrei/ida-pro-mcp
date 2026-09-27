@@ -9,7 +9,7 @@ from ida_pro_mcp.host.server.blackboard_orchestration import (
     NS_GRAVITY,
     BlackboardOrchestrator,
 )
-from tests.host.test_swarm_blackboard_modes_matrix import _server
+from tests.host.test_blackboard_modes_matrix import _server
 
 
 def test_blackboard_writes_refresh_advisory_in_background(tmp_path, monkeypatch):

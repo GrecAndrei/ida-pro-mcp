@@ -8,7 +8,7 @@ import types
 import pytest
 
 from tests._isolated_repo_loader import load_tool_module
-from tests.ida_mcp.test_swarm_q03_tools import (
+from tests.ida_mcp.test_tools import (
     CIT,
     COT,
     _expr,

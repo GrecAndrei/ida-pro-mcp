@@ -307,7 +307,7 @@ collapse to direct calls and the module is deleted.
 - **Compat wrappers resolve `ida_segment` via `sys.modules` at call time**
   (`_ida_segment()` helper), not the import-time global. The host test harness
   swaps `sys.modules["ida_segment"]` per test while `compat` can stay cached
-  (imported during test collection, e.g. via test_swarm_t11's module-level
+  (imported during test collection, e.g. via test_intel_tools.py's module-level
   `intelligence` load, so it lands in the conftest's frozen session snapshot);
   a stale global made the legacy fallbacks hit the wrong module.
 - **Test updates alongside the migration (AGENTS.md: update tests with the

@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from tests.ida_mcp.test_swarm_t01_analysis_more import _load
+from tests.ida_mcp.test_analysis_more import _load
 
 
 @pytest.fixture(autouse=True)

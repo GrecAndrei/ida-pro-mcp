@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import struct
 
+from tests.ida_mcp.test_memory_misc import _load_memory
 from tests.ida_mcp.test_memory_surface_modes import _full_error_envelope
-from tests.ida_mcp.test_swarm_q05d_memory_misc import _load_memory
 
 
 def test_fixup_metadata_and_pointer_relocation_modes(monkeypatch):

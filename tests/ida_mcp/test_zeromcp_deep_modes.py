@@ -10,7 +10,7 @@ from typing import Annotated, Literal, NotRequired, TypedDict
 
 import pytest
 
-from tests.ida_mcp import test_p16_zeromcp as support
+from tests.ida_mcp import test_zeromcp_protocol as support
 
 
 class _Payload(TypedDict):

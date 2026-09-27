@@ -6,7 +6,7 @@ from ida_pro_mcp.host.errors import MCPError, make_error
 from ida_pro_mcp.host.server import server_dispatch as dispatch_mod
 from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
 from tests.host.test_dispatch_pipeline_modes import _DispatchHost
-from tests.host.test_p04_dispatch import _Harness
+from tests.host.test_dispatch_policy_gates import _Harness
 
 
 def test_long_running_timeout_handles_invalid_full_index_and_requested_values(monkeypatch):

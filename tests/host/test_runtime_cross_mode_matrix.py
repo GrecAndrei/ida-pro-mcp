@@ -11,7 +11,7 @@ from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server import server_runtime as runtime_mod
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
 from tests._thread_doubles import SyncThread, consumer_namespace
-from tests.host.test_swarm_f04_runtime import _Host as F04Host
+from tests.host.test_runtime import _Host as F04Host
 
 
 class _Process:

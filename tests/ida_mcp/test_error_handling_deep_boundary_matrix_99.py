@@ -15,7 +15,7 @@ TESTS = Path(__file__).resolve().parents[1]
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from tests.ida_mcp.test_p15_ida_infra import _load_error_handling  # noqa: E402
+from tests.ida_mcp.test_ida_infra import _load_error_handling  # noqa: E402
 
 
 def test_error_envelopes_and_exception_classification_cover_fallbacks():

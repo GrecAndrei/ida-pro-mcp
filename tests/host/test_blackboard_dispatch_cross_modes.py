@@ -13,7 +13,7 @@ import json
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server import server_blackboard as module
 from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin, _coerce_str_list
-from tests.host.test_swarm_blackboard_modes_matrix import _server
+from tests.host.test_blackboard_modes_matrix import _server
 
 
 def _parts(result: dict) -> dict:

@@ -42,7 +42,7 @@ Targeted tests:
 
 ```bash
 python -m pytest tests/test_docs_sync.py --basetemp=.pytest_tmp
-python -m pytest tests/host/test_swarm_p14_stale_docs.py --basetemp=.pytest_tmp
+python -m pytest tests/host/test_stale_docs.py --basetemp=.pytest_tmp
 ```
 
 Per-directory layouts:

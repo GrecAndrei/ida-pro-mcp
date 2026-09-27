@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.host.test_swarm_f04_runtime import _Host
+from tests.host.test_runtime import _Host
 
 
 class _Process:

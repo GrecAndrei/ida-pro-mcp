@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
-from tests.ida_mcp import test_p16_zeromcp as support
+from tests.ida_mcp import test_zeromcp_protocol as support
 
 
 class _Options(TypedDict):

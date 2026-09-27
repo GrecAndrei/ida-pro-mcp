@@ -159,7 +159,7 @@ def test_sync_cache_and_execution_failure_boundaries(monkeypatch):
 
 
 def test_jsonrpc_notifications_and_nullable_union_typed_dict():
-    from tests.ida_mcp.test_p16_zeromcp import _load_pkg
+    from tests.ida_mcp.test_zeromcp_protocol import _load_pkg
 
     jr, _ = _load_pkg()
     registry = jr.JsonRpcRegistry()
@@ -194,7 +194,7 @@ def test_jsonrpc_notifications_and_nullable_union_typed_dict():
 
 
 def test_mcp_http_invalid_origin_and_real_server_port_property(monkeypatch):
-    from tests.ida_mcp.test_p15_ida_infra import _load_mcp_http_methods
+    from tests.ida_mcp.test_ida_infra import _load_mcp_http_methods
 
     mod = _load_mcp_http_methods()
     cls = mod.IdaMcpHttpRequestHandler
@@ -210,7 +210,7 @@ def test_mcp_http_invalid_origin_and_real_server_port_property(monkeypatch):
 
 
 def test_mcp_http_constructor_tolerates_connection_without_timeout(monkeypatch):
-    from tests.ida_mcp.test_p15_ida_infra import _load_mcp_http_methods
+    from tests.ida_mcp.test_ida_infra import _load_mcp_http_methods
 
     mod = _load_mcp_http_methods()
     cls = mod.IdaMcpHttpRequestHandler

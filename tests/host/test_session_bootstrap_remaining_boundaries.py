@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ida_pro_mcp.host.errors import MCPError, make_error
-from tests.host.test_swarm_f08_skills import _make_manager, _write_skills
+from tests.host.test_skills import _make_manager, _write_skills
 
 
 def _error():

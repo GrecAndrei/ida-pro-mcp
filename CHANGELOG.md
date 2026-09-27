@@ -1,3 +1,48 @@
+## 2026-09-27 — Rename the test suite to describe what each file tests
+
+Test organization only; no runtime, public contract, or persistence change.
+
+Test files were named after internal work-order codes rather than their subject:
+`test_swarm_q07_reliability.py`, `test_p14_misc_tools.py`, `test_bb01_store.py`.
+The codes appeared in no documentation anywhere, so nobody could find the tests
+for a subsystem without grepping source, and a contributor had no way to know
+what a newly added file was meant to cover.
+
+**109 files renamed** to state their subject: `test_swarm_q07_reliability.py` is
+now `test_reliability.py`, `test_p10_code_tools.py` is `test_code_tools.py`. Ten
+inconsistent letter generations (`b d f g h p q r s t`, plus the two-letter `bb`
+series) are gone, and no test file is named after a work-order code.
+
+Seven renames could not be mechanical, because two generations of work covered
+the same subsystem and a bare rename collided. Each pair was resolved by reading
+the file and named for what it actually asserts rather than for a code:
+`test_dispatch_policy_gates` / `test_dispatch_replay_idempotency`,
+`test_zeromcp_protocol` / `test_zeromcp_tool_filtering`,
+`test_runtime_lease_validation` / `test_runtime_lease_heartbeat`,
+`test_calc_graph_normalization` / `test_calc_graph_evaluation`,
+`test_gadgets_riscv_cops` / `test_gadgets_raw_sweep`,
+`test_misc_tools_governance` / `test_misc_tools_dwarf_and_api_sets`, and
+`test_intel_sources` / `test_intel_source_fingerprints`. The pairs are
+complementary rather than duplicative, so both sides of each pair were kept.
+
+Module docstrings that opened with a work-order code now name their subject
+instead. A code mentioned later in a docstring body is left alone, since that is
+legitimate provenance ("this test maps to a finding in the t03 order").
+
+Live references updated: `CONTRIBUTING.md`, `docs/guide/roadmap.md`, and
+`docs/research/ida-9.4-migration.md` pointed at old filenames. `CHANGELOG.md`
+entries are left as written, because a changelog records what was true at the
+time. Cross-module test imports were repointed at the new module names in 18
+files.
+
+Add `tests/test_naming_conventions.py`, which fails if a test file is named
+after a work-order code, if a code is embedded mid-filename, if a docstring
+opens with one, or if any of the seven hand-resolved names disappears. It also
+fails if the scan finds fewer than 400 test files, so it cannot pass vacuously.
+
+Full offline suite 5,546 passed, 6 skipped, 8 subtests. ruff, schema integrity,
+workflow pins, git diff --check, and the changed-line coverage gate (99.7%) pass.
+
 ## 2026-09-27 — Document the full intelligence environment reference
 
 Documentation only; no runtime, contract, or persistence change.
