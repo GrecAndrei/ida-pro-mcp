@@ -1,3 +1,33 @@
+## 2026-09-27 — Stop the test loader relying on deprecated import behavior
+
+`ida_mcp` modules are loaded standalone so tests can exercise them without the
+IDA SDK. The loader registered each module under a flat top-level `sys.modules`
+key and then hand-pinned `__package__` to the real package name, which left
+`__package__ != __spec__.parent` — a state the import system reports as
+deprecated. It warns today, and the fallback that keeps `from .rpc import ...`
+resolving is slated for removal, so 36 tests across `test_p15_ida_infra`,
+`test_swarm_t18_zeromcp`, `test_swarm_t19_sync_cache`,
+`test_error_handling_deep_boundary_matrix_99`, and
+`test_coverage_protocol_edges` depended on it. The suite passed only because
+warnings were not surfaced; running with `-W error::DeprecationWarning` failed
+all 36 and emitted 58 warnings.
+
+`load_standalone_package_module` in `tests/_isolated_repo_loader.py` now
+registers the module as `ida_pro_mcp.ida_mcp.<name>`, so the two values agree by
+construction and relative imports resolve to the same stubs. Per-test
+isolation is unaffected: the key is still unique per test and `conftest.py`
+snapshots and restores `sys.modules` around each test. The loader also cleans up
+its `sys.modules` entry when `exec_module` raises, so a failed load can no
+longer leave a half-initialized module for a later relative import to find.
+
+The three identical local copies of `_load_standalone` and the two copies of
+`_register_ida_mcp_pkg` are replaced by the shared helpers, which assert the
+`__package__`/`__spec__.parent` agreement rather than pinning it. Add
+`tests/test_standalone_loader_deprecations.py` covering the package
+registration, the deprecation-free load, per-test isolation, and the failed-load
+cleanup. The full offline suite now passes with `-W error::DeprecationWarning`:
+5,482 passed, 6 skipped, 0 warnings.
+
 ## 2026-09-27 — Make the coarse and fine behavior vocabularies one system
 
 The 21 coarse `CANONICAL_TAGS` and the 19 fine `BEHAVIOR_LABELS` described the

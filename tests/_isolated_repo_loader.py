@@ -387,6 +387,60 @@ def _load_module(fullname: str, path: Path):
     return mod
 
 
+def register_ida_mcp_package() -> types.ModuleType:
+    """Register ``ida_pro_mcp.ida_mcp`` as a stub package over the real source.
+
+    Lets a standalone module resolve ``from .rpc import ...`` against
+    already-stubbed ``sys.modules`` entries without executing the real package
+    init, which needs the IDA SDK.
+    """
+    pkg = sys.modules.get("ida_pro_mcp") or types.ModuleType("ida_pro_mcp")
+    pkg.__path__ = [str(PACKAGE_ROOT)]
+    sys.modules["ida_pro_mcp"] = pkg
+    sub = sys.modules.get("ida_pro_mcp.ida_mcp") or types.ModuleType("ida_pro_mcp.ida_mcp")
+    sub.__path__ = [str(IDA_MCP_ROOT)]
+    sys.modules["ida_pro_mcp.ida_mcp"] = sub
+    return sub
+
+
+def load_standalone_package_module(relpath: str, name: str) -> types.ModuleType:
+    """Load an ``ida_mcp`` module standalone, under a key inside its package.
+
+    ``name`` is a per-test leaf name (for example ``"p15_mcp_http_ut"``); the
+    module is registered as ``ida_pro_mcp.ida_mcp.<name>`` rather than as a
+    top-level name. A top-level key plus a hand-pinned ``__package__`` leaves
+    ``__package__ != __spec__.parent``, which is deprecated: the import system
+    warns today and the fallback that keeps relative imports resolving is
+    slated for removal, so 36 tests would break on a future interpreter.
+    Registering inside the package makes the two agree by construction and
+    leaves relative imports resolving to the same stubs.
+
+    Isolation is unaffected: the key is still unique per test, and
+    ``tests/conftest.py`` snapshots and restores ``sys.modules`` around each
+    test.
+    """
+    register_ida_mcp_package()
+    path = IDA_MCP_ROOT / f"{relpath}.py"
+    fullname = f"ida_pro_mcp.ida_mcp.{name}"
+    if not path.is_file():
+        raise FileNotFoundError(f"no ida_mcp module at {path}")
+    spec = importlib.util.spec_from_file_location(fullname, path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    # module_from_spec already sets __package__ to spec.parent; assert it rather
+    # than pin it, so a future rename cannot silently reintroduce the skew.
+    assert mod.__package__ == spec.parent == "ida_pro_mcp.ida_mcp"
+    sys.modules[fullname] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        # Never leave a half-initialized module behind: a later relative import
+        # would resolve to it and fail in a confusing place.
+        sys.modules.pop(fullname, None)
+        raise
+    return mod
+
+
 _IDA_SDK_NAMES = (
     "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
     "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
