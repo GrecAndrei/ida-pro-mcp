@@ -16,19 +16,23 @@ This project establishes comprehensive, authentic test coverage (>=90%) across a
 - **Baseline Line Coverage**: 64.27%
 - **Original Target**: >= 90.0% (>= 52,303 covered statements; <= 5,811 missed statements)
 
-### Current live (offline suite, 2026-09-23 EEST)
-- **Suite**: 5362 passed, 7 skipped, ~6m15s, exit 0 (`pytest --ignore=tests/integration`)
-- **Overall (incl. tests)**: ~95.99% (140,836 stmts / 3,930 miss)
-- **`src/` only**: 94.55% (54,720 stmts / 2,289 miss) — **>=90% target met**
+### Current live (offline suite, 2026-09-27 EEST)
+- **Suite**: 5491 passed, 6 skipped, 8 subtests, ~4m04s, exit 0 (`pytest --ignore=tests/integration`)
+- **Overall (incl. tests)**: 97.25% (143,472 stmts / 3,948 miss)
+- **`src/` only**: 95.88% (56,110 stmts / 2,309 miss) — **>=90% target met**
+- **Strict-warning run**: the same suite passes clean with
+  `-W error::DeprecationWarning` (0 warnings), so the gate is not resting on
+  deprecated import behavior.
 - **Remaining miss pile**: ~2.3k `src/` statements
+- **Changed-line gate**: 99.7% against merge base `a5ab5271`; CI fails below 95%.
 
 ## Feature Inventory
-> **Note (2026-09-23):** Aggregate offline `src/` coverage already meets the >=90%
-> target (94.55%). Rows below keep **historical Survey Phase 0 Baseline %** and
-> original milestone labels for traceability. Do **not** treat Baseline % or
+> **Note (2026-09-27):** Aggregate offline `src/` coverage meets the >=90% target
+> (95.88%). Rows below keep **historical Survey Phase 0 Baseline %** and original
+> milestone labels for traceability. Do **not** treat Baseline % or
 > IN_PROGRESS/PLANNED status as current per-subsystem measurements — those were
 > not re-measured in the live run. Remaining work is miss-pile reduction (~2.3k
-> `src/` statements) and a blocking CI coverage gate (M5), not inventing fresh
+> `src/` statements) and per-subsystem re-measurement, not inventing fresh
 > subsystem percentages.
 
 | # | Feature / Subsystem | Description | Baseline % (Phase 0) | Milestone | Source | Status (vs aggregate `src/` target) |

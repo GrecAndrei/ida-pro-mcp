@@ -1,4 +1,47 @@
-## 2026-09-27 — Stop the test loader relying on deprecated import behavior
+## 2026-09-27 — Bring docs, wiki, and the contribution rules up to date
+
+Documentation and rule clarity only; no runtime, contract, or persistence
+change.
+
+Close the content gaps left by the merged work. `behavior_tags.py` was the
+single source of truth for the behavior vocabulary and appeared in no document
+at all: it is now described in `docs/wiki/search-and-retrieval.md` (both
+vocabularies, their roles, and the `COARSE_TO_FINE` mapping with `unknown` as
+the explicit no-evidence answer) and added to the module map in
+`docs/guide/architecture.md`. The `JEV_REFERENCE_*` constants were likewise
+undocumented: `docs/wiki/core/intelligence.md` now names them, and states
+plainly that the host never reads them to price a request, so naming a price in
+one's own environment is the only way pricing becomes active.
+
+Correct stale coverage figures. Offline `src/` line coverage is now **95.88%**
+(56,110 stmts / 2,309 miss) and overall 97.25% (143,472 / 3,948), measured on the
+2026-09-27 EEST suite at 5,491 passed / 6 skipped. The previous 94.55% figure
+was replaced in `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, and `PROJECT.md`.
+`AGENTS.md` also claimed no CI coverage gate was installed, which was wrong: CI
+enforces changed-line coverage at 95% against the merge base via
+`scripts/check_changed_line_coverage.py`. The absolute repository-wide gate
+remains absent, and the text now distinguishes the two accurately. Record the
+`-W error::DeprecationWarning` clean run alongside the figures.
+
+Expand the commit, pull request, and merge policy. `CONTRIBUTING.md` previously
+covered classes in a single bullet while `AGENTS.md` held the real rules, so a
+human contributor was never told the class prefixes existed. It now carries the
+authoritative statement: the four classes in a table with what each is *not*
+for, a five-step ordered procedure for choosing one, subject format with good and
+bad examples, granularity guidance, the changelog rule and its lack of
+exceptions, the safeguards `[relevant]` and `[major]` carry, and merge mechanics
+— merge commit rather than squash or rebase, and why. `docs/guide/versioning.md`
+and `docs/index.md` now link it, the latter having described contributing
+guidance without ever linking it.
+
+`tests/test_contributing_rules.py` asserts `CONTRIBUTING.md` and `AGENTS.md`
+agree on the classes, the changelog rule, and the enforcer, and that the merge
+method and strict-warning gate stay documented. It checks rules rather than
+prose so rewording guidance does not require a code change. Without this the two
+documents drift silently: a contributor follows a rule CI does not enforce, or an
+agent follows a rule no human was told about.
+
+
 
 `ida_mcp` modules are loaded standalone so tests can exercise them without the
 IDA SDK. The loader registered each module under a flat top-level `sys.modules`

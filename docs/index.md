@@ -15,6 +15,7 @@ versioning, and releases.
 - [Use cases](guide/use-cases.md) — supported analysis workflows
 - [Versioning](guide/versioning.md) — release scheme and checklist
 - [Roadmap](guide/roadmap.md) — planned compatibility work
+- [Contributing](../CONTRIBUTING.md) — commit classes, pull request and merge rules, required checks
 
 ## Releases
 

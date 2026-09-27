@@ -70,4 +70,13 @@ Every authored commit must use exactly one approved subject prefix—`[minor]`,
 `[relevant]`, `[major]`, or `[PR-work]`—and must update `CHANGELOG.md`. This
 also applies to documentation, tests, and PR-maintenance commits. The project
 guardrail checks both requirements for every authored commit after the policy
-baseline.
+baseline:
+
+```bash
+python scripts/check_commit_policy.py --range origin/master..HEAD
+```
+
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) is the authoritative statement of the
+commit classes, the pull request requirements, the safeguards each class
+carries, and the merge method. `AGENTS.md` restates the same policy for coding
+agents, and `tests/test_contributing_rules.py` fails if the two drift apart.

@@ -199,14 +199,20 @@ malformed-response, privacy/redaction, origin-policy, timeout, and budget
 coverage. Use the relevant `benchmarks/run.py --scope ...`; keep reports
 outside source control.
 
-Offline `src/` coverage from the 2026-09-23 EEST suite is **94.55%** (54,720
-stmts / 2,289 miss) — the >=90% `src/` target is already met. The Survey Phase 0
-baseline of 64.27% is historical only (see `PROJECT.md`). Keep offline and
-real-IDA live reports separate until merged; do not claim live coverage from
-catalog tests or fake IDA. A repository-wide CI coverage **gate** is still not
-installed as a blocking threshold; until it is, coverage-impacting changes must
-report measured results and uncovered external paths. Fake-IDA tests do not
-prove live behavior. `tests/integration/` is opt-in and requires licensed IDA:
+Offline `src/` coverage from the 2026-09-27 EEST suite is **95.88%** (56,110
+stmts / 2,309 miss) — the >=90% `src/` target is already met. The same suite
+passes clean under `-W error::DeprecationWarning`, so the gate does not rest on
+deprecated import behavior. The Survey Phase 0 baseline of 64.27% is historical
+only (see `PROJECT.md`). Keep offline and real-IDA live reports separate until
+merged; do not claim live coverage from catalog tests or fake IDA. CI **does**
+enforce a changed-line coverage gate at 95% against the merge base
+(`scripts/check_changed_line_coverage.py`, wired into
+`.github/workflows/standalone-tests.yml`), so new and modified lines must be
+covered even when the repository total moves little. A repository-wide absolute
+coverage gate is still not installed as a blocking threshold; until it is,
+coverage-impacting changes must report measured results and uncovered external
+paths. Fake-IDA tests do not prove live behavior. `tests/integration/` is
+opt-in and requires licensed IDA:
 
 ```bash
 IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \

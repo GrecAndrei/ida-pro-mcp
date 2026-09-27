@@ -363,10 +363,12 @@ switch to experimental `idalib` while diagnosing a basic installation.
 ## Tests and coverage (offline)
 
 The offline suite (`pytest --ignore=tests/integration`) is the default gate.
-As of 2026-09-23 EEST: 5362 passed / 7 skipped (~6m15s); offline `src/` line
-coverage **94.55%** (54,720 stmts / 2,289 miss) — >=90% `src/` target met. The
-Survey Phase 0 figure of 64.27% is historical only (`PROJECT.md`). Live IDA and
-optional Jev remote checks stay opt-in; see `AGENTS.md` and
+As of 2026-09-27 EEST: 5491 passed / 6 skipped (~4m04s); offline `src/` line
+coverage **95.88%** (56,110 stmts / 2,309 miss) — >=90% `src/` target met. The
+suite also passes clean with `-W error::DeprecationWarning`, so the gate does not
+rest on deprecated import behavior. The Survey Phase 0 figure of 64.27% is
+historical only (`PROJECT.md`). Live IDA and optional Jev remote checks stay
+opt-in; see `AGENTS.md` and
 [Live IDA testing](docs/operations/live-ida-testing.md).
 
 ## Reference material

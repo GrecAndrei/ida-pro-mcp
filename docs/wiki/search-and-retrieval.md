@@ -14,6 +14,39 @@ access and retained if migration cannot be completed. It does not store raw
 decompilation and does not download or start a model. `ida_index_status` and
 `ida_cancel_index` report or stop background work.
 
+## Behavior vocabulary
+
+`src/ida_pro_mcp/behavior_tags.py` is the single source of truth for the
+behavior vocabulary. There is one place where a behavior tag is defined, so a
+label cannot be added in one layer and quietly forgotten in another.
+
+It holds two deliberately different vocabularies:
+
+- **`CANONICAL_TAGS`** — 21 coarse tags (`crypto`, `network`, `file_io`,
+  `registry`, `process`, `string_decode`, `allocator`, `exception_handler`,
+  `obfuscation`, `compression`, `hashing`, `encoding`, `parser`, `main`,
+  `init`, `cleanup`, `loop`, `recursive`, `thunk`, `library`, `data`). This is
+  the routing, indexing, and filtering vocabulary. It backs the
+  `behavior_tags` search filter constraints and the tags stored by
+  `ida_index_functions`, so it is part of the public contract.
+- **`BEHAVIOR_LABELS`** — 19 finer answer choices (`crypto_symmetric`,
+  `crypto_asymmetric`, `crypto_hash`, `network_http`, `network_socket`,
+  `network_protocol`, `file_io`, `memory_allocation`, `process_control`,
+  `authentication`, `serialization`, `logging`, `parsing`, `error_handling`,
+  `rop_chain`, `write_what_where`, `code_exec`, `stack_pivot`, `unknown`). This
+  is advisory only: a provider may *select* a label as a typed-question answer,
+  but a label never executes or authorizes anything.
+
+Both are load-bearing, so neither is redundant. `COARSE_TO_FINE` declares how
+they relate: every fine label resolves to exactly one coarse tag, except
+`unknown` (`UNRESOLVED_BEHAVIOR_LABEL`), which is the explicit no-evidence answer
+and deliberately maps to no tag. The mapping is asserted by
+`tests/host/test_behavior_vocabulary.py`, so the two cannot silently drift apart.
+
+`advisory.BEHAVIOR_LABELS` re-exports the canonical tuple, and both
+`stores/insight_index.py` and `ida_mcp/tools/search/core.py` import the canonical
+set, so all layers resolve to the same vocabulary.
+
 ## Provider scoring
 
 Provider scoring is advisory and optional. `ida_intelligence_status` reports

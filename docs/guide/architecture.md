@@ -53,6 +53,12 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `knowledge_graph.py` — KnowledgeGraph relationship tracking
   - `insight_index.py` — insight indexing
 
+- `src/ida_pro_mcp/behavior_tags.py`
+  - Single source of truth for the behavior vocabulary: `CANONICAL_TAGS` (coarse
+    routing/index/filter tags, public contract), `BEHAVIOR_LABELS` (fine advisory
+    answer choices), and the `COARSE_TO_FINE` mapping between them
+  - Imported by both the host and IDA-side layers; never restate a tag locally
+
 - `src/ida_pro_mcp/host/schemas*.py`
   - Tool registry metadata: names, descriptions, actions, argument schemas, aliases
   - Source-of-truth for all exposed tool contracts

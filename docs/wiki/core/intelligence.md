@@ -199,7 +199,12 @@ and total-token limits. Jev 1.13 is listed at `$0.042` per million input
 tokens; at that rate, 32,000 input tokens cost about `$0.001344` and 64,000 cost
 about `$0.002688`. These published figures were checked on 2026-09-24 and may
 change, so treat them as a reference to confirm rather than a default the
-server applies. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
+server applies. They are carried in code as `JEV_REFERENCE_INPUT_USD_PER_MTOK`
+and `JEV_REFERENCE_OUTPUT_USD_PER_MTOK` in
+`host/intelligence/providers/config.py`, purely so the installer can offer them
+as a prompt and let you confirm the figure. **The host never reads those
+constants to price a request** — naming a price in your own environment is the
+only way pricing becomes active. [TypeSafe model and pricing reference](https://docs.typesafe.ai/models).
 
 TypeSafe documents a 64K combined state-and-questions context and a 32K limit
 for state plus the longest individual question. The host allows up to a 120
