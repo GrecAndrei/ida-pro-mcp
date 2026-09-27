@@ -1,3 +1,69 @@
+## 2026-09-27 — Archive the project, superseded by the official Hex-Rays MCP server
+
+`ida-pro-mcp` is no longer maintained. Hex-Rays SA released the
+[Official IDA MCP Server](https://github.com/HexRaysSA/ida-mcp) and
+[IDA Nexus](https://github.com/HexRaysSA/ida-nexus) on 2026-09-27, and
+development stopped the same day at `1.0.0a4`.
+
+No runtime, public contract, or persistence behavior changes. The server still
+works exactly as it did at `08133eef`; the code is not broken and is not being
+disabled. What changes is the project's status, and the documentation now says so
+before anything else on the page.
+
+**Why the official server won.** It exposes six tools where this project exposed
+102 strictly-typed operations: `open_database`, `execute_python`, `reference`,
+`list_databases`, `save_database`, and `close_database`. The design bet is the
+inverse of this project's. Where this repository concluded an agent needed a
+meticulously specified surface, Hex-Rays concluded it needs a Python interpreter
+plus an API reference so it does not guess at `idaapi` shapes. Three advantages
+came with that bet: ownership of the SDK, default placement (their README tells
+users to disable other IDA MCP servers to reduce agent confusion), and native
+sharing of databases already open in the IDA GUI. The last point was this
+project's one structural gap, and it was never a requirement for them — the GUI
+is an optional second backend, the default path being a headless `idalib` worker
+exactly as this project used. Their only hard gate is IDA 9.4+ with `idalib`;
+this project supported IDA 9.0 through 9.4.
+
+**Scaffolding versus substance.** Most of the meticulousness existed to make a
+weak model reliable, and that deficiency is largely gone. Schema enumeration,
+the 102-operation catalog, the policy tiers, the 33-entry legacy surface, and the
+risk-acknowledgement flow were all compensation for a problem that no longer
+exists, and are now a maintenance tax charged against the exact problem they were
+built to solve. The risk-acknowledgement flow is the clearest case: it was
+defensive engineering against a threat model this project never had. It was
+never used by its own author, it existed to satisfy imagined stakeholders, and
+it should not be counted among the project's assets.
+
+Not everything was scaffolding, and the distinction matters for anyone continuing
+the work. The durable findings store — provenance, confidence, lifecycle state,
+conflicts, audit history, idempotent migrations, surviving outside the IDB — was
+never about compensating for a model, and a stateless request/response server
+has nowhere to put it. Neither was the installer, or the transactional migration
+discipline. Those are the parts worth preserving.
+
+**What this commit adds.** `ARCHIVE.md`, the honest closing account: what the
+project was, how it ended, the six-tool comparison, the version-range delta, the
+scaffolding-versus-substance diagnosis, and practical notes for a successor —
+including that this repository is GPL-3.0 while the official server and IDA Nexus
+are MIT, which is a materially different starting position. A notice is added
+above the launch card in `README.md` and to the top of `docs/index.md`, so nobody
+reads the pitch before learning the project is over.
+
+The closing account also records that the project's Git history does not reach
+back to its 2025 origin. The original `.git` was destroyed by accident and the
+repository was re-initialized and force-pushed, so the earliest surviving commit
+is `2ddb6e78` on 2026-01-17. What survives is 1,493 commits over 253 days,
+ending at `08133eef`.
+
+**What survives and stays useful.** The 5,552-test suite encodes hard-won IDA
+behavior — version quirks, SDK edge cases, decompiler and loader semantics, `idat`
+process lifecycle — that is expensive to rediscover and worth more than the
+product ever was. The documentation and the architectural record likewise stand on
+their own. Version coverage remains this project's one live advantage: anyone on
+IDA older than 9.4 has nowhere else to go.
+
+For current use, install the official server: `uvx ida-hcli mcp install`.
+
 ## 2026-09-27 — Drop the redundant `server_` prefix inside `host/server/`
 
 Internal reorganization only; no runtime, public contract, or persistence change.

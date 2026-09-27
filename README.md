@@ -1,5 +1,21 @@
 # IDA Pro MCP
 
+> ## ⚠️ Archived — superseded by the official Hex-Rays IDA MCP server
+>
+> **This project is no longer maintained.** On 2026-09-27 Hex-Rays SA released
+> the [Official IDA MCP Server](https://github.com/HexRaysSA/ida-mcp) and
+> [IDA Nexus](https://github.com/HexRaysSA/ida-nexus). Development stopped the
+> same day at `1.0.0a4`.
+>
+> For current use, install theirs: `uvx ida-hcli mcp install`. It requires IDA
+> 9.4+ with `idalib` and works fully headless; the GUI plugin is optional.
+>
+> This repository is kept for its test suite, documentation, and architectural
+> record. See **[ARCHIVE.md](ARCHIVE.md)** for the full closing account: what the
+> project was, why it lost, which parts were scaffolding, and which parts are
+> still worth something. **The rest of this README describes a system that is no
+> longer recommended for use.**
+
 ![IDA Pro MCP — deterministic binary analysis for AI agents](.github/launch-card-v1.0.0a4.png)
 
 IDA Pro MCP is a local Model Context Protocol server for IDA Pro. It lets an

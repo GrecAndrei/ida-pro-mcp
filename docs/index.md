@@ -2,6 +2,12 @@
 
 This folder is the canonical documentation source for `ida-pro-mcp`.
 
+> **Archived.** This project was superseded by the
+> [official Hex-Rays IDA MCP server](https://github.com/HexRaysSA/ida-mcp) on
+> 2026-09-27 and is no longer maintained. See
+> [ARCHIVE.md](../ARCHIVE.md) for the closing account. The documents below are
+> kept as a historical and architectural record.
+
 Start with the [project README](../README.md) and [repository instructions](../AGENTS.md),
 then use the guides for architecture, safety, contributing, use cases,
 versioning, and releases.
