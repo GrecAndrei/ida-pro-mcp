@@ -7,6 +7,7 @@ from .config import (
     JEV_INVOKE_PATH,
     MODES,
     ProviderConfig,
+    intelligence_switch,
     resolve_provider_config,
     validate_mapping,
 )
@@ -74,5 +75,6 @@ __all__ = [
     "normalize_score_answer",
     "resolve_provider",
     "resolve_provider_config",
+    "intelligence_switch",
     "validate_mapping",
 ]

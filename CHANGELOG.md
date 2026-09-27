@@ -1,3 +1,35 @@
+## 2026-09-24 — Add an unconditional intelligence-layer off switch
+
+- Add `IDA_MCP_INTELLIGENCE_ENABLED` as a kill switch independent of the
+  provider mode. Unset follows `IDA_MCP_INTELLIGENCE_MODE`; an explicit false
+  value disables the whole layer. A malformed value fails closed.
+- Make the switch outrank every other configuration source: the mode
+  environment variable, the persisted `intelligence.json` state, and the mode
+  the installer writes into client configuration. It short-circuits leftover
+  provider settings, legacy settings, and mode-conflict errors, so switching the
+  layer off can never be blocked by other configuration and can never stop the
+  host from starting deterministically. Mode values are still validated first so
+  a typo is reported rather than silently treated as "off".
+- Report the posture through `provider_status` / `ida_usage_status` as
+  `intelligence_enabled`, `deterministic_only`, and `disabled_reason`
+  (`kill_switch` or `mode`).
+- Complete the deterministic posture: with the layer off no provider is
+  constructed and `invoke` raises `INTELLIGENCE_DISABLED`, while the
+  deterministic pool order, heuristic ranking, and lexical signature retrieval
+  remain available. Advisory results keep the fail-closed shape
+  (`advisory_order: null`, `applied: false`, `fail_closed_order` populated) so
+  operations degrade instead of failing. No change to lexical ranking quality.
+- Installer: write the resolved posture explicitly as
+  `IDA_MCP_INTELLIGENCE_ENABLED` in generated client configuration, add
+  `--intelligence-enabled` / `--intelligence-disabled`, and present "Off
+  (deterministic and lexical analysis only)" as the first wizard option.
+  Selecting a provider in the wizard installs it but only arms it on explicit
+  confirmation, and warns when a provider is configured while the layer is off.
+- Give `scripts/run_live_agent_surface.py` the same switch and warnings, and make
+  the `live_jev` suite skip explicitly when the layer is switched off instead of
+  failing on a confusing mode assertion. Document the required
+  `IDA_MCP_INTELLIGENCE_ENABLED=1` in `docs/operations/live-ida-testing.md`.
+
 ## 2026-09-24 — Make Jev spend and budget headroom opt-in
 
 - Stop applying the published Jev price implicitly. Unset

@@ -23,10 +23,15 @@ from ida_pro_mcp.host.intelligence.providers import (
     StateSnapshot,
     Usage,
     UsageLedger,
+    resolve_provider,
     resolve_provider_config,
 )
 from ida_pro_mcp.host.intelligence.providers.registry import default_usage_ledger
-from ida_pro_mcp.host.intelligence.providers.types import MAX_STATE_BYTES
+from ida_pro_mcp.host.intelligence.providers.types import (
+    MAX_STATE_BYTES,
+    IntelligenceDisabledError,
+    ProviderConfigError,
+)
 
 
 def _decompile_payload() -> dict:
@@ -428,6 +433,94 @@ def test_jev_spend_and_budgets_are_opt_in(monkeypatch, tmp_path):
         with_ledger=True,
     )
     assert type(disabled).__name__ == "DisabledProvider"
+
+
+def test_kill_switch_disables_the_whole_layer_unconditionally():
+    from ida_pro_mcp.host.intelligence.providers.config import config_status
+
+    def status(env, state=None):
+        return config_status(resolve_provider_config(env=env, state=state or {}))
+
+    # Unset switch: the mode is in charge, and the default posture is off.
+    default = status({})
+    assert default["mode"] == "disabled"
+    assert default["intelligence_enabled"] is True
+    assert default["deterministic_only"] is True
+    assert default["disabled_reason"] == "mode"
+
+    # A false switch outranks the mode environment variable.
+    for raw in ("0", "false", "off", "no"):
+        off = status(
+            {
+                "IDA_MCP_INTELLIGENCE_MODE": "jev",
+                "IDA_MCP_INTELLIGENCE_ENABLED": raw,
+                "TYPESAFE_API_KEY": "synthetic-key",
+            }
+        )
+        assert off["mode"] == "disabled", raw
+        assert off["intelligence_enabled"] is False, raw
+        assert off["deterministic_only"] is True, raw
+        assert off["disabled_reason"] == "kill_switch", raw
+
+    # It also outranks persisted state, including a conflicting one, and it is
+    # not blocked by leftover provider settings: switching off must always work.
+    assert status({"IDA_MCP_INTELLIGENCE_ENABLED": "0"}, {"intelligence_mode": "custom"})["mode"] == "disabled"
+    conflicting = status(
+        {
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "IDA_MCP_INTELLIGENCE_ENABLED": "0",
+            "TYPESAFE_API_KEY": "synthetic-key",
+            "IDA_MCP_JEV_MODEL": "jev-latest",
+            "IDA_MCP_JEV_INPUT_USD_PER_MTOK": "0.042",
+            "IDA_MCP_JEV_OUTPUT_USD_PER_MTOK": "0",
+        }
+    )
+    assert conflicting["mode"] == "disabled"
+    assert conflicting["disabled_reason"] == "kill_switch"
+
+    # An explicit true switch permits the layer without choosing a provider.
+    on = status({"IDA_MCP_INTELLIGENCE_MODE": "disabled", "IDA_MCP_INTELLIGENCE_ENABLED": "1"})
+    assert on["mode"] == "disabled"
+    assert on["intelligence_enabled"] is True
+    assert on["disabled_reason"] == "mode"
+
+    # A malformed switch fails closed rather than defaulting to on.
+    with pytest.raises(ProviderConfigError):
+        status({"IDA_MCP_INTELLIGENCE_ENABLED": "maybe"})
+
+    # With the layer off no provider is constructed and no request is attempted.
+    provider = resolve_provider(
+        env={
+            "IDA_MCP_INTELLIGENCE_MODE": "jev",
+            "IDA_MCP_INTELLIGENCE_ENABLED": "0",
+            "TYPESAFE_API_KEY": "synthetic-key",
+        },
+        with_ledger=False,
+    )
+    assert type(provider).__name__ == "DisabledProvider"
+    with pytest.raises(IntelligenceDisabledError):
+        provider.invoke({"features": {}}, [])
+
+
+def test_kill_switch_keeps_deterministic_advisory_path(tmp_path):
+    # Turning the layer off degrades to the deterministic order rather than
+    # failing the operation: the pool order survives and nothing is applied.
+    from ida_pro_mcp.host.intelligence.advisor_stage import invoke_advisor
+    from ida_pro_mcp.host.intelligence.providers.types import Question
+
+    pool = [{"id": f"fn{i}", "signature": f"func_{i}"} for i in range(4)]
+    result = invoke_advisor(
+        {"features": {"pool": len(pool)}},
+        [Question(question_id="priority", type="score", instructions="Rank by risk", criteria=("low", "high"))],
+        deterministic_pool=pool,
+        detail="deep",
+    )
+    assert result.advisory_order is None
+    assert result.applied is False
+    assert result.selected_order() == pool
+    assert result.error is not None
+    assert result.error["code"] == "INTELLIGENCE_DISABLED"
+    assert result.evidence["fail_closed_order"] == ["fn0", "fn1", "fn2", "fn3"]
 
 
 def test_unpriced_jev_requests_are_blocked_before_transport(tmp_path):

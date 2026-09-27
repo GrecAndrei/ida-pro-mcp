@@ -127,6 +127,44 @@ order as the primary list; the option remains host-side.
 as a compatibility alias. Vector-family clustering is not part of the current
 public operation surface; use lexical search and structural filters instead.
 
+## Turning the layer off
+
+The whole intelligence layer is governed by `IDA_MCP_INTELLIGENCE_ENABLED`,
+which is separate from the provider mode:
+
+| Value | Effect |
+|---|---|
+| unset | follow `IDA_MCP_INTELLIGENCE_MODE` (itself defaulting to `disabled`) |
+| `0` / `false` / `off` / `no` | **unconditional kill switch** — the layer is off |
+| `1` / `true` / `on` / `yes` | the selected provider may run; this does not choose one |
+| anything else | configuration error; the host fails closed |
+
+A false value outranks everything: the mode environment variable, the persisted
+`intelligence.json` state, and the `IDA_MCP_INTELLIGENCE_MODE` the installer
+wrote into your client configuration. It also short-circuits leftover provider
+settings, legacy settings, and mode-conflict errors, so turning the layer off
+can never be blocked by other configuration. Mode *values* are still validated
+first, so a typo is reported rather than silently treated as "off".
+
+With the layer off no provider is constructed, no network request is attempted,
+and `invoke` raises `INTELLIGENCE_DISABLED`. The deterministic version is what
+remains: the primary candidate list is always the deterministic pool order,
+heuristic and structural ranking still run, and `LexicalFunctionIndex` still
+backs signature retrieval. Advisory results degrade to the fail-closed shape —
+`advisory_order: null`, `applied: false`, `fail_closed_order` populated — so
+operations degrade instead of failing.
+
+Check the current posture with `ida_usage_status` or the provider status, which
+report `intelligence_enabled`, `deterministic_only`, and `disabled_reason`
+(`kill_switch` or `mode`).
+
+The installer writes the resolved posture explicitly as
+`IDA_MCP_INTELLIGENCE_ENABLED` in generated client configuration, so the
+on/off state is one readable line. Pass `--intelligence-enabled` to arm a
+selected provider, or `--intelligence-disabled` to force it off. Selecting a
+provider in the interactive wizard installs it but does not arm it unless you
+confirm.
+
 ## Usage and budgets
 
 `ida_usage_status` reports metadata-only request, token, and cost totals for a

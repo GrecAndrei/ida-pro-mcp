@@ -140,7 +140,17 @@ shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-install
 at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
 
 Provider mode is selected explicitly with `IDA_MCP_INTELLIGENCE_MODE=jev`,
-`custom`, or `disabled`. Jev uses the fixed TypeSafe endpoint over host-side
+`custom`, or `disabled`, and the whole layer is governed by
+`IDA_MCP_INTELLIGENCE_ENABLED`. Unset means "follow the mode". An explicit
+false value is an unconditional kill switch: it outranks the mode environment
+variable, the persisted state file, and installer-written client configuration,
+and it short-circuits leftover provider, legacy, and conflict checks so
+switching off can never be blocked by other configuration. A malformed value
+fails closed. With the layer off, no provider is constructed, no request is
+attempted, and the deterministic pool order plus lexical retrieval remain
+available; `provider_status` reports `intelligence_enabled`,
+`deterministic_only`, and `disabled_reason` (`kill_switch` or `mode`).
+Jev uses the fixed TypeSafe endpoint over host-side
 HTTP; custom origins require an explicit HTTPS allowlist, with loopback-only
 HTTP as an opt-in. Typed questions are `choice` / `noul` / `score` only on
 compact signatures — never mutations, `risk_ack`, or blackboard writes. Do not

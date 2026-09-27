@@ -613,6 +613,41 @@ def test_build_stdio_config_records_idalib_runtime(tmp_path):
     assert "IDA_MCP_RUNTIME" not in cfg2["env"]
 
 
+def test_build_stdio_config_writes_explicit_layer_posture(tmp_path):
+    from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    off = build_stdio_config(tmp_path / "python", tmp_path, intelligence_mode="jev")
+    # The generated config always states the posture, so "is it on?" is one grep.
+    assert off["env"]["IDA_MCP_INTELLIGENCE_MODE"] == "jev"
+    assert off["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "0"
+    resolved = resolve_provider_config(env=off["env"], state={})
+    assert resolved.mode == "disabled"
+    assert resolved.intelligence_enabled is False
+    assert resolved.disabled_reason == "kill_switch"
+
+    on = build_stdio_config(
+        tmp_path / "python", tmp_path, intelligence_mode="disabled", intelligence_enabled=True
+    )
+    assert on["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "1"
+    # Enabling the layer does not by itself select a provider.
+    assert resolve_provider_config(env=on["env"], state={}).mode == "disabled"
+
+
+def test_installer_cli_exposes_layer_switch():
+    from ida_pro_mcp.installer.main import parse_args
+
+    default = parse_args(["--intelligence-mode", "jev"])
+    assert default.intelligence_enabled is False
+
+    armed = parse_args(["--intelligence-mode", "jev", "--intelligence-enabled"])
+    assert armed.intelligence_enabled is True
+
+    # Explicitly forcing it off is accepted and is the default posture.
+    forced = parse_args(["--intelligence-mode", "custom", "--intelligence-disabled"])
+    assert forced.intelligence_enabled is False
+
+
 def test_build_stdio_config_keeps_jev_spend_opt_in(tmp_path):
     from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
     from ida_pro_mcp.installer.runtime import build_stdio_config
@@ -633,19 +668,35 @@ def test_build_stdio_config_keeps_jev_spend_opt_in(tmp_path):
     assert resolved.input_usd_per_mtok is None
     assert resolved.output_usd_per_mtok is None
 
-    # Naming prices is the explicit opt-in that opens the gate.
+    # Naming prices is the explicit opt-in that opens the gate, once the layer
+    # itself is armed.
     armed = build_stdio_config(
         tmp_path / "python",
         tmp_path,
         intelligence_mode="jev",
+        intelligence_enabled=True,
         jev_model="jev-latest",
         jev_input_usd_per_mtok="0.042",
         jev_output_usd_per_mtok="0",
     )
+    assert armed["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "1"
     assert armed["env"]["IDA_MCP_JEV_INPUT_USD_PER_MTOK"] == "0.042"
     assert armed["env"]["IDA_MCP_JEV_OUTPUT_USD_PER_MTOK"] == "0"
     priced = resolve_provider_config(env=armed["env"], state={})
+    assert priced.mode == "jev"
     assert priced.input_usd_per_mtok == 0.042
+    assert priced.intelligence_enabled is True
+
+    # Pricing without arming the layer still resolves deterministically.
+    priced_but_off = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        intelligence_mode="jev",
+        jev_input_usd_per_mtok="0.042",
+        jev_output_usd_per_mtok="0",
+    )
+    assert priced_but_off["env"]["IDA_MCP_INTELLIGENCE_ENABLED"] == "0"
+    assert resolve_provider_config(env=priced_but_off["env"], state={}).mode == "disabled"
 
     # A price never leaks into a non-Jev install.
     disabled = build_stdio_config(

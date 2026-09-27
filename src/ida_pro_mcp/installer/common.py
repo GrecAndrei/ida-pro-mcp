@@ -160,6 +160,9 @@ class InstallerOptions:
     # Explicit intelligence provider configuration. The only supported modes
     # are Jev, operator-configured custom BYOK, and disabled.
     intelligence_mode: str = "disabled"  # jev | custom | disabled
+    # Operator kill switch written to generated client env. When false the whole
+    # intelligence layer stays off regardless of the selected mode.
+    intelligence_enabled: bool = False
     jev_model: str = "jev-latest"
     # Paid Jev traffic is opt-in. Empty means "no pricing configured", which
     # leaves the host spend gate closed and blocks requests before transport.

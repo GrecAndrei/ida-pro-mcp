@@ -218,15 +218,34 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     # Intelligence is configured as an explicit provider; no local model,
     # Gemini, native library, or secret-entry wizard is offered.
     mode_labels = {
-        "Jev (TypeSafe hosted provider)": "jev",
+        "Off (deterministic and lexical analysis only)": "disabled",
+        "Jev (TypeSafe hosted provider, metered)": "jev",
         "Custom (operator HTTPS/loopback endpoint)": "custom",
-        "Disabled (deterministic and lexical analysis only)": "disabled",
     }
     current_mode = opts.intelligence_mode if opts.intelligence_mode in mode_labels.values() else "disabled"
     default_mode_label = next(label for label, value in mode_labels.items() if value == current_mode)
     opts.intelligence_mode = mode_labels[
         _prompt_choice("Intelligence provider mode", list(mode_labels), default_mode_label)
     ]
+    if opts.intelligence_mode == "disabled":
+        opts.intelligence_enabled = False
+        ui.info(
+            "Intelligence layer is off. Deterministic IDA analysis, heuristic "
+            "ranking, and lexical retrieval remain fully available and no "
+            "provider request is ever attempted."
+        )
+    else:
+        # Selecting a provider installs it but does not arm it. The off switch is
+        # written explicitly so the layer can be disabled later from one place.
+        opts.intelligence_enabled = _prompt_yes_no(
+            "Allow the intelligence layer to run?", True
+        )
+        if not opts.intelligence_enabled:
+            ui.warn(
+                "The provider is configured but the intelligence layer is off. "
+                "Every advisory call stays deterministic; re-run with "
+                "--intelligence-enabled to arm it."
+            )
     if opts.intelligence_mode == "jev":
         opts.jev_model = _prompt_text("Jev model", default=opts.jev_model or "jev-latest") or "jev-latest"
         ui.info("Provide TYPESAFE_API_KEY or TYPESAFE_API_KEY_FILE in the server environment; it is never stored by the installer.")
@@ -398,6 +417,24 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         default="disabled",
         help="intelligence provider mode (default: disabled; no local/Gemini/native fallback)",
     )
+    # Deliberately outside the mode group: the switch arms the layer and the mode
+    # chooses the provider, so both may be given together.
+    layer_group = parser.add_mutually_exclusive_group()
+    layer_group.add_argument(
+        "--intelligence-enabled",
+        dest="intelligence_enabled",
+        action="store_true",
+        default=False,
+        help="allow the selected provider to run; without this the installer "
+        "writes an explicit off switch so the layer stays deterministic",
+    )
+    layer_group.add_argument(
+        "--intelligence-disabled",
+        dest="intelligence_enabled",
+        action="store_false",
+        help="force the intelligence layer off even when a provider is selected "
+        "(default; overrides the provider mode at runtime)",
+    )
     parser.add_argument("--jev-model", default="jev-latest", help="Jev model identifier")
     parser.add_argument(
         "--jev-input-usd-per-mtok", default="",
@@ -486,6 +523,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         runtime_source=args.runtime_source,
         interactive=True if args.interactive else (False if args.no_interactive else None),
         intelligence_mode=args.intelligence_mode,
+        intelligence_enabled=args.intelligence_enabled,
         jev_model=args.jev_model,
         jev_input_usd_per_mtok=args.jev_input_usd_per_mtok,
         jev_output_usd_per_mtok=args.jev_output_usd_per_mtok,
@@ -762,6 +800,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
 
         provider_env = {
             "IDA_MCP_INTELLIGENCE_MODE": opts.intelligence_mode,
+            "IDA_MCP_INTELLIGENCE_ENABLED": "1" if opts.intelligence_enabled else "0",
             # Defaults for an inactive provider are not configuration. Keep
             # them out of validation so a signatures-only or disabled install
             # does not manufacture a cross-mode conflict.
@@ -777,13 +816,21 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             "IDA_MCP_CUSTOM_LOCAL_HTTP": "1" if opts.intelligence_mode == "custom" and opts.custom_local_http else "",
         }
         resolve_provider_config(env=provider_env, state={})
+        if opts.intelligence_mode in {"jev", "custom"} and not opts.intelligence_enabled:
+            # The provider is configured but the layer is switched off. This is a
+            # usable, fully deterministic install, not a failure.
+            ui.warn(
+                f"Intelligence layer is off (mode {opts.intelligence_mode} selected "
+                "but not enabled). All advisory calls stay deterministic."
+            )
         if (
             opts.intelligence_mode == "jev"
+            and opts.intelligence_enabled
             and not (opts.jev_input_usd_per_mtok.strip() and opts.jev_output_usd_per_mtok.strip())
         ):
-            # Jev is installed but not armed for paid traffic. The host blocks
-            # every Jev request before transport while pricing is unknown; this
-            # is a usable, deterministic install, not a failure.
+            # Jev is armed but not metered. The host blocks every Jev request
+            # before transport while pricing is unknown; this is a usable,
+            # deterministic install, not a failure.
             ui.warn(
                 "Jev spend is disabled: no input/output price was configured. "
                 "Jev requests will be blocked before transport. Re-run with "
@@ -971,6 +1018,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 python_exe,
                 install_root,
                 intelligence_mode=opts.intelligence_mode,
+                intelligence_enabled=opts.intelligence_enabled,
                 jev_model=opts.jev_model,
                 jev_input_usd_per_mtok=opts.jev_input_usd_per_mtok,
                 jev_output_usd_per_mtok=opts.jev_output_usd_per_mtok,

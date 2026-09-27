@@ -838,6 +838,7 @@ def build_stdio_config(
     disable_policy: bool = False,
     ida_runtime: str = "",
     intelligence_mode: str = "disabled",
+    intelligence_enabled: bool = False,
     jev_model: str = "",
     jev_input_usd_per_mtok: str = "",
     jev_output_usd_per_mtok: str = "",
@@ -896,6 +897,11 @@ def build_stdio_config(
     if mode not in {"jev", "custom", "disabled"}:
         raise ValueError("intelligence_mode must be jev, custom, or disabled")
     env["IDA_MCP_INTELLIGENCE_MODE"] = mode
+    # Always write the resolved posture so the generated client configuration
+    # states whether the layer may run. The host treats a false value as an
+    # unconditional kill switch that outranks the mode above, which keeps the
+    # layer turn-off-able from this one file.
+    env["IDA_MCP_INTELLIGENCE_ENABLED"] = "1" if intelligence_enabled else "0"
     if mode == "jev" and jev_model:
         env["IDA_MCP_JEV_MODEL"] = str(jev_model).strip()
     if mode == "jev":
