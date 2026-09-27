@@ -324,6 +324,96 @@ def test_neighborhood_adapts_candidate_count_to_provider_question_limit():
     assert len(provider.questions) == 5
 
 
+def test_neighborhood_returns_empty_when_shared_questions_exhaust_the_budget():
+    # Three shared questions plus two per candidate leaves no room for even one
+    # candidate below five provider questions, so the result is a clean empty
+    # assessment rather than a malformed request.
+    provider = _RecordingProvider()
+    provider.config = SimpleNamespace(
+        model="fixture", mode="custom", max_questions=4, max_input_chars=262_144
+    )
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+        provider=provider,
+    )
+    assert result["ok"] is True
+    assert result["functions"] == []
+    assert result["recommended_next"] is None
+    assert result["recommended_evidence"] == "insufficient_context"
+    assert result["advisory_order"] is None
+    assert result["applied"] is False
+    assert provider.calls == 0
+
+
+def test_neighborhood_fails_closed_on_malformed_provider_limits():
+    provider = _RecordingProvider()
+    provider.config = SimpleNamespace(
+        model="fixture", mode="custom", max_questions="not-a-number", max_input_chars=262_144
+    )
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+        provider=provider,
+    )
+    assert result["code"] == "PROVIDER_CONFIG_INVALID"
+    assert result["message"] == "provider request limits are malformed"
+    assert result["evidence"]["applied"] is False
+    assert result["evidence"]["fail_closed_order"]
+    assert provider.calls == 0
+
+
+def test_neighborhood_fails_closed_when_provider_selection_raises(monkeypatch):
+    from ida_pro_mcp.host.intelligence import advisory as advisory_mod
+    from ida_pro_mcp.host.intelligence.providers.types import ProviderConfigError
+
+    def boom(*, provider=None, ledger=None):
+        raise ProviderConfigError("endpoint is not configured")
+
+    monkeypatch.setattr(advisory_mod, "_provider", boom)
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+    )
+    assert result["error"] is True
+    assert "endpoint is not configured" in result["message"]
+
+
+def test_neighborhood_fails_closed_on_unexpected_provider_error(monkeypatch):
+    from ida_pro_mcp.host.intelligence import advisory as advisory_mod
+
+    def boom(*, provider=None, ledger=None):
+        raise RuntimeError("transport exploded")
+
+    monkeypatch.setattr(advisory_mod, "_provider", boom)
+    result = assess_function_neighborhood(
+        {"focus_address": "0x401000"},
+        [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+    )
+    # An unexpected failure is reported generically; internal detail is not
+    # echoed back to the caller.
+    assert result["code"] == "PROVIDER_ERROR"
+    assert result["message"] == "provider selection failed"
+    assert "transport exploded" not in str(result)
+
+
+def test_neighborhood_fails_closed_when_required_answer_is_missing():
+    # Every answer the neighborhood derivation needs is genuinely required, so
+    # omitting one fails closed rather than inventing a recommendation.
+    for omitted in ("recommended_next", "recommended_evidence", "behavior_0", "evidence_sufficiency"):
+        provider = _RecordingProvider(omit_ids={omitted})
+        result = assess_function_neighborhood(
+            {"focus_address": "0x401000"},
+            [{"address": "0x401000", "name": "focus", "signature": "calls=0"}],
+            provider=provider,
+        )
+        assert result["error"] is True, omitted
+        assert result["code"] == "PROVIDER_PROTOCOL_ERROR", omitted
+        assert result["recommended_next"] is None, omitted
+        assert result["advisory_order"] is None, omitted
+        assert result["applied"] is False, omitted
+
+
 def test_malformed_neighborhood_response_fails_closed():
     provider = _RecordingProvider(omit_answers=True)
     result = assess_function_neighborhood(
@@ -348,6 +438,13 @@ def test_jev_spend_and_budgets_are_opt_in(monkeypatch, tmp_path):
     assert BudgetConfig.from_env({}).request_input_tokens == 8_192
     # An operator-supplied bound always wins over the derived reservation.
     assert BudgetConfig.from_env({}, max_input_chars=1_000_000).request_input_tokens == 250_000
+    # A bound that is not a number falls back to the generic reservation rather
+    # than raising, so one malformed caller cannot break budget construction.
+    assert BudgetConfig.from_env({}, max_input_chars="not-a-number").request_input_tokens == 8_192
+    assert BudgetConfig.from_env({}, max_input_chars=0).request_input_tokens == 8_192
+    assert BudgetConfig.from_env({}, max_input_chars=-5).request_input_tokens == 8_192
+    # The reservation is clamped to a sane floor and ceiling.
+    assert BudgetConfig.from_env({}, max_input_chars=1).request_input_tokens == 1
 
     jev_budget = BudgetConfig.from_env({}, max_input_chars=262_144)
     custom_budget = BudgetConfig.from_env({}, max_input_chars=32_768)

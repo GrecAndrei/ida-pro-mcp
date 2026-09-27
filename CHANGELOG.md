@@ -29,6 +29,12 @@
   the `live_jev` suite skip explicitly when the layer is switched off instead of
   failing on a confusing mode assertion. Document the required
   `IDA_MCP_INTELLIGENCE_ENABLED=1` in `docs/operations/live-ida-testing.md`.
+- Cover the new behavior and the neighborhood advisory fail-closed paths that
+  were previously untested: malformed provider limits, provider selection raising
+  a provider error or an unexpected error, a shared-question budget too small for
+  any candidate, and missing required answers. Changed-line coverage is 99.6%
+  (573/575); the two remaining lines are defensive guards unreachable through the
+  public path.
 
 ## 2026-09-24 — Make Jev spend and budget headroom opt-in
 

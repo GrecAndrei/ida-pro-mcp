@@ -613,6 +613,167 @@ def test_build_stdio_config_records_idalib_runtime(tmp_path):
     assert "IDA_MCP_RUNTIME" not in cfg2["env"]
 
 
+def _drive_wizard(monkeypatch, answers):
+    """Run the interactive wizard with scripted input, capturing UI output."""
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.main import UI, _run_interactive_wizard
+
+    remaining = iter(answers)
+
+    def fake_input(prompt=""):
+        try:
+            return next(remaining)
+        except StopIteration:  # pragma: no cover - guards a wrong answer count
+            raise AssertionError(f"wizard asked for unexpected input: {prompt!r}") from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    ui = UI()
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(ui, "info", lambda m: messages.append(("info", str(m))))
+    monkeypatch.setattr(ui, "warn", lambda m: messages.append(("warn", str(m))))
+    opts = _run_interactive_wizard(InstallerOptions(interactive=True), ui)
+    return opts, messages
+
+
+def test_wizard_off_choice_leaves_layer_disabled(monkeypatch):
+    opts, messages = _drive_wizard(monkeypatch, ["1"])
+    assert opts.intelligence_mode == "disabled"
+    assert opts.intelligence_enabled is False
+    assert any("Intelligence layer is off" in text for _, text in messages)
+
+
+def test_wizard_jev_installs_provider_without_arming_it(monkeypatch):
+    # choice Jev, decline to arm, accept default model, leave both prices empty
+    opts, messages = _drive_wizard(monkeypatch, ["2", "n", "", "", ""])
+    assert opts.intelligence_mode == "jev"
+    assert opts.intelligence_enabled is False
+    assert opts.jev_model == "jev-latest"
+    assert opts.jev_input_usd_per_mtok == ""
+    assert opts.jev_output_usd_per_mtok == ""
+    assert any("provider is configured but the intelligence layer is off" in t for _, t in messages)
+
+
+def test_wizard_jev_arms_and_prices_on_confirmation(monkeypatch):
+    # choice Jev, arm it, default model, explicit prices
+    opts, messages = _drive_wizard(monkeypatch, ["2", "y", "", "0.042", "0"])
+    assert opts.intelligence_mode == "jev"
+    assert opts.intelligence_enabled is True
+    assert opts.jev_input_usd_per_mtok == "0.042"
+    assert opts.jev_output_usd_per_mtok == "0"
+    assert not any(kind == "warn" for kind, _ in messages)
+
+
+def test_wizard_custom_arms_and_records_origin(monkeypatch):
+    # choice Custom, arm it, then origin/allowlist/model/cred env/cred file
+    opts, messages = _drive_wizard(
+        monkeypatch, ["3", "y", "https://example.invalid", "https://example.invalid", "m", "", ""]
+    )
+    assert opts.intelligence_mode == "custom"
+    assert opts.intelligence_enabled is True
+    assert opts.custom_base_url == "https://example.invalid"
+    assert opts.custom_allowed_origins == "https://example.invalid"
+    assert opts.custom_model == "m"
+
+
+def test_wizard_custom_can_be_installed_while_layer_is_off(monkeypatch):
+    # choice Custom, decline to arm; provider details are still recorded.
+    opts, messages = _drive_wizard(
+        monkeypatch, ["3", "n", "https://example.invalid", "https://example.invalid", "m", "", ""]
+    )
+    assert opts.intelligence_mode == "custom"
+    assert opts.intelligence_enabled is False
+    assert opts.custom_base_url == "https://example.invalid"
+    assert any("provider is configured but the intelligence layer is off" in t for _, t in messages)
+
+
+def test_wizard_is_skipped_outside_an_interactive_terminal(monkeypatch):
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.main import _is_interactive_terminal, _run_interactive_wizard
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("wizard should not prompt"))
+    monkeypatch.setattr("ida_pro_mcp.installer.main._is_interactive_terminal", lambda: False)
+    # interactive=None means "auto-detect": a non-TTY skips the wizard entirely.
+    opts = _run_interactive_wizard(InstallerOptions(interactive=None, intelligence_mode="jev"), UIStub())
+    assert opts.intelligence_mode == "jev"
+    assert opts.intelligence_enabled is False
+    # interactive=False is an explicit request to skip it.
+    skipped = _run_interactive_wizard(
+        InstallerOptions(interactive=False, intelligence_mode="custom"), UIStub()
+    )
+    assert skipped.intelligence_mode == "custom"
+    # --auto short-circuits before any prompting.
+    auto = _run_interactive_wizard(
+        InstallerOptions(yes=True, intelligence_mode="jev", intelligence_enabled=True), UIStub()
+    )
+    assert auto.intelligence_enabled is True
+    assert _is_interactive_terminal() is False
+
+
+class UIStub:
+    def info(self, msg):  # pragma: no cover - silence only
+        pass
+
+    def warn(self, msg):  # pragma: no cover - silence only
+        pass
+
+    def ok(self, msg):  # pragma: no cover - silence only
+        pass
+
+    def err(self, msg):  # pragma: no cover - silence only
+        pass
+
+
+def _install_warnings(tmp_path, monkeypatch, **option_overrides):
+    """Run a real (sigs-only) install and collect the UI warnings it emits."""
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
+    install_dir = tmp_path / "ida-pro-9.3"
+    install_dir.mkdir()
+    pack = _make_sig_pack(tmp_path)
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"sigs"},
+        install_root=install_root,
+        sigs_dir=str(pack),
+        **option_overrides,
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", lambda: [_fake_ida_install(install_dir)])
+
+    warnings: list[str] = []
+    ui = main_mod.UI()
+    monkeypatch.setattr(ui, "warn", lambda m: warnings.append(str(m)))
+    assert main_mod.run_install(opts, ui) == 0
+    return warnings
+
+
+def test_install_warns_when_provider_selected_but_layer_is_off(tmp_path, monkeypatch):
+    warnings = _install_warnings(
+        tmp_path, monkeypatch, intelligence_mode="custom", intelligence_enabled=False,
+        custom_base_url="https://example.invalid", custom_allowed_origins="https://example.invalid",
+        custom_model="m", custom_api_key_env="CUSTOM_PROVIDER_API_KEY",
+    )
+    assert any("Intelligence layer is off" in w for w in warnings)
+
+
+def test_install_warns_when_jev_armed_without_pricing(tmp_path, monkeypatch):
+    warnings = _install_warnings(
+        tmp_path, monkeypatch, intelligence_mode="jev", intelligence_enabled=True,
+    )
+    assert any("Jev spend is disabled" in w for w in warnings)
+
+
+def test_install_does_not_warn_when_layer_is_disabled(tmp_path, monkeypatch):
+    warnings = _install_warnings(
+        tmp_path, monkeypatch, intelligence_mode="disabled", intelligence_enabled=False,
+    )
+    assert not any("Intelligence layer is off" in w for w in warnings)
+    assert not any("Jev spend is disabled" in w for w in warnings)
+
+
 def test_build_stdio_config_writes_explicit_layer_posture(tmp_path):
     from ida_pro_mcp.host.intelligence.providers.config import resolve_provider_config
     from ida_pro_mcp.installer.runtime import build_stdio_config
